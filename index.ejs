@@ -1,7 +1,0 @@
-<!DOCTYPE html><html><head><meta charset="utf-8"><title>Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script></head><body><h1>Dashboard</h1>
-<canvas id="chart"></canvas><script>
-const data=JSON.parse('<%= JSON.stringify(amounts) %>');
-const labels=JSON.parse('<%= JSON.stringify(times) %>');
-new Chart(document.getElementById('chart'),{type:'line',data:{labels,datasets:[{label:'SOL',data}]}});</script>
-</body></html>
