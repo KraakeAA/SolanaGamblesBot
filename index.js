@@ -50,7 +50,6 @@ bot.onText(/\/bet (\d+(\.\d+)?) (heads|tails)/i, async (msg, match) => {
         { parse_mode: 'Markdown' }
     );
 });
-    }
     bot.sendMessage(chatId, `Bet received. Flipping a coin...`);
     const choice = match[3].toLowerCase();
    const houseEdge = getHouseEdge(betAmount);
