@@ -45,3 +45,16 @@ async function checkPayment(expectedSol) {
     }
     return false;
 }
+
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
+You can place bets by typing:
+
+/bet 0.01 heads
+
+Min bet: 0.01 SOL
+Max bet: 1.0 SOL
+
+Send your SOL to:
+9HL7W4XZJDX6br3ojjU6BLHp7oZVP3nCDKxQ21TNanQf`);
+});
