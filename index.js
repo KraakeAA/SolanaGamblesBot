@@ -35,12 +35,21 @@ bot.onText(/^\/bet$/i, (msg) => {
 bot.onText(/\/bet (\d+(\.\d+)?) (heads|tails)/i, async (msg, match) => {
     const chatId = msg.chat.id;
     const betAmount = parseFloat(match[1]);
+    const userChoice = match[3].toLowerCase();
+
     if (betAmount < MIN_BET || betAmount > MAX_BET) {
-        return bot.sendMessage(chatId, `Bet must be between ${MIN_BET} and ${MAX_BET} SOL.`);
+        return bot.sendMessage(chatId, `❌ Bet must be between ${MIN_BET}-${MAX_BET} SOL`);
     }
-    const solReceived = await checkPayment(betAmount);
-    if (!solReceived) {
-        return bot.sendMessage(chatId, `Please send exactly ${betAmount} SOL to this wallet:\n\n${WALLET_ADDRESS}\n\nThen run the command again.`);
+
+    await bot.sendMessage(chatId,
+        `💸 *To place your bet:*\n\n` +
+        `1. Send *exactly ${betAmount} SOL* to:\n` +
+        `\`${WALLET_ADDRESS}\`\n\n` +
+        `2. Click: /confirm_${betAmount}_${userChoice}\n\n` +
+        `⚠️ Transaction must match exactly`,
+        { parse_mode: 'Markdown' }
+    );
+});
     }
     bot.sendMessage(chatId, `Bet received. Flipping a coin...`);
     const choice = match[3].toLowerCase();
