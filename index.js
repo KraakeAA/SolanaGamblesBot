@@ -22,6 +22,16 @@ const getHouseEdge = (amount) => {
 };
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
 if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
+bot.onText(/^\/bet$/i, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    `🎰 Please choose an amount:\n\n` +
+    `/bet 0.01 heads\n` +
+    `/bet 0.05 tails\n\n` +
+    `Min: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`,
+    { parse_mode: 'Markdown' }
+  );
+});
 bot.onText(/\/bet (\d+(\.\d+)?) (heads|tails)/i, async (msg, match) => {
     const chatId = msg.chat.id;
     const betAmount = parseFloat(match[1]);
