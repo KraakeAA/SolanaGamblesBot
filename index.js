@@ -14,14 +14,17 @@ const MIN_BET = 0.01;
 const MAX_BET = 1.0;
 const LOG_DIR = './data';
 const LOG_PATH = './data/bets.json';
+
 const getHouseEdge = (amount) => {
   if (amount <= 0.01) return 0.70;       // 70% edge
   if (amount <= 0.049) return 0.75;      // 75% edge
   if (amount <= 0.0999999) return 0.80;  // 80% edge
   return 0.99;                           // 99% edge
 };
+
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
 if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
+
 bot.onText(/^\/bet$/i, (msg) => {
   bot.sendMessage(
     msg.chat.id,
@@ -32,6 +35,7 @@ bot.onText(/^\/bet$/i, (msg) => {
     { parse_mode: 'Markdown' }
   );
 });
+
 bot.onText(/\/bet (\d+(\.\d+)?) (heads|tails)/i, async (msg, match) => {
     const chatId = msg.chat.id;
     const betAmount = parseFloat(match[1]);
@@ -50,15 +54,29 @@ bot.onText(/\/bet (\d+(\.\d+)?) (heads|tails)/i, async (msg, match) => {
         { parse_mode: 'Markdown' }
     );
 });
-    bot.sendMessage(chatId, `Bet received. Flipping a coin...`);
+
+// This was outside any handler - moved it inside the bet handler
+bot.onText(/\/confirm_(\d+(\.\d+)?)_(heads|tails)/i, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const betAmount = parseFloat(match[1]);
     const choice = match[3].toLowerCase();
-   const houseEdge = getHouseEdge(betAmount);
-const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
+    
+    bot.sendMessage(chatId, `Bet received. Flipping a coin...`);
+    const houseEdge = getHouseEdge(betAmount);
+    const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
     const log = JSON.parse(fs.readFileSync(LOG_PATH));
-    log.push({ ts: new Date().toISOString(), user: msg.from.username||msg.from.id, amount: betAmount, choice, result, payout:0 });
-    fs.writeFileSync(LOG_PATH, JSON.stringify(log,null,2));
+    log.push({ 
+        ts: new Date().toISOString(), 
+        user: msg.from.username || msg.from.id, 
+        amount: betAmount, 
+        choice, 
+        result, 
+        payout: 0 
+    });
+    fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
     bot.sendMessage(chatId, `You chose *${choice}*, and it landed *${result}*. You lost. Try again!`, { parse_mode: 'Markdown' });
 });
+
 async function checkPayment(expectedSol) {
     const pubKey = new PublicKey(WALLET_ADDRESS);
     const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 10 });
