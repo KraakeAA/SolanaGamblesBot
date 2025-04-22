@@ -142,7 +142,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
         const win = result === choice;
         const payout = win ? amount : 0; // 1:1 payout on win
 
-        console.log(`DEBUG: win=${win}, result=${result}, choice=${choice}, payout=${payout}`); // Updated debug log
+        console.log(`DEBUG: Before winning message - win=${win}, amount=${amount}, payout=${payout}`); // Added debug log
 
         // Re-enable logging
         const log = JSON.parse(fs.readFileSync(LOG_PATH));
@@ -163,9 +163,11 @@ bot.onText(/^\/confirm$/, async (msg) => {
             { parse_mode: 'Markdown' }
         );
 
-        if (win && payout > 0) {
+        if (win) {
             try {
                 console.log('Inside payout try block');
+                console.log(`DEBUG Payout: win=${win}, amount=${amount}`); // Added debug
+
                 const payerPrivateKey = process.env.BOT_PRIVATE_KEY;
                 if (!payerPrivateKey) {
                     console.error('BOT_PRIVATE_KEY environment variable not set!');
@@ -201,7 +203,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
                     return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine recipient.`);
                 }
 
-                const payoutAmountLamports = Math.round(payout * LAMPORTS_PER_SOL);
+                const payoutAmountLamports = Math.round(amount * LAMPORTS_PER_SOL); // ENSURE using 'amount'
 
                 const transaction = new Transaction().add(
                     SystemProgram.transfer({
@@ -217,7 +219,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
                     [payerWallet]
                 );
 
-                await bot.sendMessage(chatId, `✅ Winnings of ${payout.toFixed(4)} SOL sent! TX: ${signature}`);
+                await bot.sendMessage(chatId, `✅ Winnings of ${amount.toFixed(4)} SOL sent! TX: ${signature}`); // ENSURE using 'amount'
 
             } catch (error) {
                 console.error('Payout error:', error);
