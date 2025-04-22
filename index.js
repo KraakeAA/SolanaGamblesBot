@@ -97,7 +97,7 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
     const userChoice = match[2].toLowerCase();
 
     if (betAmount < MIN_BET || betAmount > MAX_BET) {
-        return bot.sendMessage(chatId, `❌ Bet must be between <span class="math-inline">\{MIN\_BET\}\-</span>{MAX_BET} SOL`);
+        return bot.sendMessage(chatId, `❌ Bet must be between ${MIN_BET}-${MAX_BET} SOL`);
     }
 
     // Store the bet information
@@ -124,4 +124,64 @@ bot.onText(/^\/confirm$/, async (msg) => {
     const { amount, choice } = betInfo;
 
     try {
-        await bot.sendMessage(
+        await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL...`);
+
+        const paymentCheck = await checkPayment(amount);
+        console.log('Payment check result:', paymentCheck); // Debug log
+
+        if (!paymentCheck.success) {
+            return await bot.sendMessage(chatId,
+                `❌ Payment not verified!\n\n` +
+                `We couldn't find a transaction for exactly ${amount} SOL.\n\n` +
+                `Please ensure you:\n` +
+                `1. Sent to: ${WALLET_ADDRESS}\n` +
+                `2. Sent exactly ${amount} SOL\n` +
+                `3. Did this within the last 15 minutes\n\n` +
+                `Try /confirm again after sending.`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+
+        // Process the bet
+        await bot.sendMessage(chatId, `✅ Payment verified! Processing your bet...`);
+
+        const houseEdge = getHouseEdge(amount);
+        const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
+        const win = result === choice;
+        const payout = win ? amount * (1/houseEdge - 1) : 0;
+
+        // Log the bet
+        const log = JSON.parse(fs.readFileSync(LOG_PATH));
+        log.push({
+            ts: new Date().toISOString(),
+            user: msg.from.username || msg.from.id,
+            amount,
+            choice,
+            result,
+            payout,
+            tx: paymentCheck.tx
+        });
+        fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
+
+        // Send result
+        await bot.sendMessage(chatId,
+            win ? `🎉 Congratulations! You won ${payout.toFixed(4)} SOL!` +
+                  `\n\nYour choice: ${choice}\nResult: ${result}\n\n` +
+                  `TX: ${paymentCheck.tx}`
+                : `❌ Sorry! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
+            { parse_mode: 'Markdown' }
+        );
+
+        // Clear the bet information for this user
+        delete userBets[chatId];
+
+    } catch (error) {
+        console.error('Error in confirm handler:', error);
+        await bot.sendMessage(chatId, `⚠️ An error occurred. Please try again later.`);
+    }
+});
+
+const app = express();
+app.get('/', (req, res) => res.send('OK'));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Healthcheck listening on ${PORT}`));
