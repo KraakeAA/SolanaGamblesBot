@@ -16,7 +16,7 @@ const MAX_BET = 1.0;
 const LOG_DIR = './data';
 const LOG_PATH = './data/bets.json';
 
-// Store user bet information (chatId: { amount, choice })
+// Store user bet information (userId: { amount, choice })
 const userBets = {};
 const coinFlipSessions = {}; // Track if a user has initiated coin flip
 
@@ -29,7 +29,7 @@ async function checkPayment(expectedSol) {
     for (let sig of signatures) {
         const tx = await connection.getParsedTransaction(sig.signature);
         if (!tx || !tx.meta) {
-            console.log(`Skipping signature ${sig.signature} due to missing transaction or meta.`);
+            console.log(`Skipping signature ${sig.signature} for missing data.`);
             continue;
         }
 
@@ -76,10 +76,10 @@ Type /refresh to see this menu again.`);
 });
 
 bot.onText(/\/start coinflip/, (msg) => {
-  const chatId = msg.chat.id;
-  coinFlipSessions[chatId] = true; // Mark the user as in a coin flip session
+  const userId = msg.from.id;
+  coinFlipSessions[userId] = true; // Mark the user as in a coin flip session
   bot.sendMessage(
-    chatId,
+    msg.chat.id,
     `🪙 You've started a coin flip game! Please choose an amount and heads/tails:\n\n` +
     `/bet 0.01 heads\n` +
     `/bet 0.05 tails\n\n` +
@@ -99,11 +99,12 @@ Available games:
 Type /refresh to see this menu again.`);
 });
 
-// Modify the /bet handler to check if a coin flip session is active
+// Modify the /bet handler to check if a coin flip session is active for the user
 bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
+  const userId = msg.from.id;
   const chatId = msg.chat.id;
 
-  if (!coinFlipSessions[chatId]) {
+  if (!coinFlipSessions[userId]) {
     return bot.sendMessage(chatId, `⚠️ Please start a coin flip game first using /start coinflip`);
   }
 
@@ -114,8 +115,8 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
     return bot.sendMessage(chatId, `❌ Bet must be between ${MIN_BET}-${MAX_BET} SOL`);
   }
 
-  // Store the bet information
-  userBets[chatId] = { amount: betAmount, choice: userChoice };
+  // Store the bet information using the user's ID
+  userBets[userId] = { amount: betAmount, choice: userChoice };
 
   await bot.sendMessage(chatId,
     `💸 *To place your bet:*\n\n` +
@@ -128,13 +129,15 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
 });
 
 bot.onText(/^\/confirm$/, async (msg) => {
+  const userId = msg.from.id;
   const chatId = msg.chat.id;
+  const betInfo = userBets[userId];
 
-  if (!userBets[chatId]) {
+  if (!betInfo) {
     return await bot.sendMessage(chatId, `⚠️ No active bet found. Please use the /bet command first.`);
   }
 
-  const { amount, choice } = userBets[chatId];
+  const { amount, choice } = betInfo;
 
   let paymentCheckResult;
   try {
@@ -170,8 +173,8 @@ bot.onText(/^\/confirm$/, async (msg) => {
     fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
 
     await bot.sendMessage(chatId,
-      win ? `🎉 Congratulations! You won ${payout.toFixed(4)} SOL!\n\nYour choice: ${choice}\nResult: ${result}`
-        : `❌ Sorry! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
+      win ? `🎉 Congratulations, <@${userId}>! You won ${payout.toFixed(4)} SOL!\n\nYour choice: ${choice}\nResult: ${result}`
+        : `❌ Sorry, <@${userId}>! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
       { parse_mode: 'Markdown' }
     );
 
@@ -231,7 +234,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
           [payerWallet]
         );
 
-        await bot.sendMessage(chatId, `✅ Winnings of ${amount.toFixed(4)} SOL sent! TX: ${signature}`); // ENSURE using 'amount'
+        await bot.sendMessage(chatId, `✅ Winnings of ${amount.toFixed(4)} SOL sent to <@${userId}>! TX: ${signature}`); // Mention user in payout message
 
       } catch (error) {
         console.error('Payout error:', error);
@@ -241,8 +244,8 @@ bot.onText(/^\/confirm$/, async (msg) => {
       }
     }
 
-    delete userBets[chatId];
-    delete coinFlipSessions[chatId]; // End the coin flip session after confirmation
+    delete userBets[userId];
+    delete coinFlipSessions[userId]; // End the coin flip session after confirmation
   } catch (topLevelError) {
     console.error('Top-level error in /confirm:', topLevelError);
     await bot.sendMessage(chatId, `⚠️ An unexpected error occurred while processing your confirmation.`);
