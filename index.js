@@ -174,8 +174,32 @@ bot.onText(/^\/confirm$/, async (msg) => {
                 const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey));
                 const payerPublicKey = payerWallet.publicKey;
 
-                // Simplified winner key retrieval (for testing)
-                const winnerPublicKey = new PublicKey(WALLET_ADDRESS); // Sending to the bot's own address for now
+                // Attempt to get the sender's public key from the payment transaction
+                let winnerPublicKey;
+                if (paymentCheckResult && paymentCheckResult.tx) {
+                    try {
+                        const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
+                        if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.accountKeys.length > 0) {
+                            // Assuming the first non-fee payer account is the sender
+                            winnerPublicKey = parsedTransaction.transaction.message.accountKeys[0].pubkey;
+                            console.log('Extracted winner public key:', winnerPublicKey.toBase58());
+                        } else {
+                            console.warn('Could not parse transaction to determine sender.');
+                            return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not analyze your payment transaction.`);
+                        }
+                    } catch (error) {
+                        console.error('Error parsing transaction for sender:', error);
+                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Error analyzing your payment transaction.`);
+                    }
+                } else {
+                    console.warn('No transaction signature available to determine sender.');
+                    return await bot.sendMessage(chatId, `⚠️ Payout failed: No payment transaction found.`);
+                }
+
+                if (!winnerPublicKey) {
+                    console.warn('Winner public key is undefined.');
+                    return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine recipient.`);
+                }
 
                 const payoutAmountLamports = Math.round(payout * LAMPORTS_PER_SOL);
 
