@@ -15,24 +15,21 @@ const MAX_BET = 1.0;
 const LOG_DIR = './data';
 const LOG_PATH = './data/bets.json';
 
-
-
-
 async function checkPayment(expectedSol) {
     const pubKey = new PublicKey(WALLET_ADDRESS);
     const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 10 });
-    
+
     for (let sig of signatures) {
         const tx = await connection.getParsedTransaction(sig.signature);
         if (!tx || !tx.meta) continue;
-        
+
         const txTime = new Date(sig.blockTime * 1000);
         const timeDiff = (new Date() - txTime) / 1000 / 60;
-        
+
         if (timeDiff > 15) continue;
-        
+
         const amount = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL;
-        
+
         if (Math.abs(amount - expectedSol) < 0.0001) {
             return { success: true, tx: sig.signature };
         }
@@ -49,30 +46,22 @@ const getHouseEdge = (amount) => {
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
 if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
 
-// Helper function to check for payment
-async function checkPayment(expectedSol) {
-    const pubKey = new PublicKey(WALLET_ADDRESS);
-    const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 10 });
-    
-    for (let sig of signatures) {
-        const tx = await connection.getParsedTransaction(sig.signature);
-        if (!tx || !tx.meta) continue;
-        
-        // Check if transaction occurred after the bet was placed
-        const txTime = new Date(sig.blockTime * 1000);
-        const timeDiff = (new Date() - txTime) / 1000 / 60; // in minutes
-        
-        // Only consider transactions from last 15 minutes
-        if (timeDiff > 15) continue;
-        
-        const amount = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL;
-        
-        if (Math.abs(amount - expectedSol) < 0.0001) {
-            return { success: true, tx: sig.signature };
-        }
-    }
-    return { success: false };
-}
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
+You can place bets by typing:
+
+/bet 0.01 heads
+
+Min bet: 0.01 SOL
+Max bet: 1.0 SOL
+
+Send your SOL to:
+9HL7W4XZJDX6br3ojjU6BLHp7oZVP3nCDKxQ21TNanQf`);
+});
+
+bot.onText(/\/test/, (msg) => {
+  bot.sendMessage(msg.chat.id, 'Test successful!');
+});
 
 bot.onText(/^\/bet$/i, (msg) => {
   bot.sendMessage(
@@ -106,18 +95,18 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
 
 bot.onText(/^\/confirm_(\d+\.\d+)_(heads|tails)$/i, async (msg, match) => {
     console.log('Confirm command received:', match[0]); // Debug log
-    
+
     const chatId = msg.chat.id;
     const betAmount = parseFloat(match[1]);
     const choice = match[2].toLowerCase();
-    
+
     try {
         // Immediate acknowledgement
         await bot.sendMessage(chatId, `🔍 Verifying your payment of ${betAmount} SOL...`);
-        
+
         const paymentCheck = await checkPayment(betAmount);
         console.log('Payment check result:', paymentCheck); // Debug log
-        
+
         if (!paymentCheck.success) {
             return await bot.sendMessage(chatId,
                 `❌ Payment not verified!\n\n` +
@@ -125,20 +114,20 @@ bot.onText(/^\/confirm_(\d+\.\d+)_(heads|tails)$/i, async (msg, match) => {
                 `Please ensure you:\n` +
                 `1. Sent to: ${WALLET_ADDRESS}\n` +
                 `2. Sent exactly ${betAmount} SOL\n` +
-                `3. Did this within the last 10 minutes\n\n` +
+                `3. Did this within the last 15 minutes\n\n` +
                 `Try /confirm_${betAmount}_${choice} again after sending.`,
                 { parse_mode: 'Markdown' }
             );
         }
-        
+
         // Process the bet
         await bot.sendMessage(chatId, `✅ Payment verified! Processing your bet...`);
-        
+
         const houseEdge = getHouseEdge(betAmount);
         const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
         const win = result === choice;
         const payout = win ? betAmount * (1/houseEdge - 1) : 0;
-        
+
         // Log the bet
         const log = JSON.parse(fs.readFileSync(LOG_PATH));
         log.push({
@@ -151,31 +140,18 @@ bot.onText(/^\/confirm_(\d+\.\d+)_(heads|tails)$/i, async (msg, match) => {
             tx: paymentCheck.tx
         });
         fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
-        
+
         // Send result
         await bot.sendMessage(chatId,
             win ? `🎉 Congratulations! You won ${payout.toFixed(4)} SOL!` +
-                 `\n\nYour choice: ${choice}\nResult: ${result}\n\n` +
-                 `TX: ${paymentCheck.tx}`
+                  `\n\nYour choice: ${choice}\nResult: ${result}\n\n` +
+                  `TX: ${paymentCheck.tx}`
                 : `❌ Sorry! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
             { parse_mode: 'Markdown' }
         );
-        
+
     } catch (error) {
         console.error('Error in confirm handler:', error);
         await bot.sendMessage(chatId, `⚠️ An error occurred. Please try again later.`);
     }
-});
-
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
-You can place bets by typing:
-
-/bet 0.01 heads
-
-Min bet: 0.01 SOL
-Max bet: 1.0 SOL
-
-Send your SOL to:
-9HL7W4XZJDX6br3ojjU6BLHp7oZVP3nCDKxQ21TNanQf`);
 });
