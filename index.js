@@ -104,48 +104,67 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
     );
 });
 
-bot.onText(/\/confirm_([0-9]*\.?[0-9]+)_(heads|tails)/i, async (msg, match) => {
+bot.onText(/^\/confirm_(\d+\.\d+)_(heads|tails)$/i, async (msg, match) => {
+    console.log('Confirm command received:', match[0]); // Debug log
+    
     const chatId = msg.chat.id;
-    const amountStr = match[0].split('_')[1];
-    const betAmount = parseFloat(amountStr);
+    const betAmount = parseFloat(match[1]);
     const choice = match[2].toLowerCase();
     
-    const paymentCheck = await checkPayment(betAmount);
-    
-    if (!paymentCheck.success) {
-        return bot.sendMessage(chatId, 
-            `❌ Payment verification failed!\n\n` +
-            `Please ensure you've sent exactly ${betAmount} SOL to:\n` +
-            `\`${WALLET_ADDRESS}\`\n\n` +
-            `Try again or contact support if you believe this is an error.`,
+    try {
+        // Immediate acknowledgement
+        await bot.sendMessage(chatId, `🔍 Verifying your payment of ${betAmount} SOL...`);
+        
+        const paymentCheck = await checkPayment(betAmount);
+        console.log('Payment check result:', paymentCheck); // Debug log
+        
+        if (!paymentCheck.success) {
+            return await bot.sendMessage(chatId,
+                `❌ Payment not verified!\n\n` +
+                `We couldn't find a transaction for exactly ${betAmount} SOL.\n\n` +
+                `Please ensure you:\n` +
+                `1. Sent to: ${WALLET_ADDRESS}\n` +
+                `2. Sent exactly ${betAmount} SOL\n` +
+                `3. Did this within the last 10 minutes\n\n` +
+                `Try /confirm_${betAmount}_${choice} again after sending.`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+        
+        // Process the bet
+        await bot.sendMessage(chatId, `✅ Payment verified! Processing your bet...`);
+        
+        const houseEdge = getHouseEdge(betAmount);
+        const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
+        const win = result === choice;
+        const payout = win ? betAmount * (1/houseEdge - 1) : 0;
+        
+        // Log the bet
+        const log = JSON.parse(fs.readFileSync(LOG_PATH));
+        log.push({
+            ts: new Date().toISOString(),
+            user: msg.from.username || msg.from.id,
+            amount: betAmount,
+            choice,
+            result,
+            payout,
+            tx: paymentCheck.tx
+        });
+        fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
+        
+        // Send result
+        await bot.sendMessage(chatId,
+            win ? `🎉 Congratulations! You won ${payout.toFixed(4)} SOL!` +
+                 `\n\nYour choice: ${choice}\nResult: ${result}\n\n` +
+                 `TX: ${paymentCheck.tx}`
+                : `❌ Sorry! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
             { parse_mode: 'Markdown' }
         );
+        
+    } catch (error) {
+        console.error('Error in confirm handler:', error);
+        await bot.sendMessage(chatId, `⚠️ An error occurred. Please try again later.`);
     }
-    
-    bot.sendMessage(chatId, `✅ Payment received! Flipping coin...`);
-    
-    const houseEdge = getHouseEdge(betAmount);
-    const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
-    const win = result === choice;
-    const payout = win ? betAmount * (1/houseEdge - 1) : 0;
-    
-    const log = JSON.parse(fs.readFileSync(LOG_PATH));
-    log.push({ 
-        ts: new Date().toISOString(), 
-        user: msg.from.username || msg.from.id, 
-        amount: betAmount, 
-        choice, 
-        result, 
-        payout,
-        tx: paymentCheck.tx
-    });
-    fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
-    
-    bot.sendMessage(chatId, 
-        win ? `🎉 You won! (${result}) Payout: ${payout.toFixed(4)} SOL` 
-            : `❌ You lost. It was ${result}`,
-        { parse_mode: 'Markdown' }
-    );
 });
 
 bot.onText(/\/start/, (msg) => {
