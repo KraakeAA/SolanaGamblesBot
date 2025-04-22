@@ -83,14 +83,14 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
         return bot.sendMessage(chatId, `❌ Bet must be between ${MIN_BET}-${MAX_BET} SOL`);
     }
 
-    await bot.sendMessage(chatId,
-        `💸 *To place your bet:*\n\n` +
-        `1. Send *exactly ${betAmount} SOL* to:\n` +
-        `\`${WALLET_ADDRESS}\`\n\n` +
-        `2. Click: /confirm\\_${betAmount}\\_${userChoice}\n\n` +
-        `⚠️ You have 15 minutes to complete payment`,
-        { parse_mode: 'Markdown' }
-    );
+await bot.sendMessage(chatId,
+    `💸 *To place your bet:*\n\n` +
+    `1. Send *exactly ${betAmount} SOL* to:\n` +
+    `\`${WALLET_ADDRESS}\`\n\n` +
+    `2. Type or click this exact command: \`/confirm_${betAmount}_${userChoice}\`\n\n` +
+    `⚠️ You have 15 minutes to complete payment`,
+    { parse_mode: 'Markdown' }
+);
 });
 
 bot.onText(/^\/confirm_(\d+\.\d+)_(heads|tails)$/i, async (msg, match) => {
