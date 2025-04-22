@@ -1,6 +1,7 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const { Connection, clusterApiUrl, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { Connection, clusterApiUrl, PublicKey, LAMPORTS_PER_SOL, Keypair, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
+const bs58 = require('bs58');
 const fs = require('fs');
 const express = require('express');
 const app = express();
@@ -130,22 +131,21 @@ bot.onText(/^\/confirm$/, async (msg) => {
         await new Promise(resolve => setTimeout(resolve, 5000));
 
         const paymentCheck = await checkPayment(amount);
-        console.log('Payment check result:', paymentCheck); // Debug log
+        console.log('Payment check result:', paymentCheck);
 
         if (!paymentCheck.success) {
             return await bot.sendMessage(chatId,
                 `❌ Payment not verified!\n\n` +
-                `We couldn't find a transaction for exactly ${amount} SOL.\n\n` +
+                `We couldn't find a transaction for approximately ${amount} SOL.\n\n` +
                 `Please ensure you:\n` +
                 `1. Sent to: ${WALLET_ADDRESS}\n` +
-                `2. Sent exactly ${amount} SOL\n` +
+                `2. Sent around ${amount} SOL\n` +
                 `3. Did this within the last 15 minutes\n\n` +
                 `Try /confirm again after sending.`,
                 { parse_mode: 'Markdown' }
             );
         }
 
-        // Process the bet
         await bot.sendMessage(chatId, `✅ Payment verified! Processing your bet...`);
 
         const houseEdge = getHouseEdge(amount);
@@ -166,20 +166,69 @@ bot.onText(/^\/confirm$/, async (msg) => {
         });
         fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
 
-        // Send result
         await bot.sendMessage(chatId,
             win ? `🎉 Congratulations! You won ${payout.toFixed(4)} SOL!` +
                   `\n\nYour choice: ${choice}\nResult: ${result}\n\n` +
-                  `TX: ${paymentCheck.tx}`
+                  `Incoming TX: ${paymentCheck.tx}`
                 : `❌ Sorry! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
             { parse_mode: 'Markdown' }
         );
 
-        // Clear the bet information for this user
-        delete userBets[chatId];
+        if (win && payout > 0) {
+            try {
+                await bot.sendMessage(chatId, `💰 Sending your winnings of ${payout.toFixed(4)} SOL...`);
 
-    } catch (error) {
-        console.error('Error in confirm handler:', error);
-        await bot.sendMessage(chatId, `⚠️ An error occurred. Please try again later.`);
+                // Get the bot's private key from the environment variable
+                const payerPrivateKey = process.env.BOT_PRIVATE_KEY;
+                if (!payerPrivateKey) {
+                    console.error('BOT_PRIVATE_KEY environment variable not set!');
+                    return await bot.sendMessage(chatId, `⚠️ Payout failed: Bot's private key not configured.`);
+                }
+                const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey));
+                const payerPublicKey = payerWallet.publicKey;
+
+                // Try to extract the sender's address from the incoming transaction
+                const incomingTransaction = await connection.getParsedTransaction(paymentCheck.tx);
+                let winnerPublicKey = null;
+                if (incomingTransaction && incomingTransaction.transaction && incomingTransaction.transaction.message && incomingTransaction.transaction.message.accountKeys) {
+                    // Assuming the first non-fee payer account is the sender (this is a simplification)
+                    winnerPublicKey = incomingTransaction.transaction.message.accountKeys.find((key, index) => index !== incomingTransaction.transaction.message.header.numRequiredSignatures);
+                    if (winnerPublicKey) {
+                        winnerPublicKey = new PublicKey(winnerPublicKey);
+                        console.log(`Identified winner's public key: ${winnerPublicKey.toBase58()}`);
+                    } else {
+                        console.warn('Could not reliably determine winner\'s public key from incoming transaction.');
+                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine your wallet address.`);
+                    }
+                } else {
+                    console.warn('Could not parse incoming transaction to determine sender.');
+                    return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not analyze your payment transaction.`);
+                }
+
+                const payoutAmountLamports = Math.round(payout * LAMPORTS_PER_SOL);
+
+                const transaction = new Transaction().add(
+                    SystemProgram.transfer({
+                        fromPubkey: payerPublicKey,
+                        toPubkey: winnerPublicKey,
+                        lamports: payoutAmountLamports,
+                    })
+                );
+
+                const signature = await sendAndConfirmTransaction(
+                    connection,
+                    transaction,
+                    [payerWallet]
+                );
+
+                await bot.sendMessage(chatId, `✅ Winnings of ${payout.toFixed(4)} SOL sent! Transaction ID: ${signature}`);
+
+            } catch (error) {
+                console.error('Error sending payout:', error);
+                await bot.sendMessage(chatId, `⚠️ Error sending payout. Please contact support.`);
+            }
+        }
+
+        delete userBets[chatId];
     }
 });
