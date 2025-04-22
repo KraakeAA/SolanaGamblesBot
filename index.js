@@ -72,8 +72,7 @@ Available games:
 - /start coinflip
 - /start race (coming soon!)
 
-Send your SOL to:
-${WALLET_ADDRESS}`);
+Type /refresh to see this menu again.`);
 });
 
 bot.onText(/\/start coinflip/, (msg) => {
@@ -84,12 +83,21 @@ bot.onText(/\/start coinflip/, (msg) => {
     `🪙 You've started a coin flip game! Please choose an amount and heads/tails:\n\n` +
     `/bet 0.01 heads\n` +
     `/bet 0.05 tails\n\n` +
-    `Min: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`,
+    `Min: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`
+    ,
     { parse_mode: 'Markdown' }
   );
 });
 
-// We'll create the /start race and /betrace handlers later
+bot.onText(/\/refresh$/, (msg) => {
+  bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
+
+Available games:
+- /start coinflip
+- /start race (coming soon!)
+
+Type /refresh to see this menu again.`);
+});
 
 // Modify the /bet handler to check if a coin flip session is active
 bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
@@ -111,10 +119,10 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
 
   await bot.sendMessage(chatId,
     `💸 *To place your bet:*\n\n` +
-    `1. Send *exactly ${betAmount} SOL* to:\n` +
+    `Send *exactly ${betAmount} SOL* to:\n` +
     `\`${WALLET_ADDRESS}\`\n\n` +
-    `2. Once sent, type /confirm\n\n` +
-    `⚠️ You have 15 minutes to complete payment`,
+    `Once sent, type /confirm to finalize your bet.\n` +
+    `⚠️ You have 15 minutes to complete payment.`,
     { parse_mode: 'Markdown' }
   );
 });
