@@ -16,14 +16,39 @@ const LOG_DIR = './data';
 const LOG_PATH = './data/bets.json';
 
 const getHouseEdge = (amount) => {
-  if (amount <= 0.01) return 0.70;       // 70% edge
-  if (amount <= 0.049) return 0.75;      // 75% edge
-  if (amount <= 0.0999999) return 0.80;  // 80% edge
-  return 0.99;                           // 99% edge
+  if (amount <= 0.01) return 0.70;
+  if (amount <= 0.049) return 0.75;
+  if (amount <= 0.0999999) return 0.80;
+  return 0.99;
 };
 
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
 if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
+
+// Helper function to check for payment
+async function checkPayment(expectedSol) {
+    const pubKey = new PublicKey(WALLET_ADDRESS);
+    const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 10 });
+    
+    for (let sig of signatures) {
+        const tx = await connection.getParsedTransaction(sig.signature);
+        if (!tx || !tx.meta) continue;
+        
+        // Check if transaction occurred after the bet was placed
+        const txTime = new Date(sig.blockTime * 1000);
+        const timeDiff = (new Date() - txTime) / 1000 / 60; // in minutes
+        
+        // Only consider transactions from last 15 minutes
+        if (timeDiff > 15) continue;
+        
+        const amount = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL;
+        
+        if (Math.abs(amount - expectedSol) < 0.0001) {
+            return { success: true, tx: sig.signature };
+        }
+    }
+    return { success: false };
+}
 
 bot.onText(/^\/bet$/i, (msg) => {
   bot.sendMessage(
@@ -36,10 +61,10 @@ bot.onText(/^\/bet$/i, (msg) => {
   );
 });
 
-bot.onText(/\/bet (\d+(\.\d+)?) (heads|tails)/i, async (msg, match) => {
+bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
     const chatId = msg.chat.id;
     const betAmount = parseFloat(match[1]);
-    const userChoice = match[3].toLowerCase();
+    const userChoice = match[2].toLowerCase();
 
     if (betAmount < MIN_BET || betAmount > MAX_BET) {
         return bot.sendMessage(chatId, `❌ Bet must be between ${MIN_BET}-${MAX_BET} SOL`);
@@ -50,20 +75,38 @@ bot.onText(/\/bet (\d+(\.\d+)?) (heads|tails)/i, async (msg, match) => {
         `1. Send *exactly ${betAmount} SOL* to:\n` +
         `\`${WALLET_ADDRESS}\`\n\n` +
         `2. Click: /confirm_${betAmount}_${userChoice}\n\n` +
-        `⚠️ Transaction must match exactly`,
+        `⚠️ You have 15 minutes to complete payment`,
         { parse_mode: 'Markdown' }
     );
 });
 
-// This was outside any handler - moved it inside the bet handler
-bot.onText(/\/confirm_(\d+(\.\d+)?)_(heads|tails)/i, async (msg, match) => {
+bot.onText(/\/confirm_(\d+\.\d+)_(heads|tails)/i, async (msg, match) => {
     const chatId = msg.chat.id;
     const betAmount = parseFloat(match[1]);
-    const choice = match[3].toLowerCase();
+    const choice = match[2].toLowerCase();
     
-    bot.sendMessage(chatId, `Bet received. Flipping a coin...`);
+    // Check payment first
+    const paymentCheck = await checkPayment(betAmount);
+    
+    if (!paymentCheck.success) {
+        return bot.sendMessage(chatId, 
+            `❌ Payment verification failed!\n\n` +
+            `Please ensure you've sent exactly ${betAmount} SOL to:\n` +
+            `\`${WALLET_ADDRESS}\`\n\n` +
+            `Try again or contact support if you believe this is an error.`,
+            { parse_mode: 'Markdown' }
+        );
+    }
+    
+    // Payment verified - process bet
+    bot.sendMessage(chatId, `✅ Payment received! Flipping coin...`);
+    
     const houseEdge = getHouseEdge(betAmount);
     const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
+    const win = result === choice;
+    const payout = win ? betAmount * (1/houseEdge - 1) : 0;
+    
+    // Log the bet
     const log = JSON.parse(fs.readFileSync(LOG_PATH));
     log.push({ 
         ts: new Date().toISOString(), 
@@ -71,23 +114,27 @@ bot.onText(/\/confirm_(\d+(\.\d+)?)_(heads|tails)/i, async (msg, match) => {
         amount: betAmount, 
         choice, 
         result, 
-        payout: 0 
+        payout,
+        tx: paymentCheck.tx
     });
     fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
-    bot.sendMessage(chatId, `You chose *${choice}*, and it landed *${result}*. You lost. Try again!`, { parse_mode: 'Markdown' });
-});
-
-async function checkPayment(expectedSol) {
-    const pubKey = new PublicKey(WALLET_ADDRESS);
-    const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 10 });
-    for (let sig of signatures) {
-        const tx = await connection.getParsedTransaction(sig.signature);
-        if (!tx || !tx.meta) continue;
-        const amount = tx.meta.postBalances[0] - tx.meta.preBalances[0];
-        if ((amount/LAMPORTS_PER_SOL).toFixed(4) == expectedSol.toFixed(4)) return true;
+    
+    // Send result
+    if (win) {
+        bot.sendMessage(chatId, 
+            `🎉 You won! You chose *${choice}* and it landed *${result}*.\n\n` +
+            `Payout: ${payout.toFixed(4)} SOL\n` +
+            `TX: \`${paymentCheck.tx}\``,
+            { parse_mode: 'Markdown' }
+        );
+    } else {
+        bot.sendMessage(chatId, 
+            `❌ You lost. You chose *${choice}* but it landed *${result}*.\n\n` +
+            `Better luck next time!`,
+            { parse_mode: 'Markdown' }
+        );
     }
-    return false;
-}
+});
 
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
