@@ -45,7 +45,7 @@ async function checkPayment(expectedSol) {
 
         console.log(`Signature: ${sig.signature}, Amount Change: ${amount.toFixed(6)} SOL`);
 
-        if (Math.abs(amount - expectedSol) < 0.0001) {
+        if (Math.abs(amount - expectedSol) < 0.001) { // Increased tolerance for fees
             console.log(`Payment found! Signature: ${sig.signature}`);
             return { success: true, tx: sig.signature };
         }
