@@ -87,7 +87,7 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
         `💸 *To place your bet:*\n\n` +
         `1. Send *exactly ${betAmount} SOL* to:\n` +
         `\`${WALLET_ADDRESS}\`\n\n` +
-        `2. Click: /confirm_${betAmount}_${userChoice}\n\n` +
+        `2. Click: /confirm\\_${betAmount}\\_${userChoice}\n\n` +
         `⚠️ You have 15 minutes to complete payment`,
         { parse_mode: 'Markdown' }
     );
