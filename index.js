@@ -226,6 +226,9 @@ bot.onText(/^\/confirm$/, async (msg) => {
             } catch (error) {
                 console.error('Error sending payout:', error);
                 await bot.sendMessage(chatId, `⚠️ Error sending payout. Please contact support.`);
+            } finally { // Added finally block
+                // This block will execute regardless of try or catch
+                console.log('Payout logic attempted.');
             }
         }
 
