@@ -140,9 +140,9 @@ bot.onText(/^\/confirm$/, async (msg) => {
         const houseEdge = getHouseEdge(amount);
         const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
         const win = result === choice;
-        const payout = win ? amount * (1/houseEdge - 1) : 0;
+        const payout = win ? amount : 0; // 1:1 payout on win
 
-        console.log(`DEBUG: win=${win}, result=${result}, choice=${choice}`); // Keep this line
+        console.log(`DEBUG: win=${win}, result=${result}, choice=${choice}, payout=${payout}`); // Updated debug log
 
         // Re-enable logging
         const log = JSON.parse(fs.readFileSync(LOG_PATH));
