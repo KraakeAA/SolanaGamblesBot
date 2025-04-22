@@ -15,6 +15,30 @@ const MAX_BET = 1.0;
 const LOG_DIR = './data';
 const LOG_PATH = './data/bets.json';
 
+
+
+
+async function checkPayment(expectedSol) {
+    const pubKey = new PublicKey(WALLET_ADDRESS);
+    const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 10 });
+    
+    for (let sig of signatures) {
+        const tx = await connection.getParsedTransaction(sig.signature);
+        if (!tx || !tx.meta) continue;
+        
+        const txTime = new Date(sig.blockTime * 1000);
+        const timeDiff = (new Date() - txTime) / 1000 / 60;
+        
+        if (timeDiff > 15) continue;
+        
+        const amount = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL;
+        
+        if (Math.abs(amount - expectedSol) < 0.0001) {
+            return { success: true, tx: sig.signature };
+        }
+    }
+    return { success: false };
+}
 const getHouseEdge = (amount) => {
   if (amount <= 0.01) return 0.70;
   if (amount <= 0.049) return 0.75;
@@ -80,12 +104,12 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
     );
 });
 
-bot.onText(/\/confirm_(\d+\.\d+)_(heads|tails)/i, async (msg, match) => {
+bot.onText(/\/confirm_([0-9]*\.?[0-9]+)_(heads|tails)/i, async (msg, match) => {
     const chatId = msg.chat.id;
-    const betAmount = parseFloat(match[1]);
+    const amountStr = match[0].split('_')[1];
+    const betAmount = parseFloat(amountStr);
     const choice = match[2].toLowerCase();
     
-    // Check payment first
     const paymentCheck = await checkPayment(betAmount);
     
     if (!paymentCheck.success) {
@@ -98,7 +122,6 @@ bot.onText(/\/confirm_(\d+\.\d+)_(heads|tails)/i, async (msg, match) => {
         );
     }
     
-    // Payment verified - process bet
     bot.sendMessage(chatId, `✅ Payment received! Flipping coin...`);
     
     const houseEdge = getHouseEdge(betAmount);
@@ -106,7 +129,6 @@ bot.onText(/\/confirm_(\d+\.\d+)_(heads|tails)/i, async (msg, match) => {
     const win = result === choice;
     const payout = win ? betAmount * (1/houseEdge - 1) : 0;
     
-    // Log the bet
     const log = JSON.parse(fs.readFileSync(LOG_PATH));
     log.push({ 
         ts: new Date().toISOString(), 
@@ -119,21 +141,11 @@ bot.onText(/\/confirm_(\d+\.\d+)_(heads|tails)/i, async (msg, match) => {
     });
     fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
     
-    // Send result
-    if (win) {
-        bot.sendMessage(chatId, 
-            `🎉 You won! You chose *${choice}* and it landed *${result}*.\n\n` +
-            `Payout: ${payout.toFixed(4)} SOL\n` +
-            `TX: \`${paymentCheck.tx}\``,
-            { parse_mode: 'Markdown' }
-        );
-    } else {
-        bot.sendMessage(chatId, 
-            `❌ You lost. You chose *${choice}* but it landed *${result}*.\n\n` +
-            `Better luck next time!`,
-            { parse_mode: 'Markdown' }
-        );
-    }
+    bot.sendMessage(chatId, 
+        win ? `🎉 You won! (${result}) Payout: ${payout.toFixed(4)} SOL` 
+            : `❌ You lost. It was ${result}`,
+        { parse_mode: 'Markdown' }
+    );
 });
 
 bot.onText(/\/start/, (msg) => {
