@@ -163,7 +163,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
     const log = JSON.parse(fs.readFileSync(LOG_PATH));
     log.push({
       ts: new Date().toISOString(),
-      user: msg.from.username || msg.from.id,
+      user: msg.from.username || msg.from.id, // Keep both for logging
       amount,
       choice,
       result,
@@ -172,9 +172,11 @@ bot.onText(/^\/confirm$/, async (msg) => {
     });
     fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
 
+    const displayName = msg.from.username ? `@${msg.from.username}` : `<@${userId}>`;
+
     await bot.sendMessage(chatId,
-      win ? `🎉 Congratulations, <@${userId}>! You won ${payout.toFixed(4)} SOL!\n\nYour choice: ${choice}\nResult: ${result}`
-        : `❌ Sorry, <@${userId}>! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
+      win ? `🎉 Congratulations, ${displayName}! You won ${payout.toFixed(4)} SOL!\n\nYour choice: ${choice}\nResult: ${result}`
+        : `❌ Sorry, ${displayName}! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
       { parse_mode: 'Markdown' }
     );
 
@@ -234,7 +236,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
           [payerWallet]
         );
 
-        await bot.sendMessage(chatId, `✅ Winnings of ${amount.toFixed(4)} SOL sent to <@${userId}>! TX: ${signature}`); // Mention user in payout message
+        await bot.sendMessage(chatId, `✅ Winnings of ${amount.toFixed(4)} SOL sent to ${displayName}! TX: ${signature}`); // Use displayName in payout message
 
       } catch (error) {
         console.error('Payout error:', error);
