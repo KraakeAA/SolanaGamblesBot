@@ -119,18 +119,19 @@ bot.onText(/^\/confirm$/, async (msg) => {
     const betInfo = userBets[chatId];
 
     if (!betInfo) {
-        return bot.sendMessage(chatId, `⚠️ No active bet found. Please use the /bet command first.`);
+        return await bot.sendMessage(chatId, `⚠️ No active bet found. Please use the /bet command first.`);
     }
 
     const { amount, choice } = betInfo;
 
+    let paymentCheckResult;
     try {
         await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL...`);
         await new Promise(resolve => setTimeout(resolve, 5000));
-        const paymentCheck = await checkPayment(amount);
-        console.log('Payment check result:', paymentCheck);
+        paymentCheckResult = await checkPayment(amount);
+        console.log('Payment check result:', paymentCheckResult);
 
-        if (!paymentCheck.success) {
+        if (!paymentCheckResult.success) {
             return await bot.sendMessage(chatId, `❌ Payment not verified!`);
         }
 
@@ -141,7 +142,6 @@ bot.onText(/^\/confirm$/, async (msg) => {
         const win = result === choice;
         const payout = win ? amount * (1/houseEdge - 1) : 0;
 
-        // Explicitly add curly braces around the if block
         if (win && payout > 0) {
             try {
                 console.log('Inside payout try block');
@@ -183,5 +183,8 @@ bot.onText(/^\/confirm$/, async (msg) => {
         }
 
         delete userBets[chatId];
+    } catch (topLevelError) {
+        console.error('Top-level error in /confirm:', topLevelError);
+        await bot.sendMessage(chatId, `⚠️ An unexpected error occurred while processing your confirmation.`);
     }
 });
