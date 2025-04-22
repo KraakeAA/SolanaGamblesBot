@@ -20,7 +20,7 @@ const userBets = {};
 
 async function checkPayment(expectedSol) {
     const pubKey = new PublicKey(WALLET_ADDRESS);
-    const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 10 });
+    const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 3 });
 
     for (let sig of signatures) {
         const tx = await connection.getParsedTransaction(sig.signature);
