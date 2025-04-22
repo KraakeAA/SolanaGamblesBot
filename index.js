@@ -1,6 +1,6 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const connection = new Connection('https://solana-mainnet.g.alchemy.com/v2/RQg--XCO8P6g4VdM845rlCUs5r3CSEbE', 'confirmed');
+const { Connection, clusterApiUrl, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const fs = require('fs');
 const express = require('express');
 const app = express();
@@ -8,7 +8,7 @@ app.get('/', (req, res) => res.send('OK'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Healthcheck listening on ${PORT}`));
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
-const connection = new Connection(clusterApiUrl('mainnet-beta'), 'confirmed');
+const connection = new Connection('https://solana-mainnet.g.alchemy.com/v2/RQg--XCO8P6g4VdM845rlCUs5r3CSEbE', 'confirmed');
 const WALLET_ADDRESS = '9HL7W4XZJDX6br3ojjU6BLHp7oZVP3nCDKxQ21TNanQf';
 const MIN_BET = 0.01;
 const MAX_BET = 1.0;
