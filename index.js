@@ -18,6 +18,7 @@ const LOG_PATH = './data/bets.json';
 
 // Store user bet information (chatId: { amount, choice })
 const userBets = {};
+const coinFlipSessions = {}; // Track if a user has initiated coin flip
 
 async function checkPayment(expectedSol) {
     const pubKey = new PublicKey(WALLET_ADDRESS);
@@ -64,27 +65,23 @@ const getHouseEdge = (amount) => {
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
 if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
 
-bot.onText(/\/start/, (msg) => {
+bot.onText(/\/start$/, (msg) => {
   bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
-You can place bets by typing:
 
-/bet 0.01 heads
-
-Min bet: 0.01 SOL
-Max bet: 1.0 SOL
+Available games:
+- /start coinflip
+- /start race (coming soon!)
 
 Send your SOL to:
-9HL7W4XZJDX6br3ojjU6BLHp7oZVP3nCDKxQ21TNanQf`);
+${WALLET_ADDRESS}`);
 });
 
-bot.onText(/\/test/, (msg) => {
-  bot.sendMessage(msg.chat.id, 'Test successful!');
-});
-
-bot.onText(/^\/bet$/i, (msg) => {
+bot.onText(/\/start coinflip/, (msg) => {
+  const chatId = msg.chat.id;
+  coinFlipSessions[chatId] = true; // Mark the user as in a coin flip session
   bot.sendMessage(
-    msg.chat.id,
-    `🎰 Please choose an amount:\n\n` +
+    chatId,
+    `🪙 You've started a coin flip game! Please choose an amount and heads/tails:\n\n` +
     `/bet 0.01 heads\n` +
     `/bet 0.05 tails\n\n` +
     `Min: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`,
@@ -92,146 +89,160 @@ bot.onText(/^\/bet$/i, (msg) => {
   );
 });
 
+// We'll create the /start race and /betrace handlers later
+
+// Modify the /bet handler to check if a coin flip session is active
 bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const betAmount = parseFloat(match[1]);
-    const userChoice = match[2].toLowerCase();
+  const chatId = msg.chat.id;
 
-    if (betAmount < MIN_BET || betAmount > MAX_BET) {
-        return bot.sendMessage(chatId, `❌ Bet must be between ${MIN_BET}-${MAX_BET} SOL`);
-    }
+  if (!coinFlipSessions[chatId]) {
+    return bot.sendMessage(chatId, `⚠️ Please start a coin flip game first using /start coinflip`);
+  }
 
-    // Store the bet information
-    userBets[chatId] = { amount: betAmount, choice: userChoice };
+  const betAmount = parseFloat(match[1]);
+  const userChoice = match[2].toLowerCase();
 
-    await bot.sendMessage(chatId,
-        `💸 *To place your bet:*\n\n` +
-        `1. Send *exactly ${betAmount} SOL* to:\n` +
-        `\`${WALLET_ADDRESS}\`\n\n` +
-        `2. Once sent, type: /confirm\n\n` +
-        `⚠️ You have 15 minutes to complete payment`,
-        { parse_mode: 'Markdown' }
-    );
+  if (betAmount < MIN_BET || betAmount > MAX_BET) {
+    return bot.sendMessage(chatId, `❌ Bet must be between ${MIN_BET}-${MAX_BET} SOL`);
+  }
+
+  // Store the bet information
+  userBets[chatId] = { amount: betAmount, choice: userChoice };
+
+  await bot.sendMessage(chatId,
+    `💸 *To place your bet:*\n\n` +
+    `1. Send *exactly ${betAmount} SOL* to:\n` +
+    `\`${WALLET_ADDRESS}\`\n\n` +
+    `2. Once sent, type /confirm\n\n` +
+    `⚠️ You have 15 minutes to complete payment`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
 bot.onText(/^\/confirm$/, async (msg) => {
-    const chatId = msg.chat.id;
-    const betInfo = userBets[chatId];
+  const chatId = msg.chat.id;
 
-    if (!betInfo) {
-        return await bot.sendMessage(chatId, `⚠️ No active bet found. Please use the /bet command first.`);
+  if (!userBets[chatId]) {
+    return await bot.sendMessage(chatId, `⚠️ No active bet found. Please use the /bet command first.`);
+  }
+
+  const { amount, choice } = userBets[chatId];
+
+  let paymentCheckResult;
+  try {
+    await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL...`);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    paymentCheckResult = await checkPayment(amount);
+    console.log('Payment check result:', paymentCheckResult);
+
+    if (!paymentCheckResult.success) {
+      return await bot.sendMessage(chatId, `❌ Payment not verified!`);
     }
 
-    const { amount, choice } = betInfo;
+    await bot.sendMessage(chatId, `✅ Payment verified!`);
 
-    let paymentCheckResult;
-    try {
-        await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL...`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        paymentCheckResult = await checkPayment(amount);
-        console.log('Payment check result:', paymentCheckResult);
+    const houseEdge = getHouseEdge(amount);
+    const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
+    const win = result === choice;
+    const payout = win ? amount : 0; // 1:1 payout on win
 
-        if (!paymentCheckResult.success) {
-            return await bot.sendMessage(chatId, `❌ Payment not verified!`);
+    console.log(`DEBUG: Before winning message - win=${win}, amount=${amount}, payout=${payout}`); // Added debug log
+
+    // Re-enable logging
+    const log = JSON.parse(fs.readFileSync(LOG_PATH));
+    log.push({
+      ts: new Date().toISOString(),
+      user: msg.from.username || msg.from.id,
+      amount,
+      choice,
+      result,
+      payout,
+      tx: paymentCheckResult.tx
+    });
+    fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
+
+    await bot.sendMessage(chatId,
+      win ? `🎉 Congratulations! You won ${payout.toFixed(4)} SOL!\n\nYour choice: ${choice}\nResult: ${result}`
+        : `❌ Sorry! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
+      { parse_mode: 'Markdown' }
+    );
+
+    if (win) {
+      try {
+        console.log('Inside payout try block');
+        console.log(`DEBUG Payout: win=${win}, amount=${amount}`); // Added debug
+
+        const payerPrivateKey = process.env.BOT_PRIVATE_KEY;
+        if (!payerPrivateKey) {
+          console.error('BOT_PRIVATE_KEY environment variable not set!');
+          return await bot.sendMessage(chatId, `⚠️ Payout failed: Bot's private key not configured.`);
+        }
+        const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey));
+        const payerPublicKey = payerWallet.publicKey;
+
+        // Attempt to get the sender's public key from the payment transaction
+        let winnerPublicKey;
+        if (paymentCheckResult && paymentCheckResult.tx) {
+          try {
+            const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
+            if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.accountKeys.length > 0) {
+              // Assuming the first non-fee payer account is the sender
+              winnerPublicKey = parsedTransaction.transaction.message.accountKeys[0].pubkey;
+              console.log('Extracted winner public key:', winnerPublicKey.toBase58());
+            } else {
+              console.warn('Could not parse transaction to determine sender.');
+              return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not analyze your payment transaction.`);
+            }
+          } catch (error) {
+            console.error('Error parsing transaction for sender:', error);
+            return await bot.sendMessage(chatId, `⚠️ Payout failed: Error analyzing your payment transaction.`);
+          }
+        } else {
+          console.warn('No transaction signature available to determine sender.');
+          return await bot.sendMessage(chatId, `⚠️ Payout failed: No payment transaction found.`);
         }
 
-        await bot.sendMessage(chatId, `✅ Payment verified!`);
+        if (!winnerPublicKey) {
+          console.warn('Winner public key is undefined.');
+          return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine recipient.`);
+        }
 
-        const houseEdge = getHouseEdge(amount);
-        const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
-        const win = result === choice;
-        const payout = win ? amount : 0; // 1:1 payout on win
+        const payoutAmountLamports = Math.round(amount * LAMPORTS_PER_SOL); // ENSURE using 'amount'
 
-        console.log(`DEBUG: Before winning message - win=${win}, amount=${amount}, payout=${payout}`); // Added debug log
-
-        // Re-enable logging
-        const log = JSON.parse(fs.readFileSync(LOG_PATH));
-        log.push({
-            ts: new Date().toISOString(),
-            user: msg.from.username || msg.from.id,
-            amount,
-            choice,
-            result,
-            payout,
-            tx: paymentCheckResult.tx
-        });
-        fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
-
-        await bot.sendMessage(chatId,
-            win ? `🎉 Congratulations! You won ${payout.toFixed(4)} SOL!\n\nYour choice: ${choice}\nResult: ${result}`
-                : `❌ Sorry! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
-            { parse_mode: 'Markdown' }
+        const transaction = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: payerPublicKey,
+            toPubkey: winnerPublicKey,
+            lamports: payoutAmountLamports,
+          })
         );
 
-        if (win) {
-            try {
-                console.log('Inside payout try block');
-                console.log(`DEBUG Payout: win=${win}, amount=${amount}`); // Added debug
+        const signature = await sendAndConfirmTransaction(
+          connection,
+          transaction,
+          [payerWallet]
+        );
 
-                const payerPrivateKey = process.env.BOT_PRIVATE_KEY;
-                if (!payerPrivateKey) {
-                    console.error('BOT_PRIVATE_KEY environment variable not set!');
-                    return await bot.sendMessage(chatId, `⚠️ Payout failed: Bot's private key not configured.`);
-                }
-                const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey));
-                const payerPublicKey = payerWallet.publicKey;
+        await bot.sendMessage(chatId, `✅ Winnings of ${amount.toFixed(4)} SOL sent! TX: ${signature}`); // ENSURE using 'amount'
 
-                // Attempt to get the sender's public key from the payment transaction
-                let winnerPublicKey;
-                if (paymentCheckResult && paymentCheckResult.tx) {
-                    try {
-                        const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
-                        if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.accountKeys.length > 0) {
-                            // Assuming the first non-fee payer account is the sender
-                            winnerPublicKey = parsedTransaction.transaction.message.accountKeys[0].pubkey;
-                            console.log('Extracted winner public key:', winnerPublicKey.toBase58());
-                        } else {
-                            console.warn('Could not parse transaction to determine sender.');
-                            return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not analyze your payment transaction.`);
-                        }
-                    } catch (error) {
-                        console.error('Error parsing transaction for sender:', error);
-                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Error analyzing your payment transaction.`);
-                    }
-                } else {
-                    console.warn('No transaction signature available to determine sender.');
-                    return await bot.sendMessage(chatId, `⚠️ Payout failed: No payment transaction found.`);
-                }
-
-                if (!winnerPublicKey) {
-                    console.warn('Winner public key is undefined.');
-                    return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine recipient.`);
-                }
-
-                const payoutAmountLamports = Math.round(amount * LAMPORTS_PER_SOL); // ENSURE using 'amount'
-
-                const transaction = new Transaction().add(
-                    SystemProgram.transfer({
-                        fromPubkey: payerPublicKey,
-                        toPubkey: winnerPublicKey,
-                        lamports: payoutAmountLamports,
-                    })
-                );
-
-                const signature = await sendAndConfirmTransaction(
-                    connection,
-                    transaction,
-                    [payerWallet]
-                );
-
-                await bot.sendMessage(chatId, `✅ Winnings of ${amount.toFixed(4)} SOL sent! TX: ${signature}`); // ENSURE using 'amount'
-
-            } catch (error) {
-                console.error('Payout error:', error);
-                await bot.sendMessage(chatId, `⚠️ Payout failed due to an error.`);
-            } finally {
-                console.log('Payout attempt finished.');
-            }
-        }
-
-        delete userBets[chatId];
-    } catch (topLevelError) {
-        console.error('Top-level error in /confirm:', topLevelError);
-        await bot.sendMessage(chatId, `⚠️ An unexpected error occurred while processing your confirmation.`);
+      } catch (error) {
+        console.error('Payout error:', error);
+        await bot.sendMessage(chatId, `⚠️ Payout failed due to an error.`);
+      } finally {
+        console.log('Payout attempt finished.');
+      }
     }
+
+    delete userBets[chatId];
+    delete coinFlipSessions[chatId]; // End the coin flip session after confirmation
+  } catch (topLevelError) {
+    console.error('Top-level error in /confirm:', topLevelError);
+    await bot.sendMessage(chatId, `⚠️ An unexpected error occurred while processing your confirmation.`);
+  }
+});
+
+// We will add /start race and /betrace logic here later
+
+bot.onText(/\/test/, (msg) => {
+  bot.sendMessage(msg.chat.id, 'Test successful!');
 });
