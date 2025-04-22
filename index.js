@@ -178,7 +178,6 @@ bot.onText(/^\/confirm$/, async (msg) => {
             try {
                 await bot.sendMessage(chatId, `💰 Sending your winnings of ${payout.toFixed(4)} SOL...`);
 
-                // Get the bot's private key from the environment variable
                 const payerPrivateKey = process.env.BOT_PRIVATE_KEY;
                 if (!payerPrivateKey) {
                     console.error('BOT_PRIVATE_KEY environment variable not set!');
@@ -187,11 +186,9 @@ bot.onText(/^\/confirm$/, async (msg) => {
                 const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey));
                 const payerPublicKey = payerWallet.publicKey;
 
-                // Try to extract the sender's address from the incoming transaction
                 const incomingTransaction = await connection.getParsedTransaction(paymentCheck.tx);
                 let winnerPublicKey = null;
                 if (incomingTransaction && incomingTransaction.transaction && incomingTransaction.transaction.message && incomingTransaction.transaction.message.accountKeys) {
-                    // Assuming the first non-fee payer account is the sender (this is a simplification)
                     winnerPublicKey = incomingTransaction.transaction.message.accountKeys.find((key, index) => index !== incomingTransaction.transaction.message.header.numRequiredSignatures);
                     if (winnerPublicKey) {
                         winnerPublicKey = new PublicKey(winnerPublicKey);
@@ -226,8 +223,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
             } catch (error) {
                 console.error('Error sending payout:', error);
                 await bot.sendMessage(chatId, `⚠️ Error sending payout. Please contact support.`);
-            } finally { // Added finally block
-                // This block will execute regardless of try or catch
+            } finally {
                 console.log('Payout logic attempted.');
             }
         }
