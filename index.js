@@ -142,6 +142,27 @@ bot.onText(/^\/confirm$/, async (msg) => {
         const win = result === choice;
         const payout = win ? amount * (1/houseEdge - 1) : 0;
 
+        console.log(`DEBUG: win=${win}, result=${result}, choice=${choice}`); // Add this line
+
+        // Temporarily comment out logging
+        // const log = JSON.parse(fs.readFileSync(LOG_PATH));
+        // log.push({
+        //     ts: new Date().toISOString(),
+        //     user: msg.from.username || msg.from.id,
+        //     amount,
+        //     choice,
+        //     result,
+        //     payout,
+        //     tx: paymentCheckResult.tx
+        // });
+        // fs.writeFileSync(LOG_PATH, JSON.stringify(log, null, 2));
+
+        await bot.sendMessage(chatId,
+            win ? `🎉 Congratulations! You won ${payout.toFixed(4)} SOL!\n\nYour choice: ${choice}\nResult: ${result}`
+                : `❌ Sorry! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
+            { parse_mode: 'Markdown' }
+        );
+
         if (win && payout > 0) {
             try {
                 console.log('Inside payout try block');
