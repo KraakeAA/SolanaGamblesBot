@@ -8,7 +8,7 @@ app.get('/', (req, res) => res.send('OK'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Healthcheck listening on ${PORT}`));
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
-const connection = new Connection('https://solana-mainnet.g.alchemy.com/v2/RQg--XCO8P6g4VdM845rlCUs5r3CSEbE', 'confirmed');
+const connection = new Connection('https://solana-mainnet.g.alchemy.com/v2/YOUR_API_KEY', 'confirmed'); // ENSURE YOUR ACTUAL ALCHEMY API KEY IS HERE
 const WALLET_ADDRESS = '9HL7W4XZJDX6br3ojjU6BLHp7oZVP3nCDKxQ21TNanQf';
 const MIN_BET = 0.01;
 const MAX_BET = 1.0;
@@ -20,7 +20,7 @@ const userBets = {};
 
 async function checkPayment(expectedSol) {
     const pubKey = new PublicKey(WALLET_ADDRESS);
-    const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 20 }); // Increased limit for debugging
+    const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 5 }); // Reduced limit
 
     console.log(`Checking for payment of ${expectedSol} SOL. Found ${signatures.length} recent signatures.`);
 
@@ -125,6 +125,9 @@ bot.onText(/^\/confirm$/, async (msg) => {
 
     try {
         await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL...`);
+
+        // Introduce a 5-second delay
+        await new Promise(resolve => setTimeout(resolve, 5000));
 
         const paymentCheck = await checkPayment(amount);
         console.log('Payment check result:', paymentCheck); // Debug log
