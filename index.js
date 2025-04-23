@@ -76,6 +76,21 @@ async function checkPayment(expectedSol, userId, gameType, targetWalletAddress) 
 
         const amount = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL;
         if (Math.abs(Math.abs(amount) - expectedSol) < 0.0015) {
+            // Identify sender of the transaction
+            const payer = getPayerFromTransaction(tx, expectedSol);
+            if (!payer) {
+                continue;
+            }
+
+            const payerAddress = payer.toBase58();
+            if (linkedWallets[userId] && linkedWallets[userId] !== payerAddress) {
+                return { success: false, message: 'Wallet mismatch. Please use your original linked wallet.' };
+            }
+
+            if (!linkedWallets[userId]) {
+                linkedWallets[userId] = payerAddress;
+            }
+
             if (!userPayments[userId]) {
                 userPayments[userId] = {};
             }
