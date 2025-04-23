@@ -321,11 +321,4 @@ bot.onText(/\/race$/, async (msg) => {
 bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    const betAmount = parseFloat(match[1]);
-    const chosenHorseName = match[2];
-
-    // Find the active race (for simplicity, we'll assume the most recently started race is active and open for betting)
-    const activeRaceId = Object.keys(raceSessions).pop();
-
-    if (!activeRaceId || raceSessions[activeRaceId].status !== 'open') {
-        return bot.sendMessage(chatId, `
+    const betAmount =
