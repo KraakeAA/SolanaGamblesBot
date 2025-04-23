@@ -67,10 +67,16 @@ if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
 
 bot.onText(/\/start$/, async (msg) => {
     const chatId = msg.chat.id;
-    const imageUrl = 'https://i.imgur.com/GBawwOW.png'; // Direct link to the image
+    const imageUrl = 'https://i.imgur.com/GBawwOW.png'; // Use your image URL
 
     await bot.sendPhoto(chatId, imageUrl, {
-        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- /start coinflip\n- /start race (coming soon!)\n\nType /refresh to see this menu again.`
+        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Start Coin Flip: [Tap Here]\n- Start Race: [Coming Soon!]\n\nType /refresh to see this menu again.`,
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
+                [{ text: '🏁 Start Race (Coming Soon!)', callback_data: 'start_race' }]
+            ]
+        }
     });
 });
 
@@ -92,10 +98,17 @@ bot.onText(/\/refresh$/, (msg) => {
   bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
 
         Available games:
-        - /start coinflip
-        - /start race (coming soon!)
+        - Start Coin Flip: [Tap Here]
+        - Start Race: [Coming Soon!]
 
-        Type /refresh to see this menu again.`);
+        Type /refresh to see this menu again.`, {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
+                    [{ text: '🏁 Start Race (Coming Soon!)', callback_data: 'start_race' }]
+                ]
+            }
+        });
 });
 
 // Modify the /bet handler to check if a coin flip session is active for the user
@@ -259,6 +272,31 @@ bot.onText(/^\/confirm$/, async (msg) => {
     console.error('Top-level error in /confirm:', topLevelError);
     await bot.sendMessage(chatId, `⚠️ An unexpected error occurred while processing your confirmation.`);
   }
+});
+
+// Handle the button clicks
+bot.on('callback_query', async (query) => {
+    const chatId = query.message.chat.id;
+    const userId = query.from.id;
+
+    if (query.data === 'start_coinflip') {
+        coinFlipSessions[userId] = true; // Mark the user as in a coin flip session
+        await bot.sendMessage(
+            chatId,
+            `🪙 You've started a coin flip game! Please choose an amount and heads/tails:\n\n` +
+            `/bet 0.01 heads\n` +
+            `/bet 0.05 tails\n\n` +
+            `Min: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`,
+            { parse_mode: 'Markdown' }
+        );
+
+        // Acknowledge the callback
+        bot.answerCallbackQuery(query.id);
+    } else if (query.data === 'start_race') {
+        await bot.sendMessage(chatId, `🏁 The race game is coming soon! Stay tuned for updates!`);
+        // You would add logic here to initiate the race game when it's implemented
+        bot.answerCallbackQuery(query.id);
+    }
 });
 
 // We will add /start race and /betrace logic here later
