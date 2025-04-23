@@ -315,23 +315,27 @@ linkedWallets[userId] = winnerAddress;
             if (sendResult.success) {
                 
 await bot.sendAnimation(chatId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExczB1anY2Y3YzdXY0NxdnUwZ3NtNWhkZ3h2b2puZjZ2dDdpdmliZmV6aSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohjUWVkjvGf4RAjDi/giphy.gif");
-await bot.sendMessage(chatId, `ð *YOU WIN!* ð
+await bot.sendMessage(chatId, 
+    `ð *YOU WIN!* ð
 
 ð Congratulations, ${displayName}!
 
 *Result:* \`${result}\`
 ð¸ Winnings sent!
-TX: \`${sendResult.signature}\``, { parse_mode: 'Markdown' });
+TX: \`${sendResult.signature}\``,
+    { parse_mode: 'Markdown' });
             } else {
                 
 await bot.sendAnimation(chatId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExczB1anY2Y3YzdXY0NxdnUwZ3NtNWhkZ3h2b2puZjZ2dDdpdmliZmV6aSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohjUWVkjvGf4RAjDi/giphy.gif");
-await bot.sendMessage(chatId, `ð *YOU WIN!* ð
+await bot.sendMessage(chatId, 
+    `ð *YOU WIN!* ð
 
 ð Congratulations, ${displayName}!
 
 *Result:* \`${result}\`
 ð¸ Winnings sent!
-TX: \`${sendResult.signature}\``, { parse_mode: 'Markdown' });
+TX: \`${sendResult.signature}\``,
+    { parse_mode: 'Markdown' });
                 } else {
                     await bot.sendMessage(chatId, `â ï¸ Payout failed: ${sendResult.error}`);
                 }
