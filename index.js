@@ -342,13 +342,8 @@ bot.onText(/\/race$/, async (msg) => {
 
     let raceMessage = `ð **New Race! Place your bets!** ð\n\n`;
     raceSessions[raceId].horses.forEach(horse => {
-    raceMessage += `${horse.emoji} *${horse.name}* (Odds: ${horse.odds.toFixed(1)}x)\n`;
-    });
-
-    raceMessage += `\nTo place your bet, use:\n\`/betrace [amount] [horse_name]\`\n` +
-        `Example: \`/betrace 0.1 Blue\``;
-
-    await bot.sendMessage(chatId, raceMessage, { parse_mode: 'Markdown' });
+    const raceIntro = `ð *New Race! Place your bets!* ð\n\nð *Yellow* (Odds: 1.1x)\nð§¡ *Orange* (Odds: 2.0x)\nð *Blue* (Odds: 3.0x)\nð¨ð¾ *Cyan* (Odds: 4.0x)\nð¤ *White* (Odds: 5.0x)\nâ¤ï¸ *Red* (Odds: 6.0x)\nð¤ *Black* (Odds: 7.0x)\nð©· *Pink* (Odds: 8.0x)\nð *Purple* (Odds: 9.0x)\nð *Green* (Odds: 10.0x)\nð©¶ *Silver* (Odds: 15.0x)\n\n_To place your bet, use:_\n`/betrace [amount] [horse_name]`\nExample: `/betrace 0.1 Blue``;
+    await bot.sendMessage(chatId, raceIntro, { parse_mode: 'Markdown' });
 
     // The setTimeout for closing betting is REMOVED
     // We will proceed with the race after the user confirms their bet.
