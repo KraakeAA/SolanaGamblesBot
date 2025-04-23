@@ -316,6 +316,9 @@ linkedWallets[userId] = winnerAddress;
             }
             // --- END PAYOUT LOGIC ---
         } else {
+        await bot.sendAnimation(chatId, "https://media.giphy.com/media/l2JHPBFzSF1zG0y92/giphy.gif");
+        await bot.sendMessage(chatId, `ð *YOU LOSE!*\n\n${displayName}, you guessed *${choice}* but the coin landed *${result}*.`,
+            { parse_mode: "Markdown" });
             await bot.sendMessage(chatId, `â Sorry, ${displayName}! You lost.\nResult: ${result}`);
         }
 
@@ -431,6 +434,8 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
         await bot.sendMessage(chatId, `ð **And the winner is... ${winningHorse.emoji} ${winningHorse.name}!** ð`, { parse_mode: 'Markdown' });
 
         if (horse === winningHorse.name) {
+        await bot.sendAnimation(chatId, "https://media.giphy.com/media/3ohzdIuqJoo8QdKlnW/giphy.gif");
+        await bot.sendMessage(chatId, `ð *You backed the winner!*\n\n${horse} took the crown!\n\nð¸ Payout: ${payout.toFixed(4)} SOL`, { parse_mode: "Markdown" });
             const winningHorseData = race.horses.find(h => h.name === horse);
             const payout = amount * winningHorseData.odds;
             await bot.sendMessage(chatId, `ð You backed the winner! You won ${payout.toFixed(4)} SOL.`);
@@ -495,6 +500,8 @@ linkedWallets[userId] = winnerAddress;
             }
 
         } else {
+        await bot.sendAnimation(chatId, "https://media.giphy.com/media/26BRBupa6nRXMGBP2/giphy.gif");
+        await bot.sendMessage(chatId, `ð *Your horse lost!*\n\n${horse} didnât cross the line first. Better luck next time.`, { parse_mode: "Markdown" });
             await bot.sendMessage(chatId, `Sorry, your horse ${horse} didn't win this time. Better luck next race!`);
         }
 
