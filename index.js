@@ -335,9 +335,10 @@ await bot.sendMessage(chatId,
 *Result:* \`${result}\`
 ð¸ Winnings sent!
 TX: \`${sendResult.signature}\``,
-    { parse_mode: 'Markdown' });
-                } else {
-                    await bot.sendMessage(chatId, `â ï¸ Payout failed: ${sendResult.error}`);
+await bot.sendAnimation(chatId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExczB1anY2Y3YzdXY0NxdnUwZ3NtNWhkZ3h2b2puZjZ2dDdpdmliZmV6aSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohjUWVkjvGf4RAjDi/giphy.gif");
+await bot.sendMessage(chatId, 
+  `ð *YOU WIN!* ð\n\nð Congratulations, ${displayName}!\n\n*Result:* \`${result}\`\nð¸ Winnings sent!\nTX: \`${sendResult.signature}\``
+  { parse_mode: 'Markdown' });
                 }
 
             } catch (error) {
@@ -358,7 +359,6 @@ Better luck next time!`, { parse_mode: 'Markdown' });
     } catch (error) {
         console.error('Error in /confirmrace:', error);
         await bot.sendMessage(chatId, `â ï¸ An error occurred while processing the race.`);
-    }
 });
 
 
@@ -368,3 +368,4 @@ bot.onText(/\/help$/, async (msg) => {
     const chatId = msg.chat.id;
     await bot.sendMessage(chatId, `ð *How to Play*\n\n1. Start a game: /coinflip or /race\n2. Place a bet: /bet [amount] [heads/tails] or /betrace [amount] [horse]\n3. Send SOL to the bot address\n4. Confirm with /confirm or /confirmrace\n\nUse /wallet to view your linked wallet.`, { parse_mode: 'Markdown' });
 });
+)
