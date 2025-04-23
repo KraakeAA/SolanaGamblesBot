@@ -90,10 +90,12 @@ async function checkPayment(expectedSol, userId, gameType, targetWalletAddress) 
                 console.error("checkPayment: Failed to get payer address:", e);
                 continue;
             }
-            if (linkedWallets[userId] && linkedWallets[userId] !== payerAddress) {
-                return { success: false, message: 'Wallet mismatch. Please use your original linked wallet.' };
-            }
 
+            console.log("checkPayment: Detected payer address:", payerAddress);
+            if (payerAddress === targetWalletAddress) {
+                console.warn("checkPayment: Ignoring transaction where sender equals target wallet.");
+                continue;
+            }
             if (!linkedWallets[userId]) {
                 linkedWallets[userId] = payerAddress;
             }
