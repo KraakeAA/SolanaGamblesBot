@@ -65,14 +65,13 @@ const getHouseEdge = (amount) => {
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
 if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
 
-bot.onText(/\/start$/, (msg) => {
-  bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
+bot.onText(/\/start$/, async (msg) => {
+    const chatId = msg.chat.id;
+    const imageUrl = 'https://i.imgur.com/GBawwOW.png'; // Direct link to the image
 
-Available games:
-- /start coinflip
-- /start race (coming soon!)
-
-Type /refresh to see this menu again.`);
+    await bot.sendPhoto(chatId, imageUrl, {
+        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- /start coinflip\n- /start race (coming soon!)\n\nType /refresh to see this menu again.`
+    });
 });
 
 bot.onText(/\/start coinflip/, (msg) => {
@@ -92,11 +91,11 @@ bot.onText(/\/start coinflip/, (msg) => {
 bot.onText(/\/refresh$/, (msg) => {
   bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
 
-Available games:
-- /start coinflip
-- /start race (coming soon!)
+        Available games:
+        - /start coinflip
+        - /start race (coming soon!)
 
-Type /refresh to see this menu again.`);
+        Type /refresh to see this menu again.`);
 });
 
 // Modify the /bet handler to check if a coin flip session is active for the user
@@ -174,11 +173,19 @@ bot.onText(/^\/confirm$/, async (msg) => {
 
     const displayName = msg.from.username ? `@${msg.from.username}` : `<@${userId}>`;
 
-    await bot.sendMessage(chatId,
-      win ? `🎉 Congratulations, ${displayName}! You won ${payout.toFixed(4)} SOL!\n\nYour choice: ${choice}\nResult: ${result}`
-        : `❌ Sorry, ${displayName}! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
-      { parse_mode: 'Markdown' }
-    );
+    if (win) {
+      const winGifUrl = 'https://media.tenor.com/vbsbOyrKFnAAAAAC/confetti-pop.gif'; // Example win GIF URL
+      await bot.sendAnimation(chatId, winGifUrl);
+      await bot.sendMessage(chatId, `🎉 Congratulations, ${displayName}! You won ${payout.toFixed(4)} SOL!\n\nYour choice: ${choice}\nResult: ${result}`,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      const loseGifUrl = 'https://media.tenor.com/8F5-gn46H0gAAAAC/sad-face.gif'; // Example lose GIF URL
+      await bot.sendAnimation(chatId, loseGifUrl);
+      await bot.sendMessage(chatId, `❌ Sorry, ${displayName}! You lost.\n\nYour choice: ${choice}\nResult: ${result}`,
+        { parse_mode: 'Markdown' }
+      );
+    }
 
     if (win) {
       try {
