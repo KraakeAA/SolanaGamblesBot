@@ -48,6 +48,7 @@ const availableHorses = [
 
 const userBets = {};
 const coinFlipSessions = {};
+const linkedWallets = {}; // Telegram userId -> Wallet address mapping
 const usedTransactions = new Set(); // To store used transaction signatures
 
 async function checkPayment(expectedSol) {
@@ -182,6 +183,19 @@ bot.onText(/\/coinflip$/, (msg) => {
     );
 });
 
+
+bot.onText(/\/wallet$/, async (msg) => {
+    const userId = msg.from.id;
+    const wallet = linkedWallets[userId];
+    if (wallet) {
+        await bot.sendMessage(msg.chat.id, `ð Your linked wallet address is:
+\`${wallet}\``, { parse_mode: 'Markdown' });
+    } else {
+        await bot.sendMessage(msg.chat.id, `â ï¸ No wallet is linked to your account yet. Place a verified bet to link one.`);
+    }
+});
+
+
 bot.onText(/\/refresh$/, async (msg) => {
     const chatId = msg.chat.id;
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif';
@@ -239,6 +253,10 @@ bot.onText(/^\/confirm$/, async (msg) => {
         await bot.sendMessage(chatId, `â Payment verified!`);
 
         const houseEdge = getHouseEdge(amount);
+        await bot.sendMessage(chatId, `ðª Flipping the coin...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        await bot.sendMessage(chatId, `ð Spinning...`);
+        await new Promise(resolve => setTimeout(resolve, 1500));
         const result = Math.random() > houseEdge ? choice : (choice === 'heads' ? 'tails' : 'heads');
         const win = result === choice;
         const payout = win ? amount : 0;
@@ -259,11 +277,19 @@ bot.onText(/^\/confirm$/, async (msg) => {
                     const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
                     if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.length > 0) {
                         
+
 winnerPublicKey = getPayerFromTransaction(parsedTransaction, amount);
 if (!winnerPublicKey) {
     console.warn('Could not determine the sender from the transaction.');
     return await bot.sendMessage(chatId, `â ï¸ Payout failed: Could not determine payment sender.`);
 }
+
+const winnerAddress = winnerPublicKey.toBase58();
+if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
+    return await bot.sendMessage(chatId, `â ï¸ This wallet does not match your linked wallet. Please use your original address.`);
+}
+linkedWallets[userId] = winnerAddress;
+
 
                         console.log('Extracted winner public key:', winnerPublicKey.toBase58());
                     } else {
@@ -287,13 +313,36 @@ if (!winnerPublicKey) {
             const sendResult = await sendSol(connection, payerPrivateKey, winnerPublicKey, payout);
 
             if (sendResult.success) {
-                await bot.sendMessage(chatId, `ð Congratulations, ${displayName}! You won ${payout.toFixed(4)} SOL!\nResult: ${result}\nð¸ Winnings sent! TX: ${sendResult.signature}`);
+                
+await bot.sendAnimation(chatId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExczB1anY2Y3YzdXY0NxdnUwZ3NtNWhkZ3h2b2puZjZ2dDdpdmliZmV6aSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohjUWVkjvGf4RAjDi/giphy.gif");
+
+        await bot.sendMessage(chatId, `ð *YOU WIN!* ð
+
+ð Congratulations, ${displayName}!
+
+*Result:* `${result}`
+ð¸ Winnings sent! TX: ${sendResult.signature}`);
             } else {
-                await bot.sendMessage(chatId, `ð Congratulations, ${displayName}! You won ${payout.toFixed(4)} SOL!\nResult: ${result}\nâ ï¸ Payout failed: ${sendResult.error}`);
+                
+await bot.sendAnimation(chatId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExczB1anY2Y3YzdXY0NxdnUwZ3NtNWhkZ3h2b2puZjZ2dDdpdmliZmV6aSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohjUWVkjvGf4RAjDi/giphy.gif");
+
+        await bot.sendMessage(chatId, `ð *YOU WIN!* ð
+
+ð Congratulations, ${displayName}!
+
+*Result:* `${result}`
+â ï¸ Payout failed: ${sendResult.error}`);
             }
             // --- END PAYOUT LOGIC ---
         } else {
-            await bot.sendMessage(chatId, `â Sorry, ${displayName}! You lost.\nResult: ${result}`);
+            
+await bot.sendAnimation(chatId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExZW9obml4ZzFpZmVhOGp6ejI4OXgzNm5xeGdmNGhlcW1pbGp4NmxwaiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/q0eh4kQ1ZsHDi/giphy.gif");
+
+        await bot.sendMessage(chatId, `ð *YOU LOSE!* ð
+
+â Sorry, ${displayName}!
+
+*Result:* `${result}``, { parse_mode: 'Markdown' });
         }
 
         delete userBets[userId];
@@ -405,12 +454,23 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
         await new Promise(resolve => setTimeout(resolve, 2000));
         await bot.sendMessage(chatId, `It's a tight finish!`, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 1000));
+        await bot.sendMessage(chatId, `ð The gates are open!`);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await bot.sendMessage(chatId, `ðââï¸ The horses charge forward...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        await bot.sendMessage(chatId, `ð¥ It's neck and neck as they hit the midway mark!`);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await bot.sendMessage(chatId, `â¡ A burst of speed from the pack...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
         await bot.sendMessage(chatId, `ð **And the winner is... ${winningHorse.emoji} ${winningHorse.name}!** ð`, { parse_mode: 'Markdown' });
 
         if (horse === winningHorse.name) {
             const winningHorseData = race.horses.find(h => h.name === horse);
             const payout = amount * winningHorseData.odds;
-            await bot.sendMessage(chatId, `ð You backed the winner! You won ${payout.toFixed(4)} SOL.`);
+            await bot.sendMessage(chatId, `ð *YOU WIN THE RACE!* ð
+
+ð You backed the winner!
+ð° *Winnings:* `${payout.toFixed(4)} SOL`, { parse_mode: 'Markdown' });
 
             try {
                 const payerPrivateKey = process.env.BOT_PRIVATE_KEY;
@@ -425,11 +485,19 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
                         const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
                         if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.length > 0) {
                             
+
 winnerPublicKey = getPayerFromTransaction(parsedTransaction, amount);
 if (!winnerPublicKey) {
     console.warn('Could not determine the sender from the transaction.');
     return await bot.sendMessage(chatId, `â ï¸ Payout failed: Could not determine payment sender.`);
 }
+
+const winnerAddress = winnerPublicKey.toBase58();
+if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
+    return await bot.sendMessage(chatId, `â ï¸ This wallet does not match your linked wallet. Please use your original address.`);
+}
+linkedWallets[userId] = winnerAddress;
+
 
                             console.log('Extracted winner public key:', winnerPublicKey.toBase58());
                         } else {
@@ -464,7 +532,10 @@ if (!winnerPublicKey) {
             }
 
         } else {
-            await bot.sendMessage(chatId, `Sorry, your horse ${horse} didn't win this time. Better luck next race!`);
+            await bot.sendMessage(chatId, `ð *YOU LOSE THE RACE!* ð
+
+Your horse ${horse} didn't make it.
+Better luck next time!`, { parse_mode: 'Markdown' });
         }
 
         delete userRaceBets[userId];
@@ -476,3 +547,10 @@ if (!winnerPublicKey) {
     }
 });
 
+
+
+
+bot.onText(/\/help$/, async (msg) => {
+    const chatId = msg.chat.id;
+    await bot.sendMessage(chatId, `ð *How to Play*\n\n1. Start a game: /coinflip or /race\n2. Place a bet: /bet [amount] [heads/tails] or /betrace [amount] [horse]\n3. Send SOL to the bot address\n4. Confirm with /confirm or /confirmrace\n\nUse /wallet to view your linked wallet.`, { parse_mode: 'Markdown' });
+});
