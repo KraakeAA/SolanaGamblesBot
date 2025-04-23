@@ -186,7 +186,7 @@ if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
 
 
 function getPayerFromTransaction(tx, expectedAmount) {
-    if (!tx || !tx.meta || !tx.transaction) return null;
+    if (!tx || !tx.meta || !tx.transaction || !tx.transaction.message || !tx.transaction.message.header) return null;
 
     const message = tx.transaction.message;
     const keys = message.accountKeys;
@@ -197,9 +197,8 @@ function getPayerFromTransaction(tx, expectedAmount) {
         const key = keys[i];
         const balanceDiff = (preBalances[i] - postBalances[i]) / LAMPORTS_PER_SOL;
 
-        // Only consider accounts that signed the transaction
         if (message.header.numRequiredSignatures > i && balanceDiff >= expectedAmount - 0.001) {
-            return key.pubkey || key; // Return public key or fallback
+            return key.pubkey || key;
         }
     }
 
