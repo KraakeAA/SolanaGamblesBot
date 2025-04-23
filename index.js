@@ -49,9 +49,9 @@ const availableHorses = [
 const userBets = {};
 const coinFlipSessions = {};
 const linkedWallets = {}; // Telegram userId -> Wallet address mapping
-const usedTransactions = new Set(); // To store used transaction signatures
+const userPayments = {}; // Store payment details { userId: { coinflipTx: txId, raceTx: txId } }
 
-async function checkPayment(expectedSol) {
+async function checkPayment(expectedSol, userId, gameType) {
     const pubKey = new PublicKey(WALLET_ADDRESS);
     const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 5 });
 
@@ -65,13 +65,19 @@ async function checkPayment(expectedSol) {
 
         const amount = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL;
         if (Math.abs(Math.abs(amount) - expectedSol) < 0.0015) {
-            if (usedTransactions.has(sig.signature)) {
-                return { success: false, message: 'Transaction already used' }; // Add message
+            if (!userPayments[userId]) {
+                userPayments[userId] = {};
+            }
+            if (gameType === 'coinflip' && userPayments[userId].coinflipTx === sig.signature) {
+                return { success: false, message: 'Payment already used for coinflip.' };
+            }
+            if (gameType === 'race' && userPayments[userId].raceTx === sig.signature) {
+                return { success: false, message: 'Payment already used for race.' };
             }
             return { success: true, tx: sig.signature };
         }
     }
-    return { success: false, message: 'Payment not found' }; //Add message
+    return { success: false, message: 'Payment not found.' };
 }
 
 async function sendSol(connection, payerPrivateKey, recipientPublicKey, amount) {
@@ -159,6 +165,7 @@ function resetBotState(chatId) {
     delete coinFlipSessions[chatId];
     delete userBets[chatId];
     delete userRaceBets[chatId];
+    delete userPayments[chatId]; // Clear payment tracking as well
 
     // Clear any active race sessions.
     for (const raceId in raceSessions) {
@@ -166,7 +173,7 @@ function resetBotState(chatId) {
             delete raceSessions[raceId];
         }
     }
-    usedTransactions.clear();
+    // usedTransactions.clear(); // We are now tracking per user/game
     // Send the /start message to reset the bot's state in the chat
     bot.sendMessage(chatId, `*Welcome to Solana Gambles!*\n\nAvailable games:\n- /coinflip\n- /race\n\nUse /refresh to return to this menu.`, { parse_mode: "Markdown" });
     bot.sendMessage(chatId, `Bot state has been reset.`);
@@ -244,12 +251,17 @@ bot.onText(/^\/confirm$/, async (msg) => {
     try {
         await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL...`);
         await new Promise(resolve => setTimeout(resolve, 5000));
-        paymentCheckResult = await checkPayment(amount);
+        paymentCheckResult = await checkPayment(amount, userId, 'coinflip'); // Pass userId and gameType
 
         if (!paymentCheckResult.success) {
-            return await bot.sendMessage(chatId, `❌ Payment not verified! ${paymentCheckResult.message}`); // show message
+            return await bot.sendMessage(chatId, `❌ Payment not verified! ${paymentCheckResult.message}`);
         }
-        usedTransactions.add(paymentCheckResult.tx); //store
+
+        if (!userPayments[userId]) {
+            userPayments[userId] = {};
+        }
+        userPayments[userId].coinflipTx = paymentCheckResult.tx; // Store the transaction ID
+
         await bot.sendMessage(chatId, `✅ Payment verified!`);
 
         const houseEdge = getHouseEdge(amount);
@@ -348,47 +360,52 @@ bot.onText(/\/race$/, async (msg) => {
 
     raceSessions[raceId] = {
         horses,
-        usedTransactions: new Set(),
+        usedTransactions: new Set(), // Keeping this for race-specific transaction tracking within a race
+        status: 'open',
     };
 
-    let message = `New Race! Place your bets!\n\n`;
+    let raceMessage = `🐎 New Race! Place your bets!\n\n`;
     horses.forEach(horse => {
-        message += `${horse.emoji} ${horse.name} (Odds: ${horse.odds}x)\n`;
+        raceMessage += `${horse.emoji} *${horse.name}* (Odds: ${horse.odds.toFixed(1)}x)\n`;
     });
-    message += `\nTo place your bet, use:\n/betrace [amount] [horse_name]\nExample: /betrace 0.1 Blue`;
-    bot.sendMessage(chatId, message);
+
+    raceMessage += `\nTo place your bet, use:\n\`/betrace [amount] [horse_name]\`\n` +
+        `Example: \`/betrace 0.1 Blue\``;
+
+    await bot.sendMessage(chatId, raceMessage, { parse_mode: 'Markdown' });
+
+    // The setTimeout for closing betting is REMOVED
+    // We will proceed with the race after the user confirms their bet.
 });
 
-bot.onText(/\/betrace (.+)/, async (msg, match) => {
+bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    const input = match[1].split(' ');
-    if (input.length !== 2) {
-        return bot.sendMessage(chatId, "Invalid format. Use: /betrace [amount] [horse_name]");
-    }
-    const amount = parseFloat(input[0]);
-    const horseName = input[1];
+    const betAmount = parseFloat(match[1]);
+    const chosenHorseName = match[2].toLowerCase();
 
-    if (isNaN(amount) || amount <= 0) {
-        return bot.sendMessage(chatId, "Invalid amount. Amount must be positive.");
+    const raceId = Object.keys(raceSessions).reverse().find(id => raceSessions[id].status === 'open');
+    if (!raceId) {
+        return bot.sendMessage(chatId, `⚠️ No race is currently accepting bets.`);
     }
 
-    const currentRaceId = Object.keys(raceSessions).find(raceId => !userRaceBets[userId] || userRaceBets[userId].raceId !== parseInt(raceId));
-    if (!currentRaceId) {
-        return bot.sendMessage(chatId, "No active race. Please start a race with /race first.");
-    }
-    const race = raceSessions[currentRaceId];
-    const selectedHorse = race.horses.find(h => h.name.toLowerCase() === horseName.toLowerCase());
-    if (!selectedHorse) {
-        return bot.sendMessage(chatId, "Invalid horse name. Please choose from the available horses.");
+    if (betAmount < RACE_MIN_BET || betAmount > RACE_MAX_BET) {
+        return bot.sendMessage(chatId, `🚫 Bet must be between ${RACE_MIN_BET} - ${RACE_MAX_BET} SOL`);
     }
 
-    userRaceBets[userId] = {
-        raceId: parseInt(currentRaceId),
-        amount,
-        horse: selectedHorse.name,
-    };
-    bot.sendMessage(chatId, `Bet placed: ${amount} SOL on ${selectedHorse.emoji} ${selectedHorse.name} (Odds: ${selectedHorse.odds}x).\nSend the amount to:\n\`${WALLET_ADDRESS}\`\nThen type /confirmrace to verify payment and start the race!`, { parse_mode: 'Markdown' });
+    const race = raceSessions[raceId];
+    const horse = race.horses.find(h => h.name.toLowerCase() === chosenHorseName);
+
+    if (!horse) {
+        return bot.sendMessage(chatId, `⚠️ Invalid horse name. Options:\n` +
+            race.horses.map(h => `${h.emoji} ${h.name}`).join('\n'));
+    }
+
+    userRaceBets[userId] = { raceId, amount: betAmount, horse: horse.name };
+
+    await bot.sendMessage(chatId, `✅ Bet placed: ${betAmount} SOL on ${horse.emoji} *${horse.name}* (Odds: ${horse.odds.toFixed(1)}x).\nSend the amount to:\n\`${WALLET_ADDRESS}\`\nThen type /confirmrace to verify payment and start the race!`,
+        { parse_mode: 'Markdown' }
+    );
 });
 
 bot.onText(/^\/confirmrace$/, async (msg) => {
@@ -405,17 +422,17 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
 
     try {
         await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL for Race ${raceId}...`);
-        const paymentCheckResult = await checkPayment(amount);
+        const paymentCheckResult = await checkPayment(amount, userId, 'race');
 
         if (!paymentCheckResult.success) {
             return bot.sendMessage(chatId, `❌ Payment not verified for Race ${raceId}! ${paymentCheckResult.message}`);
         }
 
-        if (race.usedTransactions.has(paymentCheckResult.tx)) {
-            return bot.sendMessage(chatId, `❌ Payment for this race has already been used.`);
+        if (!userPayments[userId]) {
+            userPayments[userId] = {};
         }
+        userPayments[userId].raceTx = paymentCheckResult.tx; // Store the transaction ID for the race
 
-        race.usedTransactions.add(paymentCheckResult.tx);
         await bot.sendMessage(chatId, `✅ Payment verified for Race ${raceId}! The race is on! 🐎`, { parse_mode: 'Markdown' });
 
         const horsesInRace = race.horses;
