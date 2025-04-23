@@ -232,7 +232,7 @@ function resetBotState(chatId) {
     // usedTransactions.clear(); // We are now tracking per user/game
     // Send the /start message to reset the bot's state in the chat
     bot.sendMessage(chatId, `*Welcome to Solana Gambles!*\n\nAvailable games:\n- /coinflip\n- /race\n\nUse /refresh to return to this menu.`, { parse_mode: "Markdown" });
-    bot.sendMessage(chatId, `Bot state has been reset.`);
+    bot.sendMessage(chatId, `â»ï¸ Bot state has been reset.`);
 }
 
 
@@ -532,11 +532,11 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
             }
         }
 
-        await bot.sendMessage(chatId, `And they're off! The horses are neck and neck...`, { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, `ð And they're off! The horses are neck and neck...`), { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 1500));
         await bot.sendMessage(chatId, `${horsesInRace[Math.floor(Math.random() * horsesInRace.length)].emoji} ${horsesInRace[Math.floor(Math.random() * horsesInRace.length)].name} surges forward!`, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 2000));
-        await bot.sendMessage(chatId, `It's a tight finish!`, { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, `ð¥ It's a tight finish!`), { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 1000));
         const midRaceDrama = [
             "Yellow surges ahead!",
@@ -548,7 +548,7 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
         const randomDrama = midRaceDrama[Math.floor(Math.random() * midRaceDrama.length)];
         await bot.sendMessage(chatId, randomDrama, { parse_mode: "Markdown" });
         await new Promise(resolve => setTimeout(resolve, 1200));
-        await bot.sendMessage(chatId, `ð **And the winner is... ${winningHorse.emoji} *${winningHorse.name}*!** ð`, { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, `ð **And the winner is... ${winningHorse.emoji} ${winningHorse.name}!** ð`), { parse_mode: 'Markdown' });
 
         if (horse === winningHorse.name) {
             await bot.sendAnimation(chatId, "https://media.giphy.com/media/3ohzdIuqJoo8QdKlnW/giphy.gif");
