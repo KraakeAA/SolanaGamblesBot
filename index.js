@@ -119,12 +119,48 @@ bot.onText(/\/start$/, async (msg) => {
         parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
-                [{ text: '🪙 Start Coin Flip (Button)', callback_data: 'start_coinflip' }],
-                [{ text: '🏁 Start Race (Button)', callback_data: 'start_race' }]
+                [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
+                [{ text: '🏁 Start Race', callback_data: 'start_race' }]
             ]
         }
     });
 });
+
+bot.on('callback_query', async (callbackQuery) => {
+    const chatId = callbackQuery.message.chat.id;
+    const data = callbackQuery.data;
+
+    if (data === 'start_coinflip') {
+        coinFlipSessions[chatId] = true;
+        await bot.sendMessage(
+            chatId,
+            `🪙 You've started a coin flip game! Please choose an amount and heads/tails:\n\n` +
+            `/bet 0.01 heads\n/bet 0.05 tails\n\nMin: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`,
+            { parse_mode: 'Markdown' }
+        );
+    } else if (data === 'start_race') {
+        const raceId = nextRaceId++;
+        raceSessions[raceId] = {
+            horses: availableHorses,
+            bets: {},
+            status: 'open',
+            usedTransactions: new Set()
+        };
+
+        let raceMessage = `🏁 **New Race! Place your bets!** 🏁\n\n`;
+        raceSessions[raceId].horses.forEach(horse => {
+            raceMessage += `${horse.emoji} ${horse.name} (Odds: ${horse.odds.toFixed(1)}x)\n`;
+        });
+
+        raceMessage += `\nTo place your bet, use:\n\`/betrace [amount] [horse_name]\`\n` +
+            `Example: \`/betrace 0.1 Blue\``;
+
+        await bot.sendMessage(chatId, raceMessage, { parse_mode: 'Markdown' });
+    }
+    // Acknowledge the callback query
+    await bot.answerCallbackQuery(callbackQuery);
+});
+
 
 bot.onText(/\/coinflip$/, (msg) => {
     const userId = msg.from.id;
@@ -212,7 +248,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
             if (paymentCheckResult && paymentCheckResult.tx) {
                 try {
                     const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
-                    if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.accountKeys.length > 0) {
+                    if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.length > 0) {
                         winnerPublicKey = parsedTransaction.transaction.message.accountKeys[0].pubkey;
                         console.log('Extracted winner public key:', winnerPublicKey.toBase58());
                     } else {
@@ -372,7 +408,7 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
                 if (paymentCheckResult && paymentCheckResult.tx) {
                     try {
                         const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
-                        if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.accountKeys.length > 0) {
+                        if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.length > 0) {
                             winnerPublicKey = parsedTransaction.transaction.message.accountKeys[0].pubkey;
                             console.log('Extracted winner public key:', winnerPublicKey.toBase58());
                         } else {
