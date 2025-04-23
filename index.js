@@ -548,7 +548,7 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
         const randomDrama = midRaceDrama[Math.floor(Math.random() * midRaceDrama.length)];
         await bot.sendMessage(chatId, randomDrama, { parse_mode: "Markdown" });
         await new Promise(resolve => setTimeout(resolve, 1200));
-        await bot.sendMessage(chatId, `ð **And the winner is... ${winningHorse.emoji} ${winningHorse.name}!** ð`), { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, `ð **And the winner is... ${winningHorse.emoji} ${winningHorse.name}!** ð`, { parse_mode: 'Markdown' });
 
         if (horse === winningHorse.name) {
             await bot.sendAnimation(chatId, "https://media.giphy.com/media/3ohzdIuqJoo8QdKlnW/giphy.gif");
