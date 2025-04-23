@@ -16,6 +16,20 @@ const MAX_BET = 1.0;
 const LOG_DIR = './data';
 const LOG_PATH = './data/bets.json';
 
+// Race game variables
+const raceSessions = {}; // To store information about ongoing races (race ID -> { horses, odds, bets, status })
+const userRaceBets = {}; // To store user's current race bets (userId -> { raceId, amount, horse })
+let nextRaceId = 1; // Simple counter for unique race IDs
+const RACE_MIN_BET = 0.01;
+const RACE_MAX_BET = 1.0;
+const availableHorses = [
+    { name: 'Red', emoji: '🐎', odds: 2.5 },
+    { name: 'Blue', emoji: '💙', odds: 3.0 },
+    { name: 'Green', emoji: '💚', odds: 5.0 },
+    { name: 'Yellow', emoji: '💛', odds: 2.0 },
+    { name: 'Purple', emoji: '💜', odds: 4.0 },
+];
+
 // Store user bet information (userId: { amount, choice })
 const userBets = {};
 const coinFlipSessions = {}; // Track if a user has initiated coin flip
@@ -70,12 +84,12 @@ bot.onText(/\/start$/, async (msg) => {
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif?cid=6c09b952c8nzwcr45gvyqv7bfp80blroxd4wt1bdtrsixwok&ep=v1_internal_gif_by_id&rid=giphy.gif&ct=g'; // Your GIF URL
 
     await bot.sendAnimation(chatId, gifUrl, {
-        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Click to start: */coinflip*\n- /race (coming soon!)\n\nType /refresh to see this menu again.`,
+        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Click to start: */coinflip*\n- /race\n\nType /refresh to see this menu again.`,
         parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
                 [{ text: '🪙 Start Coin Flip (Button)', callback_data: 'start_coinflip' }],
-                [{ text: '🏁 Start Race (Button - Coming Soon!)', callback_data: 'start_race' }]
+                [{ text: '🏁 Start Race (Button)', callback_data: 'start_race' }]
             ]
         }
     });
@@ -100,12 +114,12 @@ bot.onText(/\/refresh$/, async (msg) => {
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif?cid=6c09b952c8nzwcr45gvyqv7bfp80blroxd4wt1bdtrsixwok&ep=v1_internal_gif_by_id&rid=giphy.gif&ct=g'; // Your GIF URL
 
     await bot.sendAnimation(chatId, gifUrl, {
-        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Click to start: */coinflip*\n- /race (coming soon!)\n\nType /refresh to see this menu again.`,
+        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Click to start: */coinflip*\n- /race\n\nType /refresh to see this menu again.`,
         parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
                 [{ text: '🪙 Start Coin Flip (Button)', callback_data: 'start_coinflip' }],
-                [{ text: '🏁 Start Race (Button - Coming Soon!)', callback_data: 'start_race' }]
+                [{ text: '🏁 Start Race (Button)', callback_data: 'start_race' }]
             ]
         }
     });
@@ -124,7 +138,7 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
   const userChoice = match[2].toLowerCase();
 
   if (betAmount < MIN_BET || betAmount > MAX_BET) {
-    return bot.sendMessage(chatId, `❌ Bet must be between ${MIN_BET}-${MAX_BET} SOL`);
+    return bot.sendMessage(chatId, `❌ Bet must be between <span class="math-inline">\{MIN\_BET\}\-</span>{MAX_BET} SOL`);
   }
 
   // Store the bet information using the user's ID
@@ -169,7 +183,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
     const win = result === choice;
     const payout = win ? amount : 0; // 1:1 payout on win
 
-    console.log(`DEBUG: Before winning message - win=${win}, amount=${amount}, payout=${payout}`); // Added debug log
+    console.log(`DEBUG: Before winning message - win=<span class="math-inline">\{win\}, amount\=</span>{amount}, payout=${payout}`); // Added debug log
 
     // Re-enable logging
     const log = JSON.parse(fs.readFileSync(LOG_PATH));
@@ -203,7 +217,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
     if (win) {
       try {
         console.log('Inside payout try block');
-        console.log(`DEBUG Payout: win=${win}, amount=${amount}`); // Added debug
+        console.log(`DEBUG Payout: win=<span class="math-inline">\{win\}, amount\=</span>{amount}`); // Added debug
 
         const payerPrivateKey = process.env.BOT_PRIVATE_KEY;
         if (!payerPrivateKey) {
@@ -274,33 +288,44 @@ bot.onText(/^\/confirm$/, async (msg) => {
   }
 });
 
-// Handle the button clicks
-bot.on('callback_query', async (query) => {
-    const chatId = query.message.chat.id;
-    const userId = query.from.id;
+// Race game command handlers
+bot.onText(/\/race$/, async (msg) => {
+    const chatId = msg.chat.id;
+    const raceId = nextRaceId++;
+    raceSessions[raceId] = {
+        horses: availableHorses,
+        bets: {}, // userId -> { amount, horse }
+        status: 'open', // 'open', 'closed', 'running', 'finished'
+    };
 
-    if (query.data === 'start_coinflip') {
-        coinFlipSessions[userId] = true; // Mark the user as in a coin flip session
-        await bot.sendMessage(
-            chatId,
-            `🪙 You've started a coin flip game! Please choose an amount and heads/tails:\n\n` +
-            `/bet 0.01 heads\n` +
-            `/bet 0.05 tails\n\n` +
-            `Min: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`,
-            { parse_mode: 'Markdown' }
-        );
+    let raceMessage = `🏁 **New Race! Place your bets!** 🏁\n\n`;
+    raceSessions[raceId].horses.forEach((horse, index) => {
+        raceMessage += `${horse.emoji} ${horse.name} (Odds: ${horse.odds}x)\n`;
+    });
+    raceMessage += `\nTo place your bet, use the command:\n`/betrace [amount] [horse_name]\`\n\n` +
+                   `Example: \`/betrace 0.1 Blue\` to bet 0.1 SOL on Blue.\n` +
+                   `Bets will be open for a short time.`;
 
-        // Acknowledge the callback
-        bot.answerCallbackQuery(query.id);
-    } else if (query.data === 'start_race') {
-        await bot.sendMessage(chatId, `🏁 The race game is coming soon! Stay tuned for updates!`);
-        // You would add logic here to initiate the race game when it's implemented
-        bot.answerCallbackQuery(query.id);
-    }
+    await bot.sendMessage(chatId, raceMessage, { parse_mode: 'Markdown' });
+
+    // Optionally, set a timer to close betting after a certain period
+    setTimeout(() => {
+        if (raceSessions[raceId] && raceSessions[raceId].status === 'open') {
+            raceSessions[raceId].status = 'closed';
+            bot.sendMessage(chatId, `Betting for Race ${raceId} is now closed! The race will begin shortly...`);
+            runRace(chatId, raceId);
+        }
+    }, 60 * 1000); // Example: Close betting after 60 seconds
 });
 
-// We will add /start race and /betrace logic here later
+bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const betAmount = parseFloat(match[1]);
+    const chosenHorseName = match[2];
 
-bot.onText(/\/test/, (msg) => {
-  bot.sendMessage(msg.chat.id, 'Test successful!');
-});
+    // Find the active race (for simplicity, we'll assume the most recently started race is active and open for betting)
+    const activeRaceId = Object.keys(raceSessions).pop();
+
+    if (!activeRaceId || raceSessions[activeRaceId].status !== 'open') {
+        return bot.sendMessage(chatId, `⚠️
