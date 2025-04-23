@@ -79,6 +79,7 @@ async function checkPayment(expectedSol, userId, gameType, targetWalletAddress) 
             // Identify sender of the transaction
             const payer = getPayerFromTransaction(tx, expectedSol);
             if (!payer) {
+                console.warn("checkPayment: Unable to determine payer from transaction.");
                 continue;
             }
 
