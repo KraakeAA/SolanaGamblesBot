@@ -321,4 +321,7 @@ bot.onText(/\/race$/, async (msg) => {
 bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    const betAmount =
+    const betAmount = parseFloat(match[1]);
+    const chosenHorseName = match[2];
+
+    // Find the active
