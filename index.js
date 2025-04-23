@@ -41,20 +41,6 @@ const userRaceBets = {};
 let nextRaceId = 1;
 const RACE_MIN_BET = 0.01;
 const RACE_MAX_BET = 1.0;
-const availableHorses = [
-    { name: 'Yellow', emoji: 'ð', odds: 1.1, winProbability: 0.25 },
-    { name: 'Orange', emoji: 'ð§¡', odds: 2.0, winProbability: 0.20 },
-    { name: 'Blue', emoji: 'ð', odds: 3.0, winProbability: 0.15 },
-    { name: 'Cyan', emoji: 'ð§', odds: 4.0, winProbability: 0.12 },
-    { name: 'White', emoji: 'ð¤', odds: 5.0, winProbability: 0.09 },
-    { name: 'Red', emoji: 'â¤ï¸', odds: 6.0, winProbability: 0.07 },
-    { name: 'Black', emoji: 'ð¤', odds: 7.0, winProbability: 0.05 },
-    { name: 'Pink', emoji: 'ð©·', odds: 8.0, winProbability: 0.03 },
-    { name: 'Purple', emoji: 'ð', odds: 9.0, winProbability: 0.02 },
-    { name: 'Green', emoji: 'ð', odds: 10.0, winProbability: 0.01 },
-    { name: 'Silver', emoji: 'ð©¶', odds: 15.0, winProbability: 0.01 },
-];
-
 const userBets = {};
 const coinFlipSessions = {};
 const linkedWallets = {}; // Telegram userId -> Wallet address mapping
