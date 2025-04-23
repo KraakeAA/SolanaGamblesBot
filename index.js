@@ -21,7 +21,8 @@ app.listen(PORT, () => console.log(`Healthcheck listening on ${PORT}`));
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 const connection = new Connection('https://solana-mainnet.g.alchemy.com/v2/RQg--XCO8P6g4VdM845rlCUs5r3CSEbE', 'confirmed');
-const WALLET_ADDRESS = '9HL7W4XZJDX6br3ojjU6BLHp7oZVP3nCDKxQ21TNanQf';
+const MAIN_WALLET_ADDRESS = '9HL7W4XZJDX6br3ojjU6BLHp7oZVP3nCDKxQ21TNanQf';
+const RACE_WALLET_ADDRESS = 'ESwYNvNieSniHZKAw2MezWi7niYmtZbjtKUR8KyaySiv'; // New race wallet
 const MIN_BET = 0.01;
 const MAX_BET = 1.0;
 const LOG_DIR = './data';
@@ -48,11 +49,11 @@ const availableHorses = [
 
 const userBets = {};
 const coinFlipSessions = {};
-const linkedWallets = {};
-const userPayments = {};
+const linkedWallets = {}; // Telegram userId -> Wallet address mapping
+const userPayments = {}; // Store payment details { userId: { coinflipTx: txId, raceTx: txId } }
 
-async function checkPayment(expectedSol, userId, gameType) {
-    const pubKey = new PublicKey(WALLET_ADDRESS);
+async function checkPayment(expectedSol, userId, gameType, targetWalletAddress) {
+    const pubKey = new PublicKey(targetWalletAddress);
     const signatures = await connection.getSignaturesForAddress(pubKey, { limit: 5 });
 
     for (let sig of signatures) {
@@ -65,24 +66,16 @@ async function checkPayment(expectedSol, userId, gameType) {
 
         const amount = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL;
         if (Math.abs(Math.abs(amount) - expectedSol) < 0.0015) {
-            if (userPayments[userId] && userPayments[userId].tx === sig.signature) {
-                return { 
-                    success: false, 
-                    message: 'This payment has already been used.'
-                };
-            }
-            
             if (!userPayments[userId]) {
                 userPayments[userId] = {};
             }
-            userPayments[userId].tx = sig.signature;
-            userPayments[userId].gameType = gameType;
-            
-            return { 
-                success: true, 
-                tx: sig.signature,
-                gameType: gameType
-            };
+            if (gameType === 'coinflip' && userPayments[userId].coinflipTx === sig.signature) {
+                return { success: false, message: 'Payment already used for coinflip.' };
+            }
+            if (gameType === 'race' && userPayments[userId].raceTx === sig.signature) {
+                return { success: false, message: 'Payment already used for race.' };
+            }
+            return { success: true, tx: sig.signature };
         }
     }
     return { success: false, message: 'Payment not found.' };
@@ -125,6 +118,7 @@ const getHouseEdge = (amount) => {
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
 if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
 
+
 function getPayerFromTransaction(tx, expectedAmount) {
     if (!tx || !tx.meta || !tx.transaction) return null;
 
@@ -142,6 +136,7 @@ function getPayerFromTransaction(tx, expectedAmount) {
     return null;
 }
 
+
 bot.onText(/\/start$/, async (msg) => {
     const chatId = msg.chat.id;
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif';
@@ -152,30 +147,39 @@ bot.onText(/\/start$/, async (msg) => {
     });
 });
 
+
 bot.onText(/\/reset$/, async (msg) => {
     const chatId = msg.chat.id;
+
+    // Check if it's a group chat
     if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
+        // Send a message indicating that the command is disabled in group chats.
         await bot.sendMessage(chatId, `⚠️ The /reset command is disabled in group chats.`);
     } else {
-        resetBotState(chatId);
+        // If it's a private chat, proceed with reset
+        resetBotState(chatId); // Extract reset logic into a function
     }
 });
 
 function resetBotState(chatId) {
+    // Clear user-specific data
     delete coinFlipSessions[chatId];
     delete userBets[chatId];
     delete userRaceBets[chatId];
-    delete userPayments[chatId];
+    delete userPayments[chatId]; // Clear payment tracking as well
 
+    // Clear any active race sessions.
     for (const raceId in raceSessions) {
         if (raceSessions[raceId].status === 'open') {
             delete raceSessions[raceId];
         }
     }
-
+    // usedTransactions.clear(); // We are now tracking per user/game
+    // Send the /start message to reset the bot's state in the chat
     bot.sendMessage(chatId, `*Welcome to Solana Gambles!*\n\nAvailable games:\n- /coinflip\n- /race\n\nUse /refresh to return to this menu.`, { parse_mode: "Markdown" });
     bot.sendMessage(chatId, `Bot state has been reset.`);
 }
+
 
 bot.onText(/\/coinflip$/, (msg) => {
     const userId = msg.from.id;
@@ -188,6 +192,7 @@ bot.onText(/\/coinflip$/, (msg) => {
     );
 });
 
+
 bot.onText(/\/wallet$/, async (msg) => {
     const userId = msg.from.id;
     const wallet = linkedWallets[userId];
@@ -197,6 +202,7 @@ bot.onText(/\/wallet$/, async (msg) => {
         await bot.sendMessage(msg.chat.id, `⚠️ No wallet is linked to your account yet. Place a verified bet to link one.`);
     }
 });
+
 
 bot.onText(/\/refresh$/, async (msg) => {
     const chatId = msg.chat.id;
@@ -226,7 +232,7 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
 
     await bot.sendMessage(chatId,
         `💰 *To place your bet:*\nSend *exactly ${betAmount} SOL* to:\n` +
-        `\`${WALLET_ADDRESS}\`\nOnce sent, type /confirm to finalize your bet.`,
+        `\`${MAIN_WALLET_ADDRESS}\`\nOnce sent, type /confirm to finalize your bet.`,
         { parse_mode: 'Markdown' }
     );
 });
@@ -246,15 +252,16 @@ bot.onText(/^\/confirm$/, async (msg) => {
     try {
         await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL...`);
         await new Promise(resolve => setTimeout(resolve, 5000));
-        paymentCheckResult = await checkPayment(amount, userId, 'coinflip');
+        paymentCheckResult = await checkPayment(amount, userId, 'coinflip', MAIN_WALLET_ADDRESS); // Use MAIN_WALLET_ADDRESS
 
         if (!paymentCheckResult.success) {
             return await bot.sendMessage(chatId, `❌ Payment not verified! ${paymentCheckResult.message}`);
         }
 
-        if (paymentCheckResult.gameType !== 'coinflip') {
-            return await bot.sendMessage(chatId, `❌ This payment was made for a different game type.`);
+        if (!userPayments[userId]) {
+            userPayments[userId] = {};
         }
+        userPayments[userId].coinflipTx = paymentCheckResult.tx; // Store the transaction ID
 
         await bot.sendMessage(chatId, `✅ Payment verified!`);
 
@@ -266,6 +273,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
         const displayName = msg.from.username ? `@${msg.from.username}` : `<@${userId}>`;
 
         if (win) {
+            // --- PAYOUT LOGIC USING sendSol FUNCTION ---
             const payerPrivateKey = process.env.BOT_PRIVATE_KEY;
             if (!payerPrivateKey) {
                 console.error('BOT_PRIVATE_KEY environment variable not set!');
@@ -282,13 +290,11 @@ bot.onText(/^\/confirm$/, async (msg) => {
                             console.warn('Could not determine the sender from the transaction.');
                             return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine payment sender.`);
                         }
-
                         const winnerAddress = winnerPublicKey.toBase58();
                         if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
                             return await bot.sendMessage(chatId, `⚠️ This wallet does not match your linked wallet. Please use your original address.`);
                         }
                         linkedWallets[userId] = winnerAddress;
-
                         console.log('Extracted winner public key:', winnerPublicKey.toBase58());
                     } else {
                         console.warn('Could not parse transaction to determine sender.');
@@ -315,17 +321,18 @@ bot.onText(/^\/confirm$/, async (msg) => {
             } else {
                 await bot.sendMessage(chatId, `🎉 Congratulations, ${displayName}! You won ${payout.toFixed(4)} SOL!\nResult: ${result}\n⚠️ Payout failed: ${sendResult.error}`);
             }
+            // --- END PAYOUT LOGIC ---
         } else {
             await bot.sendAnimation(chatId, "https://media.giphy.com/media/l2JHPBFzSF1zG0y92/giphy.gif");
-            await bot.sendMessage(chatId, `😞 *YOU LOSE!*\n\n${displayName}, you guessed *${choice}* but the coin landed *${result}*.`,
+            await bot.sendMessage(chatId, `😞 *YOU LOSE!*\n\n${displayName}, you guessed *<span class="math-inline">\{choice\}\* but the coin landed \*</span>{result}*.`,
                 { parse_mode: "Markdown" });
             await bot.sendMessage(chatId, `😔 Sorry, ${displayName}! You lost.\nResult: ${result}`);
         }
 
         delete userBets[userId];
         delete coinFlipSessions[userId];
-        if (userPayments[userId] && userPayments[userId].tx === paymentCheckResult.tx) {
-            delete userPayments[userId].tx;
+        if (userPayments[userId] && userPayments[userId].coinflipTx === paymentCheckResult.tx) {
+            delete userPayments[userId].coinflipTx; // Clear the coinflip transaction after confirmation
         }
 
     } catch (error) {
@@ -353,7 +360,7 @@ bot.onText(/\/race$/, async (msg) => {
 
     raceSessions[raceId] = {
         horses,
-        usedTransactions: new Set(),
+        usedTransactions: new Set(), // Keeping this for race-specific transaction tracking within a race
         status: 'open',
     };
 
@@ -366,6 +373,9 @@ bot.onText(/\/race$/, async (msg) => {
         `Example: \`/betrace 0.1 Blue\``;
 
     await bot.sendMessage(chatId, raceMessage, { parse_mode: 'Markdown' });
+
+    // The setTimeout for closing betting is REMOVED
+    // We will proceed with the race after the user confirms their bet.
 });
 
 bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
@@ -393,7 +403,7 @@ bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
 
     userRaceBets[userId] = { raceId, amount: betAmount, horse: horse.name };
 
-    await bot.sendMessage(chatId, `✅ Bet placed: ${betAmount} SOL on ${horse.emoji} *${horse.name}* (Odds: ${horse.odds.toFixed(1)}x).\nSend the amount to:\n\`${WALLET_ADDRESS}\`\nThen type /confirmrace to verify payment and start the race!`,
+    await bot.sendMessage(chatId, `✅ Bet placed: ${betAmount} SOL on ${horse.emoji} *${horse.name}* (Odds: ${horse.odds.toFixed(1)}x).\nSend the amount to:\n\`${RACE_WALLET_ADDRESS}\`\nThen type /confirmrace to verify payment and start the race!`,
         { parse_mode: 'Markdown' }
     );
 });
@@ -412,15 +422,16 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
 
     try {
         await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL for Race ${raceId}...`);
-        const paymentCheckResult = await checkPayment(amount, userId, 'race');
+        const paymentCheckResult = await checkPayment(amount, userId, 'race', RACE_WALLET_ADDRESS); // Use RACE_WALLET_ADDRESS
 
         if (!paymentCheckResult.success) {
             return bot.sendMessage(chatId, `❌ Payment not verified for Race ${raceId}! ${paymentCheckResult.message}`);
         }
 
-        if (paymentCheckResult.gameType !== 'race') {
-            return await bot.sendMessage(chatId, `❌ This payment was made for a different game type.`);
+        if (!userPayments[userId]) {
+            userPayments[userId] = {};
         }
+        userPayments[userId].raceTx = paymentCheckResult.tx; // Store the transaction ID for the race
 
         await bot.sendMessage(chatId, `✅ Payment verified for Race ${raceId}! The race is on! 🐎`, { parse_mode: 'Markdown' });
 
@@ -447,7 +458,7 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
         const midRaceDrama = [
             "Yellow surges ahead!",
             "Blue stumbles on the turn!",
-            "It's neck and neck between Red and Black!",
+            "It’s neck and neck between Red and Black!",
             "Commentator: Unbelievable move from Orange!",
             "The crowd roars as the final stretch approaches!"
         ];
@@ -487,13 +498,11 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
                                 console.warn('Could not determine the sender from the transaction.');
                                 return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine payment sender.`);
                             }
-
                             const winnerAddress = winnerPublicKey.toBase58();
                             if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
                                 return await bot.sendMessage(chatId, `⚠️ This wallet does not match your linked wallet. Please use your original address.`);
                             }
                             linkedWallets[userId] = winnerAddress;
-
                             console.log('Extracted winner public key:', winnerPublicKey.toBase58());
                         } else {
                             console.warn('Could not parse transaction to determine sender.');
@@ -528,14 +537,14 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
 
         } else {
             await bot.sendAnimation(chatId, "https://media.giphy.com/media/26BRBupa6nRXMGBP2/giphy.gif");
-            await bot.sendMessage(chatId, `😞 *Your horse lost!*\n\n${horse} didn't cross the line first. Better luck next time.`, { parse_mode: "Markdown" });
+            await bot.sendMessage(chatId, `😞 *Your horse lost!*\n\n${horse} didn’t cross the line first. Better luck next time.`, { parse_mode: "Markdown" });
             await bot.sendMessage(chatId, `Sorry, your horse ${horse} didn't win this time. Better luck next race!`);
         }
 
         delete userRaceBets[userId];
         delete raceSessions[raceId];
-        if (userPayments[userId] && userPayments[userId].tx === paymentCheckResult.tx) {
-            delete userPayments[userId].tx;
+        if (userPayments[userId] && userPayments[userId].raceTx === paymentCheckResult.tx) {
+            delete userPayments[userId].raceTx; // Clear the race transaction after confirmation
         }
 
     } catch (error) {
