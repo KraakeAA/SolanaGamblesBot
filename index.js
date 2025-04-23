@@ -165,7 +165,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
 
         if (win) {
             await bot.sendMessage(chatId, `🎉 Congratulations, ${displayName}! You won ${payout.toFixed(4)} SOL!\nResult: ${result}`);
-            // Implement payout logic here (similar to previous versions)
+            // Implement payout transaction here
         } else {
             await bot.sendMessage(chatId, `❌ Sorry, ${displayName}! You lost.\nResult: ${result}`);
         }
@@ -183,8 +183,8 @@ bot.onText(/\/race$/, async (msg) => {
     const raceId = nextRaceId++;
     raceSessions[raceId] = {
         horses: availableHorses,
-        bets: {},
-        status: 'open',
+        bets: {}, // We might not even need this for a solo game
+        status: 'open', // Could potentially go straight to 'betting' or similar
     };
 
     let raceMessage = `🏁 **New Race! Place your bets!** 🏁\n\n`;
@@ -197,13 +197,8 @@ bot.onText(/\/race$/, async (msg) => {
 
     await bot.sendMessage(chatId, raceMessage, { parse_mode: 'Markdown' });
 
-    setTimeout(() => {
-        if (raceSessions[raceId] && raceSessions[raceId].status === 'open') {
-            raceSessions[raceId].status = 'closed';
-            bot.sendMessage(chatId, `Betting for Race ${raceId} is now closed! The race will begin shortly...`);
-            // Implement runRace(chatId, raceId) here
-        }
-    }, 60000);
+    // The setTimeout for closing betting is REMOVED
+    // We will proceed with the race after the user confirms their bet.
 });
 
 bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
@@ -229,13 +224,12 @@ bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
             race.horses.map(h => `${h.emoji} ${h.name}`).join('\n'));
     }
 
-    race.bets[userId] = { amount: betAmount, horse: horse.name };
     userRaceBets[userId] = { raceId, amount: betAmount, horse: horse.name };
 
-    await bot.sendMessage(chatId, `✅ Bet placed: ${betAmount} SOL on ${horse.emoji} *${horse.name}*.\nSend the amount to:\n\`${WALLET_ADDRESS}\`\nThen type /confirmrace to verify payment.`,
+    await bot.sendMessage(chatId, `✅ Bet placed: ${betAmount} SOL on ${horse.emoji} *${horse.name}*.\nSend the amount to:\n\`${WALLET_ADDRESS}\`\nThen type /confirmrace to verify payment and start the race!`,
         { parse_mode: 'Markdown' }
     );
-}); // <-- THIS CLOSING BRACE IS NOW PRESENT
+});
 
 bot.onText(/^\/confirmrace$/, async (msg) => {
     const chatId = msg.chat.id;
@@ -256,35 +250,42 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
             return bot.sendMessage(chatId, `❌ Payment not verified for Race ${raceId}!`);
         }
 
-        await bot.sendMessage(chatId, `✅ Payment verified for Race ${raceId}!`);
+        await bot.sendMessage(chatId, `✅ Payment verified for Race ${raceId}! The race is on! 🐎💨`);
 
-        // --- IMPLEMENT RACE OUTCOME LOGIC HERE ---
-        // 1. Determine the winning horse for raceId.
-        // 2. Check if the user's chosen horse (from raceBetInfo) is the winner.
-        // 3. Calculate the payout based on the odds of the chosen horse.
-        // 4. Send the payout to the user if they won.
-        // 5. Log the race result and bets.
+        const race = raceSessions[raceId];
+        const horsesInRace = [...race.horses]; // Create a copy
 
-        const winningHorse = "Blue"; // Placeholder for actual race outcome logic
-        if (horse === winningHorse) {
-            const winningHorseData = availableHorses.find(h => h.name === horse);
-            const payout = amount * winningHorseData.odds;
-            await bot.sendMessage(chatId, `🎉 Congratulations! ${horse} won Race ${raceId}! You won ${payout.toFixed(4)} SOL.`);
-            // Implement payout transaction here
-        } else {
-            await bot.sendMessage(chatId, `Sorry! ${horse} did not win Race ${raceId}. The winner was ${winningHorse}.`);
+        // Simulate the race and generate commentary
+        let commentary = "";
+        const raceLength = 5; // Number of "stages"
+
+        for (let i = 0; i < raceLength; i++) {
+            horsesInRace.sort(() => Math.random() - 0.5);
+            const leader = horsesInRace[0];
+            commentary += `\n**Stage ${i + 1}:** ${leader.emoji} ${leader.name} is in the lead!`;
+            if (i > 0 && horsesInRace[1]) {
+                commentary += ` ${horsesInRace[1].emoji} ${horsesInRace[1].name} is close behind!`;
+            }
         }
 
-        delete userRaceBets[userId]; // Clear the bet info after processing
-        delete raceSessions[raceId]; // Optionally clear the race session after it's finished
+        const winningHorse = horsesInRace[0];
+        commentary += `\n\n🏆 **And the winner is... ${winningHorse.emoji} ${winningHorse.name}!** 🏆`;
+        await bot.sendMessage(chatId, commentary, { parse_mode: 'Markdown' });
+
+        if (horse === winningHorse.name) {
+            const winningHorseData = race.horses.find(h => h.name === horse);
+            const payout = amount * winningHorseData.odds;
+            await bot.sendMessage(chatId, `🎉 You backed the winner! You won ${payout.toFixed(4)} SOL.`);
+            // Implement payout transaction here
+        } else {
+            await bot.sendMessage(chatId, `Sorry, your horse ${horse} didn't win this time.`);
+        }
+
+        delete userRaceBets[userId];
+        delete raceSessions[raceId];
 
     } catch (error) {
         console.error('Error in /confirmrace:', error);
-        await bot.sendMessage(chatId, `⚠️ An error occurred while confirming your race bet.`);
+        await bot.sendMessage(chatId, `⚠️ An error occurred while processing the race.`);
     }
 });
-
-// You'll need to implement the runRace function if you want the bot to automatically trigger the race.
-// async function runRace(chatId, raceId) {
-//     // ... logic to simulate the race and determine the winner ...
-// }
