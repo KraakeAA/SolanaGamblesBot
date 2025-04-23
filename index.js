@@ -70,8 +70,8 @@ bot.onText(/\/start$/, async (msg) => {
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif?cid=6c09b952c8nzwcr45gvyqv7bfp80blroxd4wt1bdtrsixwok&ep=v1_internal_gif_by_id&rid=giphy.gif&ct=g'; // Your GIF URL
 
     await bot.sendAnimation(chatId, gifUrl, {
-        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Click to start: */start coinflip*\n- /start race (coming soon!)\n\nType /refresh to see this menu again.`,
-        parse_mode: 'Markdown', // Enable Markdown parsing
+        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Click to start: */coinflip*\n- /race (coming soon!)\n\nType /refresh to see this menu again.`,
+        parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
                 [{ text: '🪙 Start Coin Flip (Button)', callback_data: 'start_coinflip' }],
@@ -81,7 +81,7 @@ bot.onText(/\/start$/, async (msg) => {
     });
 });
 
-bot.onText(/\/start coinflip/, (msg) => {
+bot.onText(/\/coinflip$/, (msg) => {
   const userId = msg.from.id;
   coinFlipSessions[userId] = true; // Mark the user as in a coin flip session
   bot.sendMessage(
@@ -95,22 +95,20 @@ bot.onText(/\/start coinflip/, (msg) => {
   );
 });
 
-bot.onText(/\/refresh$/, (msg) => {
-  bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
+bot.onText(/\/refresh$/, async (msg) => {
+    const chatId = msg.chat.id;
+    const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif?cid=6c09b952c8nzwcr45gvyqv7bfp80blroxd4wt1bdtrsixwok&ep=v1_internal_gif_by_id&rid=giphy.gif&ct=g'; // Your GIF URL
 
-        Available games:
-        - Click to start: */start coinflip*
-        - /start race (coming soon!)
-
-        Type /refresh to see this menu again.`, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '🪙 Start Coin Flip (Button)', callback_data: 'start_coinflip' }],
-                    [{ text: '🏁 Start Race (Button - Coming Soon!)', callback_data: 'start_race' }]
-                ]
-            }
-        });
+    await bot.sendAnimation(chatId, gifUrl, {
+        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Click to start: */coinflip*\n- /race (coming soon!)\n\nType /refresh to see this menu again.`,
+        parse_mode: 'Markdown',
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '🪙 Start Coin Flip (Button)', callback_data: 'start_coinflip' }],
+                [{ text: '🏁 Start Race (Button - Coming Soon!)', callback_data: 'start_race' }]
+            ]
+        }
+    });
 });
 
 // Modify the /bet handler to check if a coin flip session is active for the user
@@ -119,7 +117,7 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
   const chatId = msg.chat.id;
 
   if (!coinFlipSessions[userId]) {
-    return bot.sendMessage(chatId, `⚠️ Please start a coin flip game first using /start coinflip`);
+    return bot.sendMessage(chatId, `⚠️ Please start a coin flip game first using /coinflip`);
   }
 
   const betAmount = parseFloat(match[1]);
