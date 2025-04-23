@@ -83,7 +83,13 @@ async function checkPayment(expectedSol, userId, gameType, targetWalletAddress) 
                 continue;
             }
 
-            const payerAddress = payer.toBase58();
+            let payerAddress;
+            try {
+                payerAddress = typeof payer.toBase58 === 'function' ? payer.toBase58() : payer;
+            } catch (e) {
+                console.error("checkPayment: Failed to get payer address:", e);
+                continue;
+            }
             if (linkedWallets[userId] && linkedWallets[userId] !== payerAddress) {
                 return { success: false, message: 'Wallet mismatch. Please use your original linked wallet.' };
             }
