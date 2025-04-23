@@ -251,7 +251,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
 
         if (!winnerPublicKey) {
           console.warn('Winner public key is undefined.');
-          return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine recipient.`);
+          return await botsendMessage(chatId, `⚠️ Payout failed: Could not determine recipient.`);
         }
 
         const payoutAmountLamports = Math.round(amount * LAMPORTS_PER_SOL); // ENSURE using 'amount'
@@ -324,4 +324,8 @@ bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
     const betAmount = parseFloat(match[1]);
     const chosenHorseName = match[2];
 
-    // Find the active
+    // Find the active race (for simplicity, we'll assume the most recently started race is active and open for betting)
+    const activeRaceId = Object.keys(raceSessions).pop();
+
+    if (!activeRaceId || raceSessions[activeRaceId].status !== 'open') {
+        return bot.sendMessage(chatId, `⚠️
