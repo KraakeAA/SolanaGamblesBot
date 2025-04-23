@@ -115,8 +115,16 @@ bot.onText(/\/start$/, async (msg) => {
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif';
 
     await bot.sendAnimation(chatId, gifUrl, {
-        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- /coinflip\n- /race\n\nType /refresh to see this menu again.`,
-        parse_mode: 'Markdown'
+        caption: `Welcome to *Solana Gambles*!\n\nChoose a game to begin:`,
+        parse_mode: 'Markdown',
+        reply_markup: {
+            keyboard: [
+                ['🎯 /coinflip', '🏇 /race'],
+                ['🔄 /refresh']
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: false
+        }
     });
 });
 
@@ -148,7 +156,16 @@ function resetBotState(chatId) {
     }
     usedTransactions.clear();
     // Send the /start message to reset the bot's state in the chat
-    bot.sendMessage(chatId, `Bot state has been reset.`);
+    bot.sendMessage(chatId, `Bot state has been reset.`,  {
+        reply_markup: {
+            keyboard: [
+                ['🎯 /coinflip', '🏇 /race'],
+                ['🔄 /refresh']
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: false
+        }
+    });
 }
 
 
@@ -168,7 +185,15 @@ bot.onText(/\/refresh$/, async (msg) => {
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif';
     await bot.sendAnimation(chatId, gifUrl, {
         caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- /coinflip\n- /race`,
-        parse_mode: 'Markdown'
+        parse_mode: 'Markdown',
+         reply_markup: {
+            keyboard: [
+                ['🎯 /coinflip', '🏇 /race'],
+                ['🔄 /refresh']
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: false
+        }
     });
 });
 
