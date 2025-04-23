@@ -82,30 +82,62 @@ async function checkPayment(expectedSol, userId, gameType, targetWalletAddress) 
 }
 
 async function sendSol(connection, payerPrivateKey, recipientPublicKey, amount) {
-    try {
-        const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey));
-        const payerPublicKey = payerWallet.publicKey;
-        const payoutAmountLamports = Math.round(amount * LAMPORTS_PER_SOL);
+    const maxRetries = 3;
+    let lastError = null;
 
-        const transaction = new Transaction().add(
-            SystemProgram.transfer({
-                fromPubkey: payerPublicKey,
-                toPubkey: recipientPublicKey,
-                lamports: payoutAmountLamports,
-            })
-        );
+    for (let retryCount = 0; retryCount < maxRetries; retryCount++) {
+        try {
+            const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey));
+            const payerPublicKey = payerWallet.publicKey;
+            const payoutAmountLamports = Math.round(amount * LAMPORTS_PER_SOL);
 
-        const signature = await sendAndConfirmTransaction(
-            connection,
-            transaction,
-            [payerWallet]
-        );
+            // Fetch a fresh recent blockhash
+            const latestBlockhash = await connection.getLatestBlockhash();
 
-        return { success: true, signature };
-    } catch (error) {
-        console.error('Error sending SOL:', error);
-        return { success: false, error: error.message };
+            const transaction = new Transaction({
+                recentBlockhash: latestBlockhash.blockhash,
+                feePayer: payerPublicKey,
+            }).add(
+                SystemProgram.transfer({
+                    fromPubkey: payerPublicKey,
+                    toPubkey: recipientPublicKey,
+                    lamports: payoutAmountLamports,
+                })
+            );
+
+            // Add compute budget instructions for increased priority
+            const modifyComputeUnits = ComputeBudgetProgram.setComputeUnitLimit({
+                units: 100000, // Adjust this value as needed
+            });
+            const addPriorityFee = ComputeBudgetProgram.setComputeUnitPrice({
+                microLamports: 1000, // Adjust this value as needed
+            });
+            transaction.add(modifyComputeUnits, addPriorityFee);
+
+            transaction.sign(payerWallet);
+
+            const signature = await sendAndConfirmTransaction(
+                connection,
+                transaction,
+                [payerWallet],
+                { commitment: 'confirmed' } // Explicitly set commitment level
+            );
+
+            return { success: true, signature };
+
+        } catch (error) {
+            console.error(`Error sending SOL (attempt ${retryCount + 1}/${maxRetries}):`, error);
+            lastError = error;
+            if (error.message.includes('TransactionExpiredBlockheightExceededError')) {
+                // Wait before retrying (exponential backoff)
+                await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, retryCount)));
+            } else {
+                // Don't retry for other errors
+                break;
+            }
+        }
     }
+    return { success: false, error: lastError ? lastError.message : 'Max retries exceeded without success' };
 }
 
 const getHouseEdge = (amount) => {
