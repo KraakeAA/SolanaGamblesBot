@@ -58,6 +58,21 @@ async function checkPayment(expectedSol) {
     for (let sig of signatures) {
         const tx = await connection.getParsedTransaction(sig.signature);
         if (!tx || !tx.meta) continue;
+
+        const txTime = new Date(sig.blockTime * 1000);
+        const timeDiff = (new Date() - txTime) / 1000 / 60;
+        if (timeDiff > 15) continue;
+
+        const amount = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL;
+        if (Math.abs(Math.abs(amount) - expectedSol) < 0.0015) {
+            if (usedTransactions.has(sig.signature)) {
+                return { success: false, message: 'Transaction already used' };
+            }
+            return { success: true, tx: sig.signature };
+        }
+    }
+
+    return { success: false, message: 'Payment not found' };
 }
 
         const txTime = new Date(sig.blockTime * 1000);
