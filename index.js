@@ -343,4 +343,4 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
         await bot.sendMessage(chatId, `${horsesInRace[Math.floor(Math.random() * horsesInRace.length)].emoji} ${horsesInRace[Math.floor(Math.random() * horsesInRace.length)].name} surges forward!`, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 2000));
         await bot.sendMessage(chatId, `It's a tight finish!`, { parse_mode: 'Markdown' });
-        await new Promise(resolve => setTimeout(resolve, 1
+        await new Promise(resolve => setTimeout(resolve, 1000));
