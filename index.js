@@ -48,6 +48,7 @@ const availableHorses = [
 
 const userBets = {};
 const coinFlipSessions = {};
+const usedTransactions = new Set(); // To store used transaction signatures
 
 async function checkPayment(expectedSol) {
     const pubKey = new PublicKey(WALLET_ADDRESS);
@@ -63,10 +64,13 @@ async function checkPayment(expectedSol) {
 
         const amount = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL;
         if (Math.abs(Math.abs(amount) - expectedSol) < 0.0015) {
+            if (usedTransactions.has(sig.signature)) {
+                return { success: false, message: 'Transaction already used' }; // Add message
+            }
             return { success: true, tx: sig.signature };
         }
     }
-    return { success: false };
+    return { success: false, message: 'Payment not found' }; //Add message
 }
 
 async function sendSol(connection, payerPrivateKey, recipientPublicKey, amount) {
@@ -184,9 +188,9 @@ bot.onText(/^\/confirm$/, async (msg) => {
         paymentCheckResult = await checkPayment(amount);
 
         if (!paymentCheckResult.success) {
-            return await bot.sendMessage(chatId, `❌ Payment not verified!`);
+            return await bot.sendMessage(chatId, `❌ Payment not verified! ${paymentCheckResult.message}`); // show message
         }
-
+        usedTransactions.add(paymentCheckResult.tx); //store
         await bot.sendMessage(chatId, `✅ Payment verified!`);
 
         const houseEdge = getHouseEdge(amount);
@@ -256,6 +260,7 @@ bot.onText(/\/race$/, async (msg) => {
         horses: availableHorses,
         bets: {}, // We might not even need this for a solo game
         status: 'open', // Could potentially go straight to 'betting' or similar
+        usedTransactions: new Set()
     };
 
     let raceMessage = `🏁 **New Race! Place your bets!** 🏁\n\n`;
@@ -312,18 +317,23 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
     }
 
     const { raceId, amount, horse } = raceBetInfo;
+    const race = raceSessions[raceId];
 
     try {
         await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL for Race ${raceId}...`);
         const paymentCheckResult = await checkPayment(amount);
 
         if (!paymentCheckResult.success) {
-            return bot.sendMessage(chatId, `❌ Payment not verified for Race ${raceId}!`);
+            return bot.sendMessage(chatId, `❌ Payment not verified for Race ${raceId}! ${paymentCheckResult.message}`); //send message
         }
 
+        if (race.usedTransactions.has(paymentCheckResult.tx)) {
+            return bot.sendMessage(chatId, `❌ Payment for this race has already been used.`);
+        }
+
+        race.usedTransactions.add(paymentCheckResult.tx); //store
         await bot.sendMessage(chatId, `✅ Payment verified for Race ${raceId}! The race is on! 🐎💨`);
 
-        const race = raceSessions[raceId];
         const horsesInRace = race.horses;
 
         let winningHorse;
