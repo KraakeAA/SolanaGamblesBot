@@ -389,7 +389,6 @@ bot.onText(/^\/confirm$/, async (msg) => {
             // --- END PAYOUT LOGIC ---
         } else {
             console.log(`[/confirm] User ${userId} - Sending losing message.`);
-            await bot.sendAnimation(chatId, "https://media.giphy.com/media/l2JHPBFzSF1zG0y92/giphy.gif");
             await bot.sendMessage(chatId, `ð *YOU LOSE!*\n\n${displayName}, you guessed *${choice}* but the coin landed *${result}*.`,
                 { parse_mode: "Markdown" });
             await bot.sendMessage(chatId, `ð Sorry, ${displayName}! You lost.\nResult: ${result}`);
