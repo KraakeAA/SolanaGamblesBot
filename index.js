@@ -429,7 +429,12 @@ bot.onText(/^\/confirm$/, async (msg) => {
 
     } catch (error) {
         console.error('Error in /confirm:', error);
-        await bot.sendMessage(chatId, `â ï¸ An error occurred during confirmation.`);
+
+        if (error.message && error.message.includes('429')) {
+            await bot.sendMessage(chatId, `â ï¸ We're hitting rate limits from the Solana network. Please try again shortly.`);
+        } else {
+            await bot.sendMessage(chatId, `â ï¸ An internal error occurred during confirmation.`);
+        }
     }
 });
 
