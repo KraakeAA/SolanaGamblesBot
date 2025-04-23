@@ -335,6 +335,10 @@ bot.onText(/^\/confirm$/, async (msg) => {
 
         delete userBets[userId];
         delete coinFlipSessions[userId];
+        if (userPayments[userId] && userPayments[userId].coinflipTx === paymentCheckResult.tx) {
+            delete userPayments[userId].coinflipTx; // Clear the coinflip transaction after confirmation
+        }
+
     } catch (error) {
         console.error('Error in /confirm:', error);
         await bot.sendMessage(chatId, `⚠️ An error occurred during confirmation.`);
@@ -548,6 +552,9 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
 
         delete userRaceBets[userId];
         delete raceSessions[raceId];
+        if (userPayments[userId] && userPayments[userId].raceTx === paymentCheckResult.tx) {
+            delete userPayments[userId].raceTx; // Clear the race transaction after confirmation
+        }
 
     } catch (error) {
         console.error('Error in /confirmrace:', error);
