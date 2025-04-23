@@ -10,7 +10,6 @@ const {
     SystemProgram,
     sendAndConfirmTransaction
 } = require('@solana/web3.js');
-} = require('@solana/web3.js');
 const bs58 = require('bs58');
 const fs = require('fs');
 const express = require('express');
