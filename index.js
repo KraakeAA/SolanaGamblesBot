@@ -328,7 +328,6 @@ bot.onText(/^\/confirm$/, async (msg) => {
             // --- END PAYOUT LOGIC ---
         } else {
             await bot.sendAnimation(chatId, "https://media.giphy.com/media/l2JHPBFzSF1zG0y92/giphy.gif");
-            await bot.sendMessage(chatId, `ð *YOU LOSE!*\n\n${displayName}, you guessed *<span class="math-inline">\{choice\}\* but the coin landed \*</span>{result}*.`,
         await bot.sendMessage(chatId, `ð *YOU LOSE!*\n\n${displayName}, you guessed *${choice}* but the coin landed *${result}*.`, { parse_mode: "Markdown" });
             await bot.sendMessage(chatId, `ð Sorry, ${displayName}! You lost.\nResult: ${result}`);
         }
@@ -370,7 +369,8 @@ bot.onText(/\/race$/, async (msg) => {
 
     let raceMessage = `ð New Race! Place your bets!\n\n`;
     horses.forEach(horse => {
-        raceMessage += `${horse.emoji} *${horse.name}* (Odds: ${horse.odds.toFixed(1)}x)\n`;
+    const raceIntro = `ð *New Race! Place your bets!* ð\n\nð *Yellow* (Odds: 1.1x)\nð§¡ *Orange* (Odds: 2.0x)\nð *Blue* (Odds: 3.0x)\nð¨ð¾ *Cyan* (Odds: 4.0x)\nð¤ *White* (Odds: 5.0x)\nâ¤ï¸ *Red* (Odds: 6.0x)\nð¤ *Black* (Odds: 7.0x)\nð©· *Pink* (Odds: 8.0x)\nð *Purple* (Odds: 9.0x)\nð *Green* (Odds: 10.0x)\nð©¶ *Silver* (Odds: 15.0x)\n\n_To place your bet, use:_\n`/betrace [amount] [horse_name]`\nExample: `/betrace 0.1 Blue``;
+    await bot.sendMessage(chatId, raceIntro, { parse_mode: 'Markdown' });
     });
 
     raceMessage += `\nTo place your bet, use:\n\`/betrace [amount] [horse_name]\`\n` +
