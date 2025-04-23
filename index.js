@@ -284,34 +284,43 @@ bot.onText(/^\/confirm$/, async (msg) => {
             if (paymentCheckResult && paymentCheckResult.tx) {
                 try {
                     const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
-                    if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.length > 0) {
-                        winnerPublicKey = getPayerFromTransaction(parsedTransaction, amount);
-                        if (!winnerPublicKey) {
-                            console.warn('Could not determine the sender from the transaction.');
-                            return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine payment sender.`);
-                        }
-                        const winnerAddress = winnerPublicKey.toBase58();
-                        if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
-                            return await bot.sendMessage(chatId, `⚠️ This wallet does not match your linked wallet. Please use your original address.`);
-                        }
-                        linkedWallets[userId] = winnerAddress;
-                        console.log('Extracted winner public key:', winnerPublicKey.toBase58());
-                    } else {
-                        console.warn('Could not parse transaction to determine sender.');
-                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not analyze your payment transaction.`);
+                    if (!parsedTransaction) {
+                        console.warn('Could not fetch parsed transaction for payout.');
+                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not retrieve transaction details.`);
                     }
+                    if (!parsedTransaction.transaction) {
+                        console.warn('Parsed transaction does not contain transaction data.');
+                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Incomplete transaction data.`);
+                    }
+                    if (!parsedTransaction.transaction.message || !parsedTransaction.transaction.message.accountKeys) {
+                        console.warn('Parsed transaction missing message or account keys.');
+                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Missing account information.`);
+                    }
+
+                    winnerPublicKey = getPayerFromTransaction(parsedTransaction, amount);
+                    if (!winnerPublicKey) {
+                        console.warn('Could not determine the sender from the transaction.');
+                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine payment sender.`);
+                    }
+                    const winnerAddress = winnerPublicKey.toBase58();
+                    if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
+                        return await bot.sendMessage(chatId, `⚠️ This wallet does not match your linked wallet. Please use your original address.`);
+                    }
+                    linkedWallets[userId] = winnerAddress;
+                    console.log('Extracted winner public key:', winnerPublicKey.toBase58());
+
                 } catch (error) {
-                    console.error('Error parsing transaction for sender:', error);
+                    console.error('Error parsing transaction for sender during payout:', error);
                     return await bot.sendMessage(chatId, `⚠️ Payout failed: Error analyzing your payment transaction.`);
                 }
             } else {
-                console.warn('No transaction signature available to determine sender.');
-                return await bot.sendMessage(chatId, `⚠️ Payout failed: No payment transaction found.`);
+                console.warn('No transaction signature available to determine sender for payout.');
+                return await bot.sendMessage(chatId, `⚠️ Payout failed: No payment transaction found for payout.`);
             }
 
             if (!winnerPublicKey) {
-                console.warn('Winner public key is undefined.');
-                return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine recipient.`);
+                console.warn('Winner public key is undefined for payout.');
+                return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine recipient for payout.`);
             }
 
             const sendResult = await sendSol(connection, payerPrivateKey, winnerPublicKey, payout);
@@ -324,7 +333,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
             // --- END PAYOUT LOGIC ---
         } else {
             await bot.sendAnimation(chatId, "https://media.giphy.com/media/l2JHPBFzSF1zG0y92/giphy.gif");
-            await bot.sendMessage(chatId, `😞 *YOU LOSE!*\n\n${displayName}, you guessed *<span class="math-inline">\{choice\}\* but the coin landed \*</span>{result}*.`,
+            await bot.sendMessage(chatId, `😞 *YOU LOSE!*\n\n${displayName}, you guessed *${choice}* but the coin landed *${result}*.`,
                 { parse_mode: "Markdown" });
             await bot.sendMessage(chatId, `😔 Sorry, ${displayName}! You lost.\nResult: ${result}`);
         }
