@@ -532,7 +532,7 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
             }
         }
 
-        await bot.sendMessage(chatId, `ð And they're off! The horses are neck and neck...`), { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, `ð And they're off! The horses are neck and neck...`, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 1500));
         await bot.sendMessage(chatId, `${horsesInRace[Math.floor(Math.random() * horsesInRace.length)].emoji} ${horsesInRace[Math.floor(Math.random() * horsesInRace.length)].name} surges forward!`, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 2000));
