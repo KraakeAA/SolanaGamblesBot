@@ -1,16 +1,15 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const {
-    Connection,
-    clusterApiUrl,
-    PublicKey,
-    LAMPORTS_PER_SOL,
-    Keypair,
-    Transaction,
-    SystemProgram,
+    Connection
+    clusterApiUrl
+    PublicKey
+    LAMPORTS_PER_SOL
+    Keypair
+    Transaction
+    SystemProgram
     sendAndConfirmTransaction
 } = require('@solana/web3.js');
-const bs58 = require('bs58');
 const fs = require('fs');
 const express = require('express');
 const app = express();
@@ -75,19 +74,11 @@ async function checkPayment(expectedSol) {
     return { success: false, message: 'Payment not found' };
 }
 
-        const txTime = new Date(sig.blockTime * 1000);
-        const timeDiff = (new Date() - txTime) / 1000 / 60;
-        if (timeDiff > 15) continue;
-}
 
-        const amount = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL;
-        if (Math.abs(Math.abs(amount) - expectedSol) < 0.0015) {
 }
-            if (usedTransactions.has(sig.signature)) {
 }
                 return { success: false, message: 'Transaction already used' }; // Add message
             }
-            return { success: true, tx: sig.signature };
         }
     }
     return { success: false, message: 'Payment not found' }; //Add message
@@ -222,7 +213,7 @@ bot.onText(/\/wallet$/, async (msg) => {
 \`${wallet}\``, { parse_mode: 'Markdown' });
     } else {
         await bot.sendMessage(msg.chat.id, `â ï¸ No wallet is linked to your account yet. Place a verified bet to link one.`);
-    }
+
 });
 
 
@@ -240,17 +231,17 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
     const chatId = msg.chat.id;
 
     if (!coinFlipSessions[userId]) {
-}
+
         return bot.sendMessage(chatId, `â ï¸ Please start a coin flip game first using /coinflip`);
-    }
+
 
     const betAmount = parseFloat(match[1]);
     const userChoice = match[2].toLowerCase();
 
     if (betAmount < MIN_BET || betAmount > MAX_BET) {
-}
+
         return bot.sendMessage(chatId, `â Bet must be between ${MIN_BET} - ${MAX_BET} SOL`);
-    }
+
 
     userBets[userId] = { amount: betAmount, choice: userChoice };
 
@@ -267,23 +258,23 @@ bot.onText(/^\/confirm$/, async (msg) => {
     const betInfo = userBets[userId];
 
     if (!betInfo) {
-}
+
         return await bot.sendMessage(chatId, `â ï¸ No active bet found. Please use the /bet command first.`);
-    }
+
 
     const { amount, choice } = betInfo;
 
     let paymentCheckResult;
     try {
-}
+
         await bot.sendMessage(chatId, `ð Verifying your payment of ${amount} SOL...`);
         await new Promise(resolve => setTimeout(resolve, 5000));
         paymentCheckResult = await checkPayment(amount);
 
         if (!paymentCheckResult.success) {
-}
+
             return await bot.sendMessage(chatId, `â Payment not verified! ${paymentCheckResult.message}`); // show message
-        }
+
         usedTransactions.add(paymentCheckResult.tx); //store
         await bot.sendMessage(chatId, `â Payment verified!`);
 
@@ -299,37 +290,37 @@ bot.onText(/^\/confirm$/, async (msg) => {
         const displayName = msg.from.username ? `@${msg.from.username}` : `<@${userId}>`;
 
         if (win) {
-}
+
             // --- PAYOUT LOGIC USING sendSol FUNCTION ---
             const payerPrivateKey = process.env.BOT_PRIVATE_KEY;
             if (!payerPrivateKey) {
-}
+
                 console.error('BOT_PRIVATE_KEY environment variable not set!');
                 return await bot.sendMessage(chatId, `â ï¸ Payout failed: Bot's private key not configured.`);
-            }
+
 
             let winnerPublicKey;
             if (paymentCheckResult && paymentCheckResult.tx) {
-}
+
                 try {
-}
+
                     const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
                     if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.length > 0) {
-}
+
                         
 
 winnerPublicKey = getPayerFromTransaction(parsedTransaction, amount);
 if (!winnerPublicKey) {
-}
+
     console.warn('Could not determine the sender from the transaction.');
     return await bot.sendMessage(chatId, `â ï¸ Payout failed: Could not determine payment sender.`);
-}
+
 
 const winnerAddress = winnerPublicKey.toBase58();
 if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
-}
+
     return await bot.sendMessage(chatId, `â ï¸ This wallet does not match your linked wallet. Please use your original address.`);
-}
+
 linkedWallets[userId] = winnerAddress;
 
 
@@ -337,29 +328,27 @@ linkedWallets[userId] = winnerAddress;
                     } else {
                         console.warn('Could not parse transaction to determine sender.');
                         return await bot.sendMessage(chatId, `â ï¸ Payout failed: Could not analyze your payment transaction.`);
-                    }
+
                 } catch (error) {
                     console.error('Error parsing transaction for sender:', error);
                     return await bot.sendMessage(chatId, `â ï¸ Payout failed: Error analyzing your payment transaction.`);
-                }
+
             } else {
                 console.warn('No transaction signature available to determine sender.');
                 return await bot.sendMessage(chatId, `â ï¸ Payout failed: No payment transaction found.`);
-            }
+
 
             if (!winnerPublicKey) {
                 console.warn('Winner public key is undefined.');
                 return await bot.sendMessage(chatId, `â ï¸ Payout failed: Could not determine recipient.`);
-            }
+
 
             const sendResult = await sendSol(connection, payerPrivateKey, winnerPublicKey, payout);
 
             if (sendResult.success) {
-}
+
                 
 await bot.sendAnimation(chatId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExczB1anY2Y3YzdXY0NxdnUwZ3NtNWhkZ3h2b2puZjZ2dDdpdmliZmV6aSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohjUWVkjvGf4RAjDi/giphy.gif");
-await bot.sendMessage(chatId, 
-    `ð *YOU WIN!* ð
 
 ð Congratulations, ${displayName}!
 
@@ -368,29 +357,25 @@ await bot.sendMessage(chatId,
     { parse_mode: 'Markdown' });
             } else {
                 
-await bot.sendAnimation(chatId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExczB1anY2Y3YzdXY0NxdnUwZ3NtNWhkZ3h2b2puZjZ2dDdpdmliZmV6aSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohjUWVkjvGf4RAjDi/giphy.gif");
-await bot.sendMessage(chatId, 
-    `ð *YOU WIN!* ð
 
 ð Congratulations, ${displayName}!
 
 *Result:* \`${result}\`
 ð¸ Winnings sent!
-await bot.sendAnimation(chatId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExczB1anY2Y3YzdXY0NxdnUwZ3NtNWhkZ3h2b2puZjZ2dDdpdmliZmV6aSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohjUWVkjvGf4RAjDi/giphy.gif");
 await bot.sendMessage(chatId, `ð *YOU WIN!* ð\n\nð Congratulations, ${displayName}!\n\n*Result:* \`${result}\`\nð¸ Winnings sent!\nTX: \`${sendResult.signature}\`, { parse_mode: 'Markdown' });
-                }
+
 
             } catch (error) {
                 console.error('Error during payout:', error);
                 await bot.sendMessage(chatId, `â ï¸ Payout failed due to an error.`);
-            }
+
 
         } else {
             await bot.sendMessage(chatId, `ð *YOU LOSE THE RACE!* ð
 
 Your horse ${horse} didn't make it.
-Better luck next time!`, { parse_mode: 'Markdown' });
-        }
+Better luck next time!`, { parse_mode: 'Markdown' });`
+
 
         delete userRaceBets[userId];
         delete raceSessions[raceId];
@@ -408,3 +393,4 @@ bot.onText(/\/help$/, async (msg) => {
     await bot.sendMessage(chatId, `ð *How to Play*\n\n1. Start a game: /coinflip or /race\n2. Place a bet: /bet [amount] [heads/tails] or /betrace [amount] [horse]\n3. Send SOL to the bot address\n4. Confirm with /confirm or /confirmrace\n\nUse /wallet to view your linked wallet.`, { parse_mode: 'Markdown' });
 });
 )
+
