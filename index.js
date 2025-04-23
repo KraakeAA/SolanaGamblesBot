@@ -52,6 +52,8 @@ const userBets = {};
 const coinFlipSessions = {};
 const linkedWallets = {}; // Telegram userId -> Wallet address mapping
 const userPayments = {}; // Store payment details { userId: { coinflipTx: txId, raceTx: txId } }
+const confirmCooldown = {}; // userId: lastConfirmationTimestamp
+const cooldownInterval = 3000; // 3 seconds
 
 async function checkPayment(expectedSol, userId, gameType, targetWalletAddress) {
     const pubKey = new PublicKey(targetWalletAddress);
@@ -127,7 +129,7 @@ async function sendSol(connection, payerPrivateKey, recipientPublicKey, amount) 
             return { success: true, signature };
 
         } catch (error) {
-            console.error(`Error sending SOL (attempt ${retryCount + 1}/${maxRetries}):`, error);
+            console.error(`Error sending SOL (attempt <span class="math-inline">\{retryCount \+ 1\}/</span>{maxRetries}):`, error);
             lastError = error;
             if (error.message.includes('TransactionExpiredBlockheightExceededError')) {
                 // Wait before retrying (exponential backoff)
@@ -273,6 +275,14 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
 bot.onText(/^\/confirm$/, async (msg) => {
     const userId = msg.from.id;
     const chatId = msg.chat.id;
+
+    if (confirmCooldown[userId] && (Date.now() - confirmCooldown[userId]) < cooldownInterval) {
+        console.log(`[/confirm] User ${userId} is on cooldown.`);
+        return bot.sendMessage(chatId, `⚠️ Please wait a few seconds before confirming again.`);
+    }
+
+    confirmCooldown[userId] = Date.now();
+
     const betInfo = userBets[userId];
 
     if (!betInfo) {
@@ -287,7 +297,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
         console.log(`[/confirm] User ${userId} confirming payment of ${amount} SOL.`);
         await bot.sendMessage(chatId, `🔍 Verifying your payment of ${amount} SOL...`);
         await new Promise(resolve => setTimeout(resolve, 5000));
-        paymentCheckResult = await checkPayment(amount, userId, 'coinflip', MAIN_WALLET_ADDRESS);
+        paymentCheckResult = await checkPayment(amount, userId, 'coinflip', MAIN_WALLET_ADDRESS); // Use MAIN_WALLET_ADDRESS
 
         if (!paymentCheckResult.success) {
             console.log(`[/confirm] User ${userId} - Payment not verified: ${paymentCheckResult.message}`);
@@ -297,7 +307,7 @@ bot.onText(/^\/confirm$/, async (msg) => {
         if (!userPayments[userId]) {
             userPayments[userId] = {};
         }
-        userPayments[userId].coinflipTx = paymentCheckResult.tx;
+        userPayments[userId].coinflipTx = paymentCheckResult.tx; // Store the transaction ID
 
         await bot.sendMessage(chatId, `✅ Payment verified!`);
         console.log(`[/confirm] User ${userId} - Payment verified.`);
@@ -312,16 +322,75 @@ bot.onText(/^\/confirm$/, async (msg) => {
 
         if (win) {
             console.log(`[/confirm] User ${userId} - Sending winning message.`);
-            // ... (winning message and payout logic) ...
+            // --- PAYOUT LOGIC USING sendSol FUNCTION ---
+            const payerPrivateKey = process.env.BOT_PRIVATE_KEY;
+            if (!payerPrivateKey) {
+                console.error('BOT_PRIVATE_KEY environment variable not set!');
+                return await bot.sendMessage(chatId, `⚠️ Payout failed: Bot's private key not configured.`);
+            }
+
+            let winnerPublicKey;
+            if (paymentCheckResult && paymentCheckResult.tx) {
+                try {
+                    const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
+                    if (!parsedTransaction) {
+                        console.warn('Could not fetch parsed transaction for payout.');
+                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not retrieve transaction details.`);
+                    }
+                    if (!parsedTransaction.transaction) {
+                        console.warn('Parsed transaction does not contain transaction data.');
+                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Incomplete transaction data.`);
+                    }
+                    if (!parsedTransaction.transaction.message || !parsedTransaction.transaction.message.accountKeys) {
+                        console.warn('Parsed transaction missing message or account keys.');
+                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Missing account information.`);
+                    }
+
+                    winnerPublicKey = getPayerFromTransaction(parsedTransaction, amount);
+                    if console.warn('Could not determine the sender from the transaction.');
+                        return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine payment sender.`);
+                    }
+                    const winnerAddress = winnerPublicKey.toBase58();
+                    if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
+                        return await bot.sendMessage(chatId, `⚠️ This wallet does not match your linked wallet. Please use your original address.`);
+                    }
+                    linkedWallets[userId] = winnerAddress;
+                    console.log('Extracted winner public key:', winnerPublicKey.toBase58());
+
+                } catch (error) {
+                    console.error('Error parsing transaction for sender during payout:', error);
+                    return await bot.sendMessage(chatId, `⚠️ Payout failed: Error analyzing your payment transaction.`);
+                }
+            } else {
+                console.warn('No transaction signature available to determine sender for payout.');
+                return await bot.sendMessage(chatId, `⚠️ Payout failed: No payment transaction found for payout.`);
+            }
+
+            if (!winnerPublicKey) {
+                console.warn('Winner public key is undefined for payout.');
+                return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine recipient for payout.`);
+            }
+
+            const sendResult = await sendSol(connection, process.env.BOT_PRIVATE_KEY, winnerPublicKey, payout); // Use BOT_PRIVATE_KEY
+
+            if (sendResult.success) {
+                await bot.sendMessage(chatId, `🎉 Congratulations, ${displayName}! You won ${payout.toFixed(4)} SOL!\nResult: ${result}\n💸 Winnings sent! TX: ${sendResult.signature}`);
+            } else {
+                await bot.sendMessage(chatId, `🎉 Congratulations, ${displayName}! You won ${payout.toFixed(4)} SOL!\nResult: ${result}\n⚠️ Payout failed: ${sendResult.error}`);
+            }
+            // --- END PAYOUT LOGIC ---
         } else {
             console.log(`[/confirm] User ${userId} - Sending losing message.`);
-            // ... (losing message logic) ...
+            await bot.sendAnimation(chatId, "https://media.giphy.com/media/l2JHPBFzSF1zG0y92/giphy.gif");
+            await bot.sendMessage(chatId, `😞 *YOU LOSE!*\n\n${displayName}, you guessed *${choice}* but the coin landed *${result}*.`,
+                { parse_mode: "Markdown" });
+            await bot.sendMessage(chatId, `😔 Sorry, ${displayName}! You lost.\nResult: ${result}`);
         }
 
         delete userBets[userId];
         delete coinFlipSessions[userId];
         if (userPayments[userId] && userPayments[userId].coinflipTx === paymentCheckResult.tx) {
-            delete userPayments[userId].coinflipTx;
+            delete userPayments[userId].coinflipTx; // Clear the coinflip transaction after confirmation
         }
 
     } catch (error) {
