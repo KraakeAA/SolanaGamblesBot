@@ -8,7 +8,8 @@ const {
     Keypair,
     Transaction,
     SystemProgram,
-    sendAndConfirmTransaction
+    sendAndConfirmTransaction,
+    ComputeBudgetProgram
 } = require('@solana/web3.js');
 const bs58 = require('bs58');
 const fs = require('fs');
