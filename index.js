@@ -1,13 +1,13 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const {
-    Connection,
-    clusterApiUrl,
-    PublicKey,
-    LAMPORTS_PER_SOL,
-    Keypair,
-    Transaction,
-    SystemProgram,
+    Connection
+    clusterApiUrl
+    PublicKey
+    LAMPORTS_PER_SOL
+    Keypair
+    Transaction
+    SystemProgram
     sendAndConfirmTransaction
 } = require('@solana/web3.js');
 const bs58 = require('bs58');
@@ -82,15 +82,15 @@ async function sendSol(connection, payerPrivateKey, recipientPublicKey, amount) 
 
         const transaction = new Transaction().add(
             SystemProgram.transfer({
-                fromPubkey: payerPublicKey,
-                toPubkey: recipientPublicKey,
-                lamports: payoutAmountLamports,
+                fromPubkey: payerPublicKey
+                toPubkey: recipientPublicKey
+                lamports: payoutAmountLamports
             })
         );
 
         const signature = await sendAndConfirmTransaction(
-            connection,
-            transaction,
+            connection
+            transaction
             [payerWallet]
         );
 
@@ -135,7 +135,7 @@ bot.onText(/\/start$/, async (msg) => {
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif';
 
     await bot.sendAnimation(chatId, gifUrl, {
-        caption: `Welcome to *Solana Gambles*!\n\nAvailable games:\n- /coinflip\n- /race\n\nType /refresh to see this menu again.`,
+        caption: `Welcome to *Solana Gambles*!\n\nAvailable games:\n- /coinflip\n- /race\n\nType /refresh to see this menu again.`
         parse_mode: 'Markdown'
     });
 });
@@ -176,9 +176,9 @@ bot.onText(/\/coinflip$/, (msg) => {
     const userId = msg.from.id;
     coinFlipSessions[userId] = true;
     bot.sendMessage(
-        msg.chat.id,
+        msg.chat.id
         `ðª You've started a coin flip game! Please choose an amount and heads/tails:\n\n` +
-        `/bet 0.01 heads\n/bet 0.05 tails\n\nMin: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`,
+        `/bet 0.01 heads\n/bet 0.05 tails\n\nMin: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`
         { parse_mode: 'Markdown' }
     );
 });
@@ -200,7 +200,7 @@ bot.onText(/\/refresh$/, async (msg) => {
     const chatId = msg.chat.id;
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif';
     await bot.sendAnimation(chatId, gifUrl, {
-        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- /coinflip\n- /race`,
+        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- /coinflip\n- /race`
         parse_mode: 'Markdown'
     });
 });
@@ -222,9 +222,9 @@ bot.onText(/\/bet (\d+\.\d+) (heads|tails)/i, async (msg, match) => {
 
     userBets[userId] = { amount: betAmount, choice: userChoice };
 
-    await bot.sendMessage(chatId,
+    await bot.sendMessage(chatId
         `ð¸ *To place your bet:*\nSend *exactly ${betAmount} SOL* to:\n` +
-        `\`${WALLET_ADDRESS}\`\nOnce sent, type /confirm to finalize your bet.`,
+        `\`${WALLET_ADDRESS}\`\nOnce sent, type /confirm to finalize your bet.`
         { parse_mode: 'Markdown' }
     );
 });
@@ -322,7 +322,6 @@ await bot.sendMessage(chatId,
 
 *Result:* \`${result}\`
 ð¸ Winnings sent!
-TX: \`${sendResult.signature}\``,
     { parse_mode: 'Markdown' });
             } else {
                 
@@ -334,7 +333,6 @@ await bot.sendMessage(chatId,
 
 *Result:* \`${result}\`
 ð¸ Winnings sent!
-TX: \`${sendResult.signature}\``,
 await bot.sendAnimation(chatId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExczB1anY2Y3YzdXY0NxdnUwZ3NtNWhkZ3h2b2puZjZ2dDdpdmliZmV6aSZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3ohjUWVkjvGf4RAjDi/giphy.gif");
 await bot.sendMessage(chatId, 
   `ð *YOU WIN!* ð\n\nð Congratulations, ${displayName}!\n\n*Result:* \`${result}\`\nð¸ Winnings sent!\nTX: \`${sendResult.signature}\``
