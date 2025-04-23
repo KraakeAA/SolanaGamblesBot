@@ -322,7 +322,7 @@ await bot.sendMessage(chatId,
 
 *Result:* \`${result}\`
 ð¸ Winnings sent!
-TX: \`${sendResult.signature}\``,
+TX: \`${sendResult.signature}\``, 
     { parse_mode: 'Markdown' });
             } else {
                 
@@ -334,7 +334,7 @@ await bot.sendMessage(chatId,
 
 *Result:* \`${result}\`
 ð¸ Winnings sent!
-TX: \`${sendResult.signature}\``,
+TX: \`${sendResult.signature}\``, 
     { parse_mode: 'Markdown' });
                 } else {
                     await bot.sendMessage(chatId, `â ï¸ Payout failed: ${sendResult.error}`);
