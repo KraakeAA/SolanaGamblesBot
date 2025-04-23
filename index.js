@@ -342,7 +342,7 @@ bot.onText(/\/race$/, async (msg) => {
 
     let raceMessage = `ð **New Race! Place your bets!** ð\n\n`;
     raceSessions[raceId].horses.forEach(horse => {
-        raceMessage += `${horse.emoji} ${horse.name} (Odds: ${horse.odds.toFixed(1)}x)\n`;
+    raceMessage += `${horse.emoji} *${horse.name}* (Odds: ${horse.odds.toFixed(1)}x)\n`;
     });
 
     raceMessage += `\nTo place your bet, use:\n\`/betrace [amount] [horse_name]\`\n` +
@@ -431,10 +431,29 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
         await new Promise(resolve => setTimeout(resolve, 2000));
         await bot.sendMessage(chatId, `It's a tight finish!`, { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 1000));
+        const midRaceDrama = [
+            "ð Yellow surges ahead!",
+            "ð¥ Blue stumbles on the turn!",
+            "ð¥ Itâs neck and neck between Red and Black!",
+            "ð£ï¸ Commentator: Unbelievable move from Orange!",
+            "ð£ The crowd roars as the final stretch approaches!"
+        ];
+        const randomDrama = midRaceDrama[Math.floor(Math.random() * midRaceDrama.length)];
+        await bot.sendMessage(chatId, randomDrama, { parse_mode: "Markdown" });
+        await new Promise(resolve => setTimeout(resolve, 1200));
         await bot.sendMessage(chatId, `ð **And the winner is... ${winningHorse.emoji} ${winningHorse.name}!** ð`, { parse_mode: 'Markdown' });
 
         if (horse === winningHorse.name) {
         await bot.sendAnimation(chatId, "https://media.giphy.com/media/3ohzdIuqJoo8QdKlnW/giphy.gif");
+        const finishFlair = {
+            "Yellow": "ð Yellow crosses like lightning!",
+            "Blue": "ð Blue storms the track in style!",
+            "Black": "ð¤ Black takes the win in total silence... mysterious!",
+            "Red": "â¤ï¸ Red burns the turf behind them!",
+            "Silver": "ð©¶ Silver shines in the spotlight!",
+        };
+        const flair = finishFlair[horse] || "";
+        await bot.sendMessage(chatId, flair, { parse_mode: "Markdown" });
         await bot.sendMessage(chatId, `ð *You backed the winner!*\n\n${horse} took the crown!\n\nð¸ Payout: ${payout.toFixed(4)} SOL`, { parse_mode: "Markdown" });
             const winningHorseData = race.horses.find(h => h.name === horse);
             const payout = amount * winningHorseData.odds;
