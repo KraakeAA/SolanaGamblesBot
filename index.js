@@ -1,11 +1,16 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const {
-    Connection
-    clusterApiUrl
-    PublicKey
-    LAMPORTS_PER_SOL
-    Keypair
+const {
+    Connection,
+    clusterApiUrl,
+    PublicKey,
+    LAMPORTS_PER_SOL,
+    Keypair,
+    Transaction,
+    SystemProgram,
+    sendAndConfirmTransaction
+} = require('@solana/web3.js');
     Transaction
     SystemProgram
     sendAndConfirmTransaction
@@ -393,4 +398,3 @@ bot.onText(/\/help$/, async (msg) => {
     await bot.sendMessage(chatId, `ð *How to Play*\n\n1. Start a game: /coinflip or /race\n2. Place a bet: /bet [amount] [heads/tails] or /betrace [amount] [horse]\n3. Send SOL to the bot address\n4. Confirm with /confirm or /confirmrace\n\nUse /wallet to view your linked wallet.`, { parse_mode: 'Markdown' });
 });
 )
-
