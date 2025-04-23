@@ -168,6 +168,7 @@ function resetBotState(chatId) {
     }
     usedTransactions.clear();
     // Send the /start message to reset the bot's state in the chat
+    bot.sendMessage(chatId, `*Welcome to Solana Gambles!*\n\nAvailable games:\n- /coinflip\n- /race\n\nUse /refresh to return to this menu.`, { parse_mode: "Markdown" });
     bot.sendMessage(chatId, `Bot state has been reset.`);
 }
 
@@ -505,4 +506,3 @@ linkedWallets[userId] = winnerAddress;
         await bot.sendMessage(chatId, `â ï¸ An error occurred while processing the race.`);
     }
 });
-
