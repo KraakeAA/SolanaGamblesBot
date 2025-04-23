@@ -48,6 +48,7 @@ const availableHorses = [
 
 const userBets = {};
 const coinFlipSessions = {};
+const linkedWallets = {}; // Telegram userId -> Wallet address mapping
 const usedTransactions = new Set(); // To store used transaction signatures
 
 async function checkPayment(expectedSol) {
@@ -110,6 +111,25 @@ const getHouseEdge = (amount) => {
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
 if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
 
+
+function getPayerFromTransaction(tx, expectedAmount) {
+    if (!tx || !tx.meta || !tx.transaction) return null;
+
+    const keys = tx.transaction.message.accountKeys;
+    const preBalances = tx.meta.preBalances;
+    const postBalances = tx.meta.postBalances;
+
+    for (let i = 0; i < keys.length; i++) {
+        const balanceDiff = (preBalances[i] - postBalances[i]) / LAMPORTS_PER_SOL;
+        if (balanceDiff >= expectedAmount - 0.001) {
+            return keys[i].pubkey;
+        }
+    }
+
+    return null;
+}
+
+
 bot.onText(/\/start$/, async (msg) => {
     const chatId = msg.chat.id;
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif';
@@ -162,6 +182,19 @@ bot.onText(/\/coinflip$/, (msg) => {
         { parse_mode: 'Markdown' }
     );
 });
+
+
+bot.onText(/\/wallet$/, async (msg) => {
+    const userId = msg.from.id;
+    const wallet = linkedWallets[userId];
+    if (wallet) {
+        await bot.sendMessage(msg.chat.id, `ð Your linked wallet address is:
+\`${wallet}\``, { parse_mode: 'Markdown' });
+    } else {
+        await bot.sendMessage(msg.chat.id, `â ï¸ No wallet is linked to your account yet. Place a verified bet to link one.`);
+    }
+});
+
 
 bot.onText(/\/refresh$/, async (msg) => {
     const chatId = msg.chat.id;
@@ -239,7 +272,21 @@ bot.onText(/^\/confirm$/, async (msg) => {
                 try {
                     const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
                     if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.length > 0) {
-                        winnerPublicKey = parsedTransaction.transaction.message.accountKeys[0].pubkey;
+                        
+
+winnerPublicKey = getPayerFromTransaction(parsedTransaction, amount);
+if (!winnerPublicKey) {
+    console.warn('Could not determine the sender from the transaction.');
+    return await bot.sendMessage(chatId, `â ï¸ Payout failed: Could not determine payment sender.`);
+}
+
+const winnerAddress = winnerPublicKey.toBase58();
+if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
+    return await bot.sendMessage(chatId, `â ï¸ This wallet does not match your linked wallet. Please use your original address.`);
+}
+linkedWallets[userId] = winnerAddress;
+
+
                         console.log('Extracted winner public key:', winnerPublicKey.toBase58());
                     } else {
                         console.warn('Could not parse transaction to determine sender.');
@@ -399,7 +446,21 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
                     try {
                         const parsedTransaction = await connection.getParsedTransaction(paymentCheckResult.tx);
                         if (parsedTransaction && parsedTransaction.transaction && parsedTransaction.transaction.message && parsedTransaction.transaction.message.accountKeys && parsedTransaction.transaction.message.length > 0) {
-                            winnerPublicKey = parsedTransaction.transaction.message.accountKeys[0].pubkey;
+                            
+
+winnerPublicKey = getPayerFromTransaction(parsedTransaction, amount);
+if (!winnerPublicKey) {
+    console.warn('Could not determine the sender from the transaction.');
+    return await bot.sendMessage(chatId, `â ï¸ Payout failed: Could not determine payment sender.`);
+}
+
+const winnerAddress = winnerPublicKey.toBase58();
+if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
+    return await bot.sendMessage(chatId, `â ï¸ This wallet does not match your linked wallet. Please use your original address.`);
+}
+linkedWallets[userId] = winnerAddress;
+
+
                             console.log('Extracted winner public key:', winnerPublicKey.toBase58());
                         } else {
                             console.warn('Could not parse transaction to determine sender.');
