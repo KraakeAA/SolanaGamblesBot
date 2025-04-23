@@ -306,16 +306,4 @@ bot.onText(/\/race$/, async (msg) => {
                    `Example: \`/betrace 0.1 Blue\` to bet 0.1 SOL on Blue.\n` +
                    `Bets will be open for a short time.`;
 
-    await bot.sendMessage(chatId, raceMessage, { parse_mode: 'Markdown' });
-
-    // Optionally, set a timer to close betting after a certain period
-    setTimeout(() => {
-        if (raceSessions[raceId] && raceSessions[raceId].status === 'open') {
-            raceSessions[raceId].status = 'closed';
-            bot.sendMessage(chatId, `Betting for Race ${raceId} is now closed! The race will begin shortly...`);
-            runRace(chatId, raceId);
-        }
-    }, 60 * 1000); // Example: Close betting after 60 seconds
-});
-
-bot.onText(/\/betrace (\d+\.\d+) (\w+)/i,
+    await bot.sendMessage(chatId, raceMessage, { parse_mode
