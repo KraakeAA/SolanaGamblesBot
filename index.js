@@ -161,6 +161,43 @@ bot.on('callback_query', async (callbackQuery) => {
     await bot.answerCallbackQuery(callbackQuery);
 });
 
+bot.onText(/\/reset$/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    // Check if it's a group chat
+    if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
+        // Send a message indicating that the command is disabled in group chats.
+        await bot.sendMessage(chatId, `⚠️ The /reset command is disabled in group chats.`);
+    } else {
+        // If it's a private chat, proceed with reset
+        resetBotState(chatId); // Extract reset logic into a function
+    }
+});
+
+function resetBotState(chatId) {
+    // Clear user-specific data
+    delete coinFlipSessions[chatId];
+    delete userBets[chatId];
+    delete userRaceBets[chatId];
+
+    // Clear any active race sessions.
+    for (const raceId in raceSessions) {
+        if (raceSessions[raceId].status === 'open') {
+            delete raceSessions[raceId];
+        }
+    }
+    usedTransactions.clear();
+    // Send the /start message to reset the bot's state in the chat
+    bot.sendMessage(chatId, `Bot state has been reset.`,  {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
+                [{ text: '🏁 Start Race', callback_data: 'start_race' }]
+            ]
+        }
+    });
+}
+
 
 bot.onText(/\/coinflip$/, (msg) => {
     const userId = msg.from.id;
