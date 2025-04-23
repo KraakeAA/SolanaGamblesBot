@@ -358,7 +358,6 @@ bot.onText(/^\/confirm$/, async (msg) => {
                         console.warn('Could not determine the sender from the transaction.');
                         return await bot.sendMessage(chatId, `â ï¸ Payout failed: Could not determine payment sender.`);
                     }
-                    }
                     const winnerAddress = winnerPublicKey.toBase58();
                     if (linkedWallets[userId] && linkedWallets[userId] !== winnerAddress) {
                         return await bot.sendMessage(chatId, `â ï¸ This wallet does not match your linked wallet. Please use your original address.`);
