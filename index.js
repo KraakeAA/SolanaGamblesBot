@@ -118,14 +118,47 @@ bot.onText(/\/start$/, async (msg) => {
         caption: `Welcome to *Solana Gambles*!\n\nChoose a game to begin:`,
         parse_mode: 'Markdown',
         reply_markup: {
-            keyboard: [
-                ['🎯 /coinflip', '🏇 /race'],
-                ['🔄 /refresh']
-            ],
-            resize_keyboard: true,
-            one_time_keyboard: false
+            inline_keyboard: [
+                [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
+                [{ text: '🏁 Start Race', callback_data: 'start_race' }]
+            ]
         }
     });
+});
+
+bot.on('callback_query', async (callbackQuery) => {
+    const chatId = callbackQuery.message.chat.id;
+    const data = callbackQuery.data;
+
+    if (data === 'start_coinflip') {
+        coinFlipSessions[chatId] = true;
+        await bot.sendMessage(
+            chatId,
+            `🪙 You've started a coin flip game! Please choose an amount and heads/tails:\n\n` +
+            `/bet 0.01 heads\n/bet 0.05 tails\n\nMin: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`,
+            { parse_mode: 'Markdown' }
+        );
+    } else if (data === 'start_race') {
+        const raceId = nextRaceId++;
+        raceSessions[raceId] = {
+            horses: availableHorses,
+            bets: {},
+            status: 'open',
+            usedTransactions: new Set()
+        };
+
+        let raceMessage = `🏁 **New Race! Place your bets!** 🏁\n\n`;
+        raceSessions[raceId].horses.forEach(horse => {
+            raceMessage += `${horse.emoji} ${horse.name} (Odds: ${horse.odds.toFixed(1)}x)\n`;
+        });
+
+        raceMessage += `\nTo place your bet, use:\n\`/betrace [amount] [horse_name]\`\n` +
+            `Example: \`/betrace 0.1 Blue\``;
+
+        await bot.sendMessage(chatId, raceMessage, { parse_mode: 'Markdown' });
+    }
+    // Acknowledge the callback query to prevent the bot from seeming unresponsive.
+    await bot.answerCallbackQuery(callbackQuery);
 });
 
 
@@ -156,14 +189,12 @@ function resetBotState(chatId) {
     }
     usedTransactions.clear();
     // Send the /start message to reset the bot's state in the chat
-    bot.sendMessage(chatId, `Bot state has been reset.`,  {
+    bot.sendMessage(chatId, `Bot state has been reset.`, {
         reply_markup: {
-            keyboard: [
-                ['🎯 /coinflip', '🏇 /race'],
-                ['🔄 /refresh']
-            ],
-            resize_keyboard: true,
-            one_time_keyboard: false
+            inline_keyboard: [
+                [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
+                [{ text: '🏁 Start Race', callback_data: 'start_race' }]
+            ]
         }
     });
 }
@@ -186,13 +217,11 @@ bot.onText(/\/refresh$/, async (msg) => {
     await bot.sendAnimation(chatId, gifUrl, {
         caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- /coinflip\n- /race`,
         parse_mode: 'Markdown',
-         reply_markup: {
-            keyboard: [
-                ['🎯 /coinflip', '🏇 /race'],
-                ['🔄 /refresh']
-            ],
-            resize_keyboard: true,
-            one_time_keyboard: false
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
+                [{ text: '🏁 Start Race', callback_data: 'start_race' }]
+            ]
         }
     });
 });
@@ -469,4 +498,3 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
         await bot.sendMessage(chatId, `⚠️ An error occurred while processing the race.`);
     }
 });
-
