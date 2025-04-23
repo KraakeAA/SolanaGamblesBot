@@ -67,14 +67,15 @@ if (!fs.existsSync(LOG_PATH)) fs.writeFileSync(LOG_PATH, '[]');
 
 bot.onText(/\/start$/, async (msg) => {
     const chatId = msg.chat.id;
-    const imageUrl = 'https://i.imgur.com/GBawwOW.png'; // Use your image URL
+    const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif?cid=6c09b952c8nzwcr45gvyqv7bfp80blroxd4wt1bdtrsixwok&ep=v1_internal_gif_by_id&rid=giphy.gif&ct=g'; // Your GIF URL
 
-    await bot.sendPhoto(chatId, imageUrl, {
-        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Start Coin Flip: [Tap Here]\n- Start Race: [Coming Soon!]\n\nType /refresh to see this menu again.`,
+    await bot.sendAnimation(chatId, gifUrl, {
+        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Click to start: */start coinflip*\n- /start race (coming soon!)\n\nType /refresh to see this menu again.`,
+        parse_mode: 'Markdown', // Enable Markdown parsing
         reply_markup: {
             inline_keyboard: [
-                [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
-                [{ text: '🏁 Start Race (Coming Soon!)', callback_data: 'start_race' }]
+                [{ text: '🪙 Start Coin Flip (Button)', callback_data: 'start_coinflip' }],
+                [{ text: '🏁 Start Race (Button - Coming Soon!)', callback_data: 'start_race' }]
             ]
         }
     });
@@ -98,14 +99,15 @@ bot.onText(/\/refresh$/, (msg) => {
   bot.sendMessage(msg.chat.id, `Welcome to Solana Gambles!
 
         Available games:
-        - Start Coin Flip: [Tap Here]
-        - Start Race: [Coming Soon!]
+        - Click to start: */start coinflip*
+        - /start race (coming soon!)
 
         Type /refresh to see this menu again.`, {
+            parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
-                    [{ text: '🏁 Start Race (Coming Soon!)', callback_data: 'start_race' }]
+                    [{ text: '🪙 Start Coin Flip (Button)', callback_data: 'start_coinflip' }],
+                    [{ text: '🏁 Start Race (Button - Coming Soon!)', callback_data: 'start_race' }]
                 ]
             }
         });
