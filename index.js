@@ -302,7 +302,7 @@ bot.onText(/\/race$/, async (msg) => {
     raceSessions[raceId].horses.forEach((horse, index) => {
         raceMessage += `${horse.emoji} ${horse.name} (Odds: ${horse.odds}x)\n`;
     });
-    raceMessage += `\nTo place your bet, use the command:\n`/betrace [amount] [horse_name]\`\n\n` +
+    raceMessage += `\nTo place your bet, use the command:\n\`/betrace [amount] [horse_name]\`\n\n` +
                    `Example: \`/betrace 0.1 Blue\` to bet 0.1 SOL on Blue.\n` +
                    `Bets will be open for a short time.`;
 
@@ -328,4 +328,4 @@ bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
     const activeRaceId = Object.keys(raceSessions).pop();
 
     if (!activeRaceId || raceSessions[activeRaceId].status !== 'open') {
-        return bot.sendMessage(chatId, `⚠️
+        return bot.sendMessage(chatId, `
