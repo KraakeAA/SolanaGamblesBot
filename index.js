@@ -115,51 +115,11 @@ bot.onText(/\/start$/, async (msg) => {
     const gifUrl = 'https://media4.giphy.com/media/mrJg7yrURBntrDL804/giphy.gif';
 
     await bot.sendAnimation(chatId, gifUrl, {
-        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- Click to start: */coinflip*\n- /race\n\nType /refresh to see this menu again.`,
-        parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
-                [{ text: '🏁 Start Race', callback_data: 'start_race' }]
-            ]
-        }
+        caption: `Welcome to Solana Gambles!\n\nAvailable games:\n- /coinflip\n- /race\n\nType /refresh to see this menu again.`,
+        parse_mode: 'Markdown'
     });
 });
 
-bot.on('callback_query', async (callbackQuery) => {
-    const chatId = callbackQuery.message.chat.id;
-    const data = callbackQuery.data;
-
-    if (data === 'start_coinflip') {
-        coinFlipSessions[chatId] = true;
-        await bot.sendMessage(
-            chatId,
-            `🪙 You've started a coin flip game! Please choose an amount and heads/tails:\n\n` +
-            `/bet 0.01 heads\n/bet 0.05 tails\n\nMin: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`,
-            { parse_mode: 'Markdown' }
-        );
-    } else if (data === 'start_race') {
-        const raceId = nextRaceId++;
-        raceSessions[raceId] = {
-            horses: availableHorses,
-            bets: {},
-            status: 'open',
-            usedTransactions: new Set()
-        };
-
-        let raceMessage = `🏁 **New Race! Place your bets!** 🏁\n\n`;
-        raceSessions[raceId].horses.forEach(horse => {
-            raceMessage += `${horse.emoji} ${horse.name} (Odds: ${horse.odds.toFixed(1)}x)\n`;
-        });
-
-        raceMessage += `\nTo place your bet, use:\n\`/betrace [amount] [horse_name]\`\n` +
-            `Example: \`/betrace 0.1 Blue\``;
-
-        await bot.sendMessage(chatId, raceMessage, { parse_mode: 'Markdown' });
-    }
-    // Acknowledge the callback query
-    await bot.answerCallbackQuery(callbackQuery);
-});
 
 bot.onText(/\/reset$/, async (msg) => {
     const chatId = msg.chat.id;
@@ -188,14 +148,7 @@ function resetBotState(chatId) {
     }
     usedTransactions.clear();
     // Send the /start message to reset the bot's state in the chat
-    bot.sendMessage(chatId, `Bot state has been reset.`,  {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: '🪙 Start Coin Flip', callback_data: 'start_coinflip' }],
-                [{ text: '🏁 Start Race', callback_data: 'start_race' }]
-            ]
-        }
-    });
+    bot.sendMessage(chatId, `Bot state has been reset.`);
 }
 
 
