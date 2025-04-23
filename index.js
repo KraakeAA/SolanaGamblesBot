@@ -347,7 +347,9 @@ bot.onText(/^\/confirm$/, async (msg) => {
                     }
 
                     winnerPublicKey = getPayerFromTransaction(parsedTransaction, amount);
-                    if console.warn('Could not determine the sender from the transaction.');
+                    if (winnerPublicKey) {
+                        console.warn('Could not determine the sender from the transaction.');
+                    }
                         return await bot.sendMessage(chatId, `⚠️ Payout failed: Could not determine payment sender.`);
                     }
                     const winnerAddress = winnerPublicKey.toBase58();
