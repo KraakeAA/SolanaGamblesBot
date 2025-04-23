@@ -33,11 +33,17 @@ let nextRaceId = 1;
 const RACE_MIN_BET = 0.01;
 const RACE_MAX_BET = 1.0;
 const availableHorses = [
-    { name: 'Red', emoji: '🐎', odds: 2.5 },
-    { name: 'Blue', emoji: '💙', odds: 3.0 },
-    { name: 'Green', emoji: '💚', odds: 5.0 },
-    { name: 'Yellow', emoji: '💛', odds: 2.0 },
-    { name: 'Purple', emoji: '💜', odds: 4.0 },
+    { name: 'Yellow', emoji: '💛', odds: 1.1, winProbability: 0.25 },
+    { name: 'Orange', emoji: '🧡', odds: 2.0, winProbability: 0.20 },
+    { name: 'Blue', emoji: '💙', odds: 3.0, winProbability: 0.15 },
+    { name: 'Cyan', emoji: '🇨🇾', odds: 4.0, winProbability: 0.12 },
+    { name: 'White', emoji: '🤍', odds: 5.0, winProbability: 0.09 },
+    { name: 'Red', emoji: '❤️', odds: 6.0, winProbability: 0.07 },
+    { name: 'Black', emoji: '🖤', odds: 7.0, winProbability: 0.05 },
+    { name: 'Pink', emoji: '🩷', odds: 8.0, winProbability: 0.03 },
+    { name: 'Purple', emoji: '💜', odds: 9.0, winProbability: 0.02 },
+    { name: 'Green', emoji: '💚', odds: 10.0, winProbability: 0.01 },
+    { name: 'Silver', emoji: '🩶', odds: 15.0, winProbability: 0.01 },
 ];
 
 const userBets = {};
@@ -189,7 +195,7 @@ bot.onText(/\/race$/, async (msg) => {
 
     let raceMessage = `🏁 **New Race! Place your bets!** 🏁\n\n`;
     raceSessions[raceId].horses.forEach(horse => {
-        raceMessage += `${horse.emoji} ${horse.name} (Odds: ${horse.odds}x)\n`;
+        raceMessage += `${horse.emoji} ${horse.name} (Odds: ${horse.odds.toFixed(1)}x)\n`;
     });
 
     raceMessage += `\nTo place your bet, use:\n\`/betrace [amount] [horse_name]\`\n` +
@@ -226,7 +232,7 @@ bot.onText(/\/betrace (\d+\.\d+) (\w+)/i, async (msg, match) => {
 
     userRaceBets[userId] = { raceId, amount: betAmount, horse: horse.name };
 
-    await bot.sendMessage(chatId, `✅ Bet placed: ${betAmount} SOL on ${horse.emoji} *${horse.name}*.\nSend the amount to:\n\`${WALLET_ADDRESS}\`\nThen type /confirmrace to verify payment and start the race!`,
+    await bot.sendMessage(chatId, `✅ Bet placed: ${betAmount} SOL on ${horse.emoji} *${horse.name}* (Odds: ${horse.odds.toFixed(1)}x).\nSend the amount to:\n\`${WALLET_ADDRESS}\`\nThen type /confirmrace to verify payment and start the race!`,
         { parse_mode: 'Markdown' }
     );
 });
@@ -253,24 +259,29 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
         await bot.sendMessage(chatId, `✅ Payment verified for Race ${raceId}! The race is on! 🐎💨`);
 
         const race = raceSessions[raceId];
-        const horsesInRace = [...race.horses]; // Create a copy
+        const horsesInRace = race.horses;
 
-        // Simulate the race and generate commentary
-        let commentary = "";
-        const raceLength = 5; // Number of "stages"
+        // Weighted random selection for the winner
+        let winningHorse;
+        const randomNumber = Math.random();
+        let cumulativeProbability = 0;
 
-        for (let i = 0; i < raceLength; i++) {
-            horsesInRace.sort(() => Math.random() - 0.5);
-            const leader = horsesInRace[0];
-            commentary += `\n**Stage ${i + 1}:** ${leader.emoji} ${leader.name} is in the lead!`;
-            if (i > 0 && horsesInRace[1]) {
-                commentary += ` ${horsesInRace[1].emoji} ${horsesInRace[1].name} is close behind!`;
+        for (const contender of horsesInRace) {
+            cumulativeProbability += contender.winProbability;
+            if (randomNumber < cumulativeProbability) {
+                winningHorse = contender;
+                break;
             }
         }
 
-        const winningHorse = horsesInRace[0];
-        commentary += `\n\n🏆 **And the winner is... ${winningHorse.emoji} ${winningHorse.name}!** 🏆`;
-        await bot.sendMessage(chatId, commentary, { parse_mode: 'Markdown' });
+        // Generate basic commentary
+        await bot.sendMessage(chatId, `And they're off! The horses are neck and neck...`, { parse_mode: 'Markdown' });
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await bot.sendMessage(chatId, `${horsesInRace[Math.floor(Math.random() * horsesInRace.length)].emoji} ${horsesInRace[Math.floor(Math.random() * horsesInRace.length)].name} surges forward!`, { parse_mode: 'Markdown' });
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        await bot.sendMessage(chatId, `It's a tight finish!`, { parse_mode: 'Markdown' });
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        await bot.sendMessage(chatId, `🏆 **And the winner is... ${winningHorse.emoji} ${winningHorse.name}!** 🏆`, { parse_mode: 'Markdown' });
 
         if (horse === winningHorse.name) {
             const winningHorseData = race.horses.find(h => h.name === horse);
@@ -278,7 +289,7 @@ bot.onText(/^\/confirmrace$/, async (msg) => {
             await bot.sendMessage(chatId, `🎉 You backed the winner! You won ${payout.toFixed(4)} SOL.`);
             // Implement payout transaction here
         } else {
-            await bot.sendMessage(chatId, `Sorry, your horse ${horse} didn't win this time.`);
+            await bot.sendMessage(chatId, `Sorry, your horse ${horse} didn't win this time. Better luck next race!`);
         }
 
         delete userRaceBets[userId];
