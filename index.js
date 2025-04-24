@@ -51,33 +51,60 @@ const pool = new Pool({
 });
 console.log("PostgreSQL Pool created.");
 
-// --- Database Initialization ---
+// --- Database Initialization (Corrected Version) ---
 async function initializeDatabase() {
   console.log("Initializing Database...");
   let client;
   try {
     client = await pool.connect();
     console.log("DB client connected.");
-    // Bets table stores pending/completed bets & links via memo_id
+
+    // Step 1: Ensure the 'bets' table exists with base columns
     await client.query(`
       CREATE TABLE IF NOT EXISTS bets (
         id SERIAL PRIMARY KEY,
         user_id TEXT NOT NULL,
         chat_id TEXT NOT NULL,
-        game_type TEXT NOT NULL, -- 'coinflip', 'race'
-        bet_details JSONB,      -- { "choice": "heads" } or { "horse": "Blue", "odds": 3.0 }
+        game_type TEXT NOT NULL,
+        bet_details JSONB,
         expected_lamports BIGINT NOT NULL,
-        memo_id TEXT UNIQUE NOT NULL, -- Ensure memos are unique
-        status TEXT NOT NULL,    -- 'awaiting_payment', 'payment_verified', 'processing_game', 'completed_win_paid', 'completed_win_payout_failed', 'completed_loss', 'expired', 'error_payment_mismatch', 'error_unknown_game', 'error_processing_exception', 'error_payout_no_wallet', 'error_payout_failed', 'error_payout_exception', 'error_payout_config'
+        memo_id TEXT UNIQUE NOT NULL,
+        status TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        expires_at TIMESTAMPTZ NOT NULL,
-        paid_tx_signature TEXT UNIQUE, -- Store the signature that paid this bet
-        payout_tx_signature TEXT UNIQUE -- Store the payout signature if successful
+        expires_at TIMESTAMPTZ NOT NULL
+        -- Missing columns will be added below if they don't exist
       );
     `);
-    console.log("✅ Database table 'bets' checked/created successfully.");
+    console.log("✅ Base 'bets' table structure checked/created.");
 
-    // Wallets table to link user_id to their Solana wallet address
+    // Step 2: Check for and add the specific columns if they are missing
+    const columnsToAdd = [
+        { name: 'paid_tx_signature', type: 'TEXT UNIQUE' },
+        { name: 'payout_tx_signature', type: 'TEXT UNIQUE' }
+    ];
+
+    for (const col of columnsToAdd) {
+         // Query to check if the column exists in the 'bets' table
+         const checkColumnQuery = `
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'bets' AND column_name = $1;
+         `;
+         const colExistsResult = await client.query(checkColumnQuery, [col.name]);
+
+         if (colExistsResult.rowCount === 0) {
+             // Column is missing, so add it
+             const addColumnQuery = `ALTER TABLE public.bets ADD COLUMN ${col.name} ${col.type};`; // Use public schema qualifier just in case
+             await client.query(addColumnQuery);
+             console.log(`✅ Added missing column '${col.name}' to 'bets' table.`);
+         } else {
+             // Optional: Log that column already exists if needed for debugging
+             // console.log(`ℹ️ Column '${col.name}' already exists in 'bets' table.`);
+         }
+    }
+    console.log("✅ All required columns in 'bets' table verified/added.");
+
+    // Step 3: Ensure the 'wallets' table exists
     await client.query(`
         CREATE TABLE IF NOT EXISTS wallets (
             user_id TEXT PRIMARY KEY,
@@ -85,11 +112,11 @@ async function initializeDatabase() {
             linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
     `);
-     console.log("✅ Database table 'wallets' checked/created successfully.");
+    console.log("✅ Database table 'wallets' checked/created successfully.");
 
   } catch (err) {
     console.error("❌ Error initializing database tables:", err);
-    throw err; // Re-throw to be caught by startServer
+    throw err; // Re-throw error to be caught by startServer
   } finally {
     if (client) {
       client.release();
@@ -310,13 +337,12 @@ async function savePendingBet(userId, chatId, gameType, details, lamports, memoI
 }
 
 async function findBetByMemo(memoId) {
-   const query = 'SELECT * FROM bets WHERE memo_id = $1 AND status = $2';
+   // Finds a bet that is awaiting payment and matches the memo
+   const query = `SELECT * FROM bets WHERE memo_id = $1 AND status = 'awaiting_payment'`;
    try {
-       const res = await pool.query(query, [memoId, 'awaiting_payment']);
-       if (res.rowCount > 0) {
-            // console.log(`DB: Found pending bet ID ${res.rows[0].id} for memo ${memoId}`); // Reduce log noise
-       }
-       return res.rows[0]; // Returns the first matching row (or undefined)
+       const res = await pool.query(query, [memoId]);
+       // Do not log here to reduce noise, log in monitor if found
+       return res.rows[0];
    } catch (err) {
        console.error(`DB Error: Error finding bet by memo ${memoId}:`, err);
        return undefined;
@@ -324,14 +350,14 @@ async function findBetByMemo(memoId) {
 }
 
 async function findPendingBets() {
-    // Find bets awaiting payment that haven't expired yet
+    // This function isn't strictly needed by the current monitor logic but could be useful
     const query = `SELECT * FROM bets WHERE status = 'awaiting_payment' AND expires_at > NOW()`;
     try {
         const res = await pool.query(query);
         return res.rows;
     } catch(err) {
         console.error(`DB Error: Error finding pending bets:`, err);
-        return []; // Return empty array on error
+        return [];
     }
 }
 
@@ -339,7 +365,11 @@ async function updateBetStatus(betId, newStatus) {
    const query = 'UPDATE bets SET status = $1 WHERE id = $2';
    try {
        const res = await pool.query(query, [newStatus, betId]);
-       console.log(`DB: Updated bet ${betId} status to ${newStatus}. Rows affected: ${res.rowCount}`);
+       if (res.rowCount > 0) {
+            console.log(`DB: Updated bet ${betId} status to ${newStatus}.`);
+       } else {
+            console.warn(`DB Warning: Attempted to update status for bet ${betId} to ${newStatus}, but no row was affected (check ID and current status?).`);
+       }
        return { success: res.rowCount > 0 };
    } catch (err) {
        console.error(`DB Error: Error updating bet ${betId} status to ${newStatus}:`, err);
@@ -349,46 +379,35 @@ async function updateBetStatus(betId, newStatus) {
 
 // Function to record the transaction that paid the bet
 async function markBetPaid(betId, txSignature) {
-    // Update status and store the paying transaction signature
-    // Ensure status is still 'awaiting_payment' to prevent race conditions
     const query = `
         UPDATE bets
         SET status = $1, paid_tx_signature = $2
-        WHERE id = $3 AND status = $4`;
+        WHERE id = $3 AND status = $4`; // Only update if status is awaiting_payment
     try {
         const res = await pool.query(query, ['payment_verified', txSignature, betId, 'awaiting_payment']);
         console.log(`DB: Marked bet ${betId} as paid by tx ${txSignature}. Rows affected: ${res.rowCount}`);
-        // Check rowCount to ensure the status was actually 'awaiting_payment' before update
         return { success: res.rowCount > 0 };
     } catch (err) {
         console.error(`DB Error: Error marking bet ${betId} as paid:`, err);
-        // Handle potential unique constraint violation on paid_tx_signature
-        if (err.code === '23505' && err.constraint === 'bets_paid_tx_signature_key') {
-            console.warn(`DB Warning: Transaction ${txSignature} may already be associated with another bet.`);
-            return { success: false, error: 'Transaction signature already used.' };
+        if (err.code === '23505') { // Catch unique constraint violations generally
+            console.warn(`DB Warning: Constraint violation when marking bet ${betId} paid by ${txSignature}. Signature might already exist.`);
+            return { success: false, error: 'Transaction signature already used or another constraint failed.' };
         }
         return { success: false, error: err.message };
     }
 }
 
-
 // Function to link wallet or update link time
 async function linkUserWallet(userId, walletAddress) {
-    // Check if address is valid before inserting
     try {
         new PublicKey(walletAddress); // Validate address format
     } catch(e) {
         console.error(`DB Error: Invalid wallet address format for user ${userId}: ${walletAddress}`);
         return { success: false, error: 'Invalid wallet address format.' };
     }
-
     const query = `
-        INSERT INTO wallets (user_id, wallet_address, linked_at)
-        VALUES ($1, $2, NOW())
-        ON CONFLICT (user_id) DO UPDATE SET
-            wallet_address = EXCLUDED.wallet_address,
-            linked_at = NOW();
-    `;
+        INSERT INTO wallets (user_id, wallet_address, linked_at) VALUES ($1, $2, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET wallet_address = EXCLUDED.wallet_address, linked_at = NOW();`;
      try {
         await pool.query(query, [String(userId), walletAddress]);
         console.log(`DB: Linked/Updated wallet for user ${userId} to ${walletAddress}`);
@@ -404,7 +423,7 @@ async function getLinkedWallet(userId) {
      const query = 'SELECT wallet_address FROM wallets WHERE user_id = $1';
      try {
         const res = await pool.query(query, [String(userId)]);
-        return res.rows[0]?.wallet_address; // Return address or undefined
+        return res.rows[0]?.wallet_address;
     } catch (err) {
         console.error(`DB Error: Error fetching wallet for user ${userId}:`, err);
         return undefined;
@@ -413,26 +432,21 @@ async function getLinkedWallet(userId) {
 
 // Function to record payout tx
 async function recordPayout(betId, newStatus, payoutSignature) {
-    // Update status and store the payout transaction signature
     const query = `
-        UPDATE bets
-        SET status = $1, payout_tx_signature = $2
-        WHERE id = $3`;
+        UPDATE bets SET status = $1, payout_tx_signature = $2 WHERE id = $3`;
      try {
         const res = await pool.query(query, [newStatus, payoutSignature, betId]);
         console.log(`DB: Recorded payout tx ${payoutSignature} for bet ${betId} with status ${newStatus}. Rows affected: ${res.rowCount}`);
         return { success: res.rowCount > 0 };
     } catch (err) {
         console.error(`DB Error: Error recording payout for bet ${betId}:`, err);
-        // Handle potential unique constraint violation on payout_tx_signature if added
         return { success: false, error: err.message };
     }
 }
 
 
 // --- Payment Monitoring Logic ---
-// Store last processed signature for each wallet to avoid re-checking history
-let lastProcessedSignature = { main: null, race: null }; // Resets on restart
+let lastProcessedSignatures = {}; // Store last processed signatures IN MEMORY (clears on restart)
 let isMonitorRunning = false;
 
 async function monitorPayments() {
@@ -450,51 +464,69 @@ async function monitorPayments() {
             const targetAddress = wallet.address;
             const targetPubKey = new PublicKey(targetAddress);
             let signatures = [];
-            let fetchOptions = { limit: 50 }; // Fetch a reasonable batch
-            // Using 'until' is problematic, so we fetch recent and check against DB
-            // if (lastProcessedSignature[wallet.type]) { fetchOptions.until = lastProcessedSignature[wallet.type]; }
+            // Fetch recent transactions
+            let fetchOptions = { limit: 25 }; // Fetch a smaller batch more frequently maybe?
 
             try {
                 signatures = await connection.getSignaturesForAddress(targetPubKey, fetchOptions);
             } catch (rpcError) {
-                console.error(`Monitor Error: RPC error fetching signatures for ${targetAddress}:`, rpcError.message);
+                if (rpcError.message.includes('429')) {
+                    console.warn(`Monitor Warn: RPC rate limit hit for ${targetAddress}. Skipping cycle.`);
+                } else {
+                    console.error(`Monitor Error: RPC error fetching signatures for ${targetAddress}:`, rpcError.message);
+                }
                 continue;
             }
 
             if (!signatures || signatures.length === 0) continue;
 
-            // Optional: Store the latest signature signature[0].signature to potentially optimize next run,
-            // but checking DB is safer against missed transactions.
-
-            for (let i = signatures.length - 1; i >= 0; i--) { // Process oldest first
+            // Process oldest fetched first towards newest
+            for (let i = signatures.length - 1; i >= 0; i--) {
                 const signature = signatures[i].signature;
 
-                // OPTIMIZATION: Check if we've already processed this TX based on DB
-                const checkProcessedQuery = 'SELECT id FROM bets WHERE paid_tx_signature = $1 OR payout_tx_signature = $1';
+                // Simple in-memory check to avoid reprocessing in *this current run*
+                if (lastProcessedSignatures[signature]) continue;
+
+                // Check DB if this TX has already paid a bet
+                const checkProcessedQuery = 'SELECT id FROM bets WHERE paid_tx_signature = $1';
                 const processedResult = await pool.query(checkProcessedQuery, [signature]);
                 if (processedResult.rowCount > 0) {
-                    // console.log(`Monitor: Skipping ${signature}, already processed.`);
+                    lastProcessedSignatures[signature] = true; // Mark as seen in this run
                     continue;
                 }
 
                 let tx;
                 try {
                     tx = await connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0 });
-                    if (!tx || tx.meta?.err) continue;
+                    if (!tx || tx.meta?.err) {
+                        lastProcessedSignatures[signature] = true; // Mark failed/unparseable tx as seen
+                        continue;
+                    }
                 } catch (fetchErr) {
                     console.error(`Monitor Error: Failed fetch for tx ${signature}:`, fetchErr.message);
-                    continue;
+                    continue; // Skip this signature on error
                 }
 
                 const memo = findMemoInTx(tx);
-                if (!memo) continue;
-                console.log(`Monitor: Found memo "${memo}" in transaction ${signature}`);
+                if (!memo) {
+                    lastProcessedSignatures[signature] = true; // Mark no-memo tx as seen
+                    continue;
+                }
+                // Log only if memo might be relevant based on prefix?
+                if (memo.startsWith('CF') || memo.startsWith('RA') || memo.startsWith('BET')) {
+                    console.log(`Monitor: Found memo "${memo}" in transaction ${signature}`);
+                }
 
-                const bet = await findBetByMemo(memo);
-                if (!bet) continue; // No matching *pending* bet
+                const bet = await findBetByMemo(memo); // Checks for memo AND status='awaiting_payment'
+                if (!bet) {
+                    lastProcessedSignatures[signature] = true; // Mark as seen, no matching bet found
+                    continue;
+                }
 
+                // Check game type vs wallet
                 if (bet.game_type !== wallet.game) {
                     console.warn(`Monitor: Memo ${memo} found in ${wallet.type} wallet, bet is ${bet.game_type}. Skipping.`);
+                    lastProcessedSignatures[signature] = true; // Mark as seen
                     continue;
                 }
 
@@ -507,7 +539,7 @@ async function monitorPayments() {
                      for (const inst of instructions) {
                          let programId = '';
                          if (inst.programIdIndex !== undefined && tx.transaction.message.accountKeys) {
-                             const keyInfo = tx.transaction.message.accountKeys[inst.programIdIndex];
+                              const keyInfo = tx.transaction.message.accountKeys[inst.programIdIndex];
                               if(keyInfo?.pubkey) programId = keyInfo.pubkey.toBase58();
                               else if (typeof keyInfo === 'string') programId = new PublicKey(keyInfo).toBase58();
                          } else if (inst.programId) { programId = inst.programId.toBase58 ? inst.programId.toBase58() : inst.programId.toString(); }
@@ -515,18 +547,18 @@ async function monitorPayments() {
                          if (programId === SYSTEM_PROGRAM_ID && inst.parsed?.type === 'transfer') {
                               const transferInfo = inst.parsed.info;
                               if (transferInfo.destination === targetAddress) {
-                                   transferAmount = parseInt(transferInfo.lamports || transferInfo.amount || 0, 10);
-                                   payerAddress = transferInfo.source;
-                                   console.log(`Monitor: Found transfer of ${transferAmount} lamports from ${payerAddress} to ${targetAddress} in tx ${signature}`);
-                                   break;
+                                   transferAmount += parseInt(transferInfo.lamports || transferInfo.amount || 0, 10); // Sum up transfers to target
+                                   if (!payerAddress) payerAddress = transferInfo.source; // Capture first payer
                               }
                          }
                      }
+                     if(payerAddress) console.log(`Monitor: Found total transfer of ${transferAmount} lamports to ${targetAddress} in tx ${signature}. Payer: ${payerAddress}`);
                 }
                 const lamportTolerance = 5000;
                 if (Math.abs(transferAmount - bet.expected_lamports) > lamportTolerance) {
                     console.warn(`Monitor: Amount mismatch memo ${memo}. Expected ${bet.expected_lamports}, Got ${transferAmount}.`);
                     await updateBetStatus(bet.id, 'error_payment_mismatch');
+                    lastProcessedSignatures[signature] = true; // Mark as seen/processed
                     continue;
                 }
 
@@ -535,6 +567,7 @@ async function monitorPayments() {
                 if (txTime > new Date(bet.expires_at)) {
                     console.warn(`Monitor: Payment memo ${memo} (Tx: ${signature}) expired.`);
                     await updateBetStatus(bet.id, 'error_payment_expired');
+                    lastProcessedSignatures[signature] = true; // Mark as seen/processed
                     continue;
                 }
 
@@ -544,12 +577,15 @@ async function monitorPayments() {
                 const markResult = await markBetPaid(bet.id, signature);
                 if (!markResult.success) {
                     console.warn(`Monitor: Failed to mark bet ${bet.id} paid by ${signature}. Error: ${markResult.error}. Already processed?`);
-                    continue; // Skip if failed (race condition, etc)
+                    lastProcessedSignatures[signature] = true; // Mark as seen/processed
+                    continue;
                 }
 
                 // Link wallet
                 if (payerAddress) { await linkUserWallet(bet.user_id, payerAddress); }
-                else { const pKey = getPayerFromTransaction(tx); if (pKey) await linkUserWallet(bet.user_id, pKey.toBase58()); }
+                else { const pKey = getPayerFromTransaction(tx); if (pKey) await linkUserWallet(bet.user_id, pKey.toBase58()); else console.warn(`Monitor: Could not determine payer for bet ${bet.id} to link wallet.`);}
+
+                lastProcessedSignatures[signature] = true; // Mark as processed successfully
 
                 // Trigger game processing (async)
                 processPaidBet(bet).catch(e => {
@@ -568,8 +604,10 @@ const monitorIntervalSeconds = 30;
 console.log(`ℹ️ Starting payment monitor. Interval: ${monitorIntervalSeconds} seconds.`);
 const monitorInterval = setInterval(monitorPayments, monitorIntervalSeconds * 1000);
 
+
 // --- Bot Command Handlers ---
-// Using try/catch within handlers for better error isolation
+// Wrapped in try/catch for basic error handling
+
 bot.onText(/\/start$/, async (msg) => {
     try {
         const chatId = msg.chat.id;
@@ -590,7 +628,7 @@ bot.onText(/\/reset$/, async (msg) => {
     } catch (error) { console.error("Error in /reset handler:", error); }
 });
 
-bot.onText(/\/coinflip$/, async (msg) => { // Added async and try/catch
+bot.onText(/\/coinflip$/, async (msg) => {
     try {
         const helpMessage = `🪙 Coinflip! Choose amount and side:\n\n` + `\`/bet amount heads\`\n` + `\`/bet amount tails\`\n\n` + `Min: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`;
         await bot.sendMessage( msg.chat.id, helpMessage, { parse_mode: 'Markdown' } );
@@ -619,9 +657,9 @@ bot.onText(/\/refresh$/, async (msg) => {
 
 // /bet command (Coinflip)
 bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
+    const userId = msg.from.id; // Define userId here
+    const chatId = msg.chat.id; // Define chatId here
     try {
-        const userId = msg.from.id;
-        const chatId = msg.chat.id;
         const betAmount = parseFloat(match[1]);
         const userChoice = match[2].toLowerCase();
 
@@ -651,8 +689,8 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
             { parse_mode: 'Markdown' }
         );
     } catch (error) {
-        console.error(`Error in /bet handler for user ${msg.from.id}:`, error);
-        await bot.sendMessage(msg.chat.id, `⚠️ An error occurred registering your bet. ${error.message === 'Memo ID collision occurred.' ? 'Please try again in a moment.' : 'Please try again later.'}`);
+        console.error(`Error in /bet handler for user ${userId}:`, error); // Use userId here
+        await bot.sendMessage(chatId, `⚠️ An error occurred registering your bet. ${error.message === 'Memo ID collision occurred.' ? 'Please try again in a moment.' : 'Please try again later.'}`);
     }
 });
 
@@ -660,7 +698,7 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
 bot.onText(/\/race$/, async (msg) => {
     try {
         const chatId = msg.chat.id;
-        const horses = [ /* ... horse data as before ... */ { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: '🔵', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: '🔷', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: '⚪', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: '🔴', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: '⚫', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: '🌸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: '🟢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 }, ];
+        const horses = [ { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: '🔵', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: '🔷', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: '⚪', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: '🔴', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: '⚫', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: '🌸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: '🟢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 }, ];
         let raceMessage = `🏇 Race! Place your bets!\n\n`;
         horses.forEach(horse => { raceMessage += `${horse.emoji} *${horse.name}* (Odds: ${horse.odds.toFixed(1)}x)\n`; });
         raceMessage += `\nUse:\n\`/betrace [amount] [horse_name]\`\n` + `Min: ${RACE_MIN_BET} SOL | Max: ${RACE_MAX_BET} SOL`;
@@ -670,12 +708,12 @@ bot.onText(/\/race$/, async (msg) => {
 
 // /betrace command
 bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
+     const userId = msg.from.id; // Define userId here
+     const chatId = msg.chat.id; // Define chatId here
      try {
-        const chatId = msg.chat.id;
-        const userId = msg.from.id;
         const betAmount = parseFloat(match[1]);
         const chosenHorseName = match[2];
-        const horses = [ /* ... horse data as before ... */ { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: '🔵', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: '🔷', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: '⚪', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: '🔴', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: '⚫', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: '🌸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: '🟢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 }, ];
+        const horses = [ { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: '🔵', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: '🔷', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: '⚪', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: '🔴', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: '⚫', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: '🌸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: '🟢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 }, ];
         const horse = horses.find(h => h.name.toLowerCase() === chosenHorseName.toLowerCase());
 
         if (!horse) { return bot.sendMessage(chatId, `⚠️ Invalid horse name. Options:\n` + horses.map(h => `${h.emoji} ${h.name}`).join('\n')); }
@@ -701,8 +739,8 @@ bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
             { parse_mode: 'Markdown' }
         );
     } catch (error) {
-        console.error(`Error in /betrace handler for user ${msg.from.id}:`, error);
-        await bot.sendMessage(msg.chat.id, `⚠️ An error occurred registering your bet. ${error.message === 'Memo ID collision occurred.' ? 'Please try again in a moment.' : 'Please try again later.'}`);
+        console.error(`Error in /betrace handler for user ${userId}:`, error); // Use userId here
+        await bot.sendMessage(chatId, `⚠️ An error occurred registering your bet. ${error.message === 'Memo ID collision occurred.' ? 'Please try again in a moment.' : 'Please try again later.'}`);
     }
 });
 
@@ -738,6 +776,7 @@ async function processPaidBet(bet) {
         }
     } catch (gameError) {
          console.error(`Error during game logic execution for bet ${bet.id}:`, gameError);
+         // Try to mark the bet as having an error during processing
          await updateBetStatus(bet.id, 'error_processing_exception');
     }
 }
@@ -747,6 +786,9 @@ async function handleCoinflipGame(bet) {
     const { id: betId, user_id, chat_id, bet_details, expected_lamports } = bet;
     const choice = bet_details.choice;
 
+    // Coinflip Logic (Simple 50/50) - Add house edge back if desired
+    // const amount = expected_lamports / LAMPORTS_PER_SOL;
+    // const houseEdge = getHouseEdge(amount); // Define getHouseEdge function if using
     const result = Math.random() < 0.5 ? 'heads' : 'tails';
     const win = (result === choice);
     const payoutLamports = win ? expected_lamports * 2 : 0; // 2x payout
@@ -832,14 +874,14 @@ async function handleRaceGame(bet) {
 
         if (!winnerAddress) {
              console.error(`Bet ${betId}: Cannot find winner address for race payout!`);
-              await bot.sendMessage(chat_id, `🎉 Congratulations, ${displayName}! Your horse *${horseName}* won!\nPayout: ${(payoutLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL\n⚠️ Payout failed: Could not determine your linked wallet address.`, { parse_mode: 'Markdown'});
+              await bot.sendMessage(chatId, `🎉 Congratulations, ${displayName}! Your horse *${horseName}* won!\nPayout: ${(payoutLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL\n⚠️ Payout failed: Could not determine your linked wallet address.`, { parse_mode: 'Markdown'});
               await updateBetStatus(betId, 'error_payout_no_wallet');
               return;
         }
 
          try {
              const winnerPublicKey = new PublicKey(winnerAddress);
-             await bot.sendMessage(chat_id, `🎉 Congratulations, ${displayName}! Your horse *${horseName}* won!\nPayout: ${(payoutLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL\n\n💸 Attempting payout...`, {parse_mode: 'Markdown'});
+             await bot.sendMessage(chatId, `🎉 Congratulations, ${displayName}! Your horse *${horseName}* won!\nPayout: ${(payoutLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL\n\n💸 Attempting payout...`, {parse_mode: 'Markdown'});
              const sendResult = await sendSol(connection, payerPrivateKey, winnerPublicKey, payoutLamports);
 
              if (sendResult.success) {
