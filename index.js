@@ -726,7 +726,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
                     }
                 ),
                 new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Transaction timeout')), 30000)
+                    setTimeout(() => reject(new Error('Transaction timeout')), 30000);
             ]);
 
             console.log(`✅ Sent ${(Number(transferAmount)/LAMPORTS_PER_SOL).toFixed(6)} SOL`);
