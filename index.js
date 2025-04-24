@@ -137,6 +137,12 @@ async function initializeDatabase() {
             );
         `);
         
+        // Add this to ensure the column exists if table already existed
+        await client.query(`
+            ALTER TABLE bets 
+            ADD COLUMN IF NOT EXISTS priority INT DEFAULT 0;
+        `);
+        
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
                 user_id TEXT PRIMARY KEY,
