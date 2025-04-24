@@ -21,7 +21,7 @@ REQUIRED_ENV_VARS.forEach((key) => {
         if (key === 'RAILWAY_PUBLIC_DOMAIN' && !process.env.RAILWAY_ENVIRONMENT) {
              // It's ok if this is missing locally
         } else {
-            console.error(`❌ Environment variable ${key} is missing.`);
+            console.error(`â Environment variable ${key} is missing.`);
             missingVars = true;
         }
     }
@@ -65,14 +65,14 @@ async function initializeDatabase() {
   try {
     client = await pool.connect(); console.log("DB client connected.");
     await client.query(`CREATE TABLE IF NOT EXISTS bets ( id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, chat_id TEXT NOT NULL, game_type TEXT NOT NULL, bet_details JSONB, expected_lamports BIGINT NOT NULL, memo_id TEXT UNIQUE NOT NULL, status TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), expires_at TIMESTAMPTZ NOT NULL, paid_tx_signature TEXT UNIQUE, payout_tx_signature TEXT UNIQUE );`);
-    console.log("✅ Base 'bets' table structure checked/created.");
+    console.log("â Base 'bets' table structure checked/created.");
     const columnsToAdd = [ { name: 'paid_tx_signature', type: 'TEXT UNIQUE' }, { name: 'payout_tx_signature', type: 'TEXT UNIQUE' } ];
-    for (const col of columnsToAdd) { const checkColumnQuery = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'bets' AND column_name = $1;`; const colExistsResult = await client.query(checkColumnQuery, [col.name]); if (colExistsResult.rowCount === 0) { const addColumnQuery = `ALTER TABLE public.bets ADD COLUMN ${col.name} ${col.type};`; await client.query(addColumnQuery); console.log(`✅ Added missing column '${col.name}' to 'bets' table.`); } }
-    console.log("✅ All required columns in 'bets' table verified/added.");
+    for (const col of columnsToAdd) { const checkColumnQuery = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'bets' AND column_name = $1;`; const colExistsResult = await client.query(checkColumnQuery, [col.name]); if (colExistsResult.rowCount === 0) { const addColumnQuery = `ALTER TABLE public.bets ADD COLUMN ${col.name} ${col.type};`; await client.query(addColumnQuery); console.log(`â Added missing column '${col.name}' to 'bets' table.`); } }
+    console.log("â All required columns in 'bets' table verified/added.");
     await client.query(`CREATE TABLE IF NOT EXISTS wallets ( user_id TEXT PRIMARY KEY, wallet_address TEXT NOT NULL, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW() );`);
-    console.log("✅ Database table 'wallets' checked/created successfully.");
-  } catch (err) { console.error("❌ Error initializing database tables:", err); throw err;
-  } finally { if (client) { client.release(); console.log("ℹ️ Database client released after initialization check."); } }
+    console.log("â Database table 'wallets' checked/created successfully.");
+  } catch (err) { console.error("â Error initializing database tables:", err); throw err;
+  } finally { if (client) { client.release(); console.log("â¹ï¸ Database client released after initialization check."); } }
 }
 // --- End PostgreSQL Setup ---
 
@@ -124,7 +124,7 @@ const MIN_BET = 0.01; const MAX_BET = 1.0; const RACE_MIN_BET = 0.01; const RACE
 function generateMemoId(prefix = 'BET') { return prefix + randomBytes(6).toString('hex').toUpperCase(); }
 function findMemoInTx(tx) { if (!tx?.transaction?.message?.instructions) return null; try { const MEMO_PROGRAM_ID = 'Memo1UhkJRfHyvLMcVuc6beZNRYqUP2VZwW'; for (const instruction of tx.transaction.message.instructions) { let programId = ''; if (instruction.programIdIndex !== undefined && tx.transaction.message.accountKeys) { const keyInfo = tx.transaction.message.accountKeys[instruction.programIdIndex]; if (keyInfo?.pubkey) programId = keyInfo.pubkey.toBase58(); else if (typeof keyInfo === 'string') programId = new PublicKey(keyInfo).toBase58(); } else if (instruction.programId) { programId = instruction.programId.toBase58 ? instruction.programId.toBase58() : instruction.programId.toString(); } if (programId === MEMO_PROGRAM_ID && instruction.data) return bs58.decode(instruction.data).toString('utf-8'); } } catch (e) { console.error("Error parsing memo:", e); } return null; }
 function getPayerFromTransaction(tx) { if (!tx || !tx.meta || !tx.transaction?.message?.accountKeys) return null; const message = tx.transaction.message; const preBalances = tx.meta.preBalances; const postBalances = tx.meta.postBalances; if (message.accountKeys.length > 0 && message.accountKeys[0]?.signer) { let firstSignerKey; if (message.accountKeys[0].pubkey) firstSignerKey = message.accountKeys[0].pubkey; else if (typeof message.accountKeys[0] === 'string') firstSignerKey = new PublicKey(message.accountKeys[0]); else console.warn("Could not derive PublicKey from first signer."); if (firstSignerKey) { const balanceDiff = (preBalances[0] ?? 0) - (postBalances[0] ?? 0); if (balanceDiff > 0) { /* console.log(`getPayer: Identified payer as first signer: ${firstSignerKey.toBase58()}`); */ return firstSignerKey; } else console.warn(`getPayer: First signer ${firstSignerKey.toBase58()} had non-positive balance change.`); } } for (let i = 0; i < message.accountKeys.length; i++) { if (i >= preBalances.length || i >= postBalances.length) continue; if (message.accountKeys[i]?.signer) { let key; if (message.accountKeys[i].pubkey) key = message.accountKeys[i].pubkey; else if (typeof message.accountKeys[i] === 'string') key = new PublicKey(message.accountKeys[i]); else continue; const balanceDiff = (preBalances[i] ?? 0) - (postBalances[i] ?? 0); if (balanceDiff > 0) { /* console.log(`getPayer: Identified payer via fallback: ${key.toBase58()}`); */ return key; } } } console.error("getPayer: Could not determine payer."); return null; }
-async function sendSol(connection, payerPrivateKey, recipientPublicKey, amountLamports) { const maxRetries = 3; let lastError = null; const recipientPubKey = (typeof recipientPublicKey === 'string') ? new PublicKey(recipientPublicKey) : recipientPublicKey; const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL; for (let retryCount = 0; retryCount < maxRetries; retryCount++) { try { const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey)); const latestBlockhash = await connection.getLatestBlockhash(); const transaction = new Transaction({ recentBlockhash: latestBlockhash.blockhash, feePayer: payerWallet.publicKey }).add( SystemProgram.transfer({ fromPubkey: payerWallet.publicKey, toPubkey: recipientPubKey, lamports: BigInt(amountLamports) }) ).add( ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }) ).add( ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1000 }) ); const signature = await sendAndConfirmTransaction( connection, transaction, [payerWallet], { commitment: 'confirmed', skipPreflight: false } ); console.log(`✅ Sent ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()}. Sig: ${signature}`); return { success: true, signature }; } catch (error) { console.error(`❌ Error sending ${amountSOL.toFixed(6)} SOL (attempt ${retryCount + 1}/${maxRetries}):`, error); lastError = error; if (error.message.includes('blockhash') || error.message.includes('Blockhash not found') || error.message.includes('timeout')) { await new Promise(resolve => setTimeout(resolve, 1500 * (retryCount + 1))); } else { break; } } } console.error(`❌ Failed send ${amountSOL.toFixed(6)} SOL after ${maxRetries} retries.`); return { success: false, error: lastError ? lastError.message : 'Max retries exceeded' }; }
+async function sendSol(connection, payerPrivateKey, recipientPublicKey, amountLamports) { const maxRetries = 3; let lastError = null; const recipientPubKey = (typeof recipientPublicKey === 'string') ? new PublicKey(recipientPublicKey) : recipientPublicKey; const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL; for (let retryCount = 0; retryCount < maxRetries; retryCount++) { try { const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey)); const latestBlockhash = await connection.getLatestBlockhash(); const transaction = new Transaction({ recentBlockhash: latestBlockhash.blockhash, feePayer: payerWallet.publicKey }).add( SystemProgram.transfer({ fromPubkey: payerWallet.publicKey, toPubkey: recipientPubKey, lamports: BigInt(amountLamports) }) ).add( ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }) ).add( ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1000 }) ); const signature = await sendAndConfirmTransaction( connection, transaction, [payerWallet], { commitment: 'confirmed', skipPreflight: false } ); console.log(`â Sent ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()}. Sig: ${signature}`); return { success: true, signature }; } catch (error) { console.error(`â Error sending ${amountSOL.toFixed(6)} SOL (attempt ${retryCount + 1}/${maxRetries}):`, error); lastError = error; if (error.message.includes('blockhash') || error.message.includes('Blockhash not found') || error.message.includes('timeout')) { await new Promise(resolve => setTimeout(resolve, 1500 * (retryCount + 1))); } else { break; } } } console.error(`â Failed send ${amountSOL.toFixed(6)} SOL after ${maxRetries} retries.`); return { success: false, error: lastError ? lastError.message : 'Max retries exceeded' }; }
 
 // --- Database Interaction Functions ---
 async function savePendingBet(userId, chatId, gameType, details, lamports, memoId, expiresAt) { const query = ` INSERT INTO bets (user_id, chat_id, game_type, bet_details, expected_lamports, memo_id, status, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id; `; const values = [ String(userId), String(chatId), gameType, details, BigInt(lamports), memoId, 'awaiting_payment', expiresAt ]; try { const res = await pool.query(query, values); console.log(`DB: Saved bet ${res.rows[0].id} user ${userId} memo ${memoId}`); return { success: true, id: res.rows[0].id }; } catch (err) { console.error(`DB Error save bet ${userId}:`, err); if (err.code === '23505') return { success: false, error: 'Memo ID collision.' }; return { success: false, error: err.message }; } }
@@ -292,7 +292,7 @@ async function monitorPayments() {
                 }
 
                 // --- Payment Verified ---
-                console.log(`✅ Monitor: Payment VERIFIED for bet ID ${bet.id} (memo: ${memo}, tx: ${signature})`);
+                console.log(`â Monitor: Payment VERIFIED for bet ID ${bet.id} (memo: ${memo}, tx: ${signature})`);
 
                 // Mark bet as paid IN DATABASE (this prevents reprocessing the same bet/tx)
                 // Pass the current signature as the one that paid
@@ -323,13 +323,13 @@ async function monitorPayments() {
             } // End signature loop
         } // End wallet loop
     } catch (error) {
-        console.error("❌ Monitor Error: Unexpected error in monitor cycle:", error);
+        console.error("â Monitor Error: Unexpected error in monitor cycle:", error);
     } finally {
         isMonitorRunning = false; // Allow next run
     }
 }
 const monitorIntervalSeconds = 30;
-console.log(`ℹ️ Setting up payment monitor interval. Interval: ${monitorIntervalSeconds} seconds.`);
+console.log(`â¹ï¸ Setting up payment monitor interval. Interval: ${monitorIntervalSeconds} seconds.`);
 let monitorInterval = null; // Define variable to hold interval ID
 // --- End Payment Monitor ---
 
@@ -364,7 +364,7 @@ bot.onText(/\/start$/, async (msg) => {
     try {
         const chatId = msg.chat.id;
         const imageUrl = 'https://i.ibb.co/9vDo58q/banner.gif'; // Example static URL
-        await bot.sendAnimation(chatId, imageUrl, { caption: `🎰 Welcome to *Solana Gambles*!\n\nUse /coinflip or /race to start.\nUse /wallet to see linked wallet.`, parse_mode: 'Markdown' });
+        await bot.sendAnimation(chatId, imageUrl, { caption: `ð° Welcome to *Solana Gambles*!\n\nUse /coinflip or /race to start.\nUse /wallet to see linked wallet.`, parse_mode: 'Markdown' });
     } catch (error) {
         console.error("Error in /start handler:", error);
         // Fallback message if animation fails
@@ -379,12 +379,12 @@ bot.onText(/\/reset$/, async (msg) => {
     try {
         const chatId = msg.chat.id;
         if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
-            await bot.sendMessage(chatId, `⚠️ The /reset command is disabled in group chats.`);
+            await bot.sendMessage(chatId, `â ï¸ The /reset command is disabled in group chats.`);
         } else {
             delete confirmCooldown[msg.from.id]; // Clear memory cooldown
             // Future: Consider if /reset should clear pending bets from DB for this user
             // await pool.query("UPDATE bets SET status = 'expired' WHERE user_id = $1 AND status = 'awaiting_payment'", [String(msg.from.id)]);
-            await bot.sendMessage(chatId, `🔄 Cooldowns reset.`);
+            await bot.sendMessage(chatId, `ð Cooldowns reset.`);
         }
     } catch (error) {
         console.error("Error in /reset handler:", error);
@@ -398,7 +398,7 @@ bot.onText(/\/coinflip$/, async (msg) => { // Added async
     // Handler for /coinflip command
     try {
         // Corrected message formatting for commands
-        const helpMessage = `🪙 Coinflip! Choose amount and side:\n\n` +
+        const helpMessage = `ðª Coinflip! Choose amount and side:\n\n` +
                             `\`/bet amount heads\`\n` + // Use Markdown code format
                             `\`/bet amount tails\`\n\n` + // Use Markdown code format
                             `Min: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`;
@@ -417,9 +417,9 @@ bot.onText(/\/wallet$/, async (msg) => {
         const userId = String(msg.from.id); // Ensure user ID is string for DB consistency
         const walletAddress = await getLinkedWallet(userId); // Fetch from DB
         if (walletAddress) {
-            await bot.sendMessage(msg.chat.id, `💰 Your linked wallet address is:\n\`${walletAddress}\``, { parse_mode: 'Markdown' });
+            await bot.sendMessage(msg.chat.id, `ð° Your linked wallet address is:\n\`${walletAddress}\``, { parse_mode: 'Markdown' });
         } else {
-            await bot.sendMessage(msg.chat.id, `⚠️ No wallet linked yet. Place a bet, pay with the memo, and your wallet will be linked automatically.`);
+            await bot.sendMessage(msg.chat.id, `â ï¸ No wallet linked yet. Place a bet, pay with the memo, and your wallet will be linked automatically.`);
         }
     } catch (error) {
         console.error("Error in /wallet handler:", error);
@@ -434,7 +434,7 @@ bot.onText(/\/refresh$/, async (msg) => {
      try {
          const chatId = msg.chat.id;
          const imageUrl = 'https://i.ibb.co/9vDo58q/banner.gif';
-         await bot.sendAnimation(chatId, imageUrl, { caption: `🎰 Solana Gambles\n\n/coinflip | /race | /wallet`, parse_mode: 'Markdown'});
+         await bot.sendAnimation(chatId, imageUrl, { caption: `ð° Solana Gambles\n\n/coinflip | /race | /wallet`, parse_mode: 'Markdown'});
      } catch (error) {
         console.error("Error sending refresh animation:", error);
          if (msg && msg.chat && msg.chat.id) {
@@ -453,11 +453,11 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
         const userChoice = match[2].toLowerCase();
 
         if (isNaN(betAmount) || betAmount < MIN_BET || betAmount > MAX_BET) {
-             await bot.sendMessage(chatId, `⚠️ Bet must be between ${MIN_BET} - ${MAX_BET} SOL`);
+             await bot.sendMessage(chatId, `â ï¸ Bet must be between ${MIN_BET} - ${MAX_BET} SOL`);
              return; // Exit handler
         }
         if (confirmCooldown[userId] && (Date.now() - confirmCooldown[userId]) < cooldownInterval) {
-             await bot.sendMessage(chatId, `⚠️ Please wait a few seconds...`);
+             await bot.sendMessage(chatId, `â ï¸ Please wait a few seconds...`);
              return;
         }
         confirmCooldown[userId] = Date.now(); // Set cooldown
@@ -476,8 +476,8 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
 
         // Instruct User
         await bot.sendMessage(chatId,
-            `✅ Coinflip Bet registered!\n\n`+
-            `💸 Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
+            `â Coinflip Bet registered!\n\n`+
+            `ð¸ Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
             `\`${process.env.MAIN_WALLET_ADDRESS}\`\n\n` +
             `*MEMO:* \`${memoId}\`\n\n` + // Use Markdown for memo
             `Expires in ${PAYMENT_EXPIRY_MINUTES} mins. Auto verification.`,
@@ -486,7 +486,7 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
     } catch (error) {
         console.error(`Error in /bet handler for user ${userId}:`, error);
         // Inform user about the error
-        await bot.sendMessage(chatId, `⚠️ An error occurred registering your bet. ${error.message.includes('collision') ? 'Please try again.' : 'Please try again later.'}`);
+        await bot.sendMessage(chatId, `â ï¸ An error occurred registering your bet. ${error.message.includes('collision') ? 'Please try again.' : 'Please try again later.'}`);
     }
 });
 
@@ -495,8 +495,8 @@ bot.onText(/\/race$/, async (msg) => {
     try {
         const chatId = msg.chat.id;
         // Consider moving horse data outside handler if it never changes
-        const horses = [ { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: '🔵', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: '🔷', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: '⚪', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: '🔴', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: '⚫', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: '🌸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: '🟢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 }, ];
-        let raceMessage = `🏇 Race! Place your bets!\n\n`;
+        const horses = [ { name: 'Yellow', emoji: 'ð¡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: 'ð ', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: 'ðµ', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: 'ð·', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: 'âª', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: 'ð´', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: 'â«', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: 'ð¸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: 'ð£', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: 'ð¢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: 'ð', odds: 15.0, winProbability: 0.01 }, ];
+        let raceMessage = `ð Race! Place your bets!\n\n`;
         horses.forEach(horse => { raceMessage += `${horse.emoji} *${horse.name}* (Odds: ${horse.odds.toFixed(1)}x)\n`; });
         // Corrected backticks for command example
         raceMessage += `\nUse:\n\`${String.fromCharCode(96)}/betrace [amount] [horse_name]\`\nMin: ${RACE_MIN_BET} SOL | Max: ${RACE_MAX_BET} SOL`;
@@ -516,12 +516,12 @@ bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
      try {
         const betAmount = parseFloat(match[1]);
         const chosenHorseName = match[2];
-        const horses = [ { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: '🔵', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: '🔷', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: '⚪', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: '🔴', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: '⚫', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: '🌸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: '🟢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 }, ];
+        const horses = [ { name: 'Yellow', emoji: 'ð¡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: 'ð ', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: 'ðµ', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: 'ð·', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: 'âª', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: 'ð´', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: 'â«', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: 'ð¸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: 'ð£', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: 'ð¢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: 'ð', odds: 15.0, winProbability: 0.01 }, ];
         const horse = horses.find(h => h.name.toLowerCase() === chosenHorseName.toLowerCase());
 
-        if (!horse) { return await bot.sendMessage(chatId, `⚠️ Invalid horse name.`); } // Use await
-        if (isNaN(betAmount) || betAmount < RACE_MIN_BET || betAmount > RACE_MAX_BET) { return await bot.sendMessage(chatId, `⚠️ Bet must be ${RACE_MIN_BET} - ${RACE_MAX_BET} SOL`); }
-        if (confirmCooldown[userId] && (Date.now() - confirmCooldown[userId]) < cooldownInterval) { return await bot.sendMessage(chatId, `⚠️ Please wait...`); }
+        if (!horse) { return await bot.sendMessage(chatId, `â ï¸ Invalid horse name.`); } // Use await
+        if (isNaN(betAmount) || betAmount < RACE_MIN_BET || betAmount > RACE_MAX_BET) { return await bot.sendMessage(chatId, `â ï¸ Bet must be ${RACE_MIN_BET} - ${RACE_MAX_BET} SOL`); }
+        if (confirmCooldown[userId] && (Date.now() - confirmCooldown[userId]) < cooldownInterval) { return await bot.sendMessage(chatId, `â ï¸ Please wait...`); }
         confirmCooldown[userId] = Date.now();
 
         const memoId = generateMemoId('RA');
@@ -535,8 +535,8 @@ bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
 
         // Instruct User
         await bot.sendMessage(chatId,
-            `✅ Race bet registered on ${horse.emoji} *${horse.name}*!\n\n` +
-            `💸 Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
+            `â Race bet registered on ${horse.emoji} *${horse.name}*!\n\n` +
+            `ð¸ Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
             `\`${process.env.RACE_WALLET_ADDRESS}\`\n\n` + // Use env var
             `*MEMO:* \`${memoId}\`\n\n` + // Use Markdown for memo
             `Expires in ${PAYMENT_EXPIRY_MINUTES} mins. Auto verification.`,
@@ -545,13 +545,13 @@ bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
     } catch (error) {
         console.error(`Error in /betrace handler for user ${userId}:`, error);
         // Inform user about the error
-        await bot.sendMessage(chatId, `⚠️ An error occurred registering your bet. ${error.message.includes('collision') ? 'Please try again.' : 'Please try again later.'}`);
+        await bot.sendMessage(chatId, `â ï¸ An error occurred registering your bet. ${error.message.includes('collision') ? 'Please try again.' : 'Please try again later.'}`);
     }
 });
 
 // Disabled /confirm commands - Inform user they are no longer needed
-bot.onText(/^\/confirm$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirm command no longer needed.`); } catch(e){} });
-bot.onText(/^\/confirmrace$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirmrace command no longer needed.`); } catch(e){} });
+bot.onText(/^\/confirm$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `â ï¸ /confirm command no longer needed.`); } catch(e){} });
+bot.onText(/^\/confirmrace$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `â ï¸ /confirmrace command no longer needed.`); } catch(e){} });
 
 // --- End Command Handlers ---
 
@@ -622,7 +622,7 @@ async function handleCoinflipGame(bet) {
 
         if (!winnerAddress) {
              console.error(`Bet ${betId}: Cannot find winner address for payout! User ${user_id} has no linked wallet.`);
-              await bot.sendMessage(chat_id, `🎉 Congratulations, ${displayName}! You won!\nResult: *${result}*\n⚠️ Payout failed: Could not determine your linked wallet address. Make sure you have successfully completed a bet before to link it.`, { parse_mode: 'Markdown'});
+              await bot.sendMessage(chat_id, `ð Congratulations, ${displayName}! You won!\nResult: *${result}*\nâ ï¸ Payout failed: Could not determine your linked wallet address. Make sure you have successfully completed a bet before to link it.`, { parse_mode: 'Markdown'});
               await updateBetStatus(betId, 'error_payout_no_wallet'); // Final status
               return;
         }
@@ -630,29 +630,29 @@ async function handleCoinflipGame(bet) {
          try {
              const winnerPublicKey = new PublicKey(winnerAddress);
              // Send win message FIRST, then attempt payout
-             await bot.sendMessage(chat_id, `🎉 Congratulations, ${displayName}! You won ${payoutSOL.toFixed(6)} SOL!\nResult: *${result}*\n\n💸 Attempting payout...`, { parse_mode: 'Markdown'});
+             await bot.sendMessage(chat_id, `ð Congratulations, ${displayName}! You won ${payoutSOL.toFixed(6)} SOL!\nResult: *${result}*\n\nð¸ Attempting payout...`, { parse_mode: 'Markdown'});
 
              // Use BigInt payoutLamports for sending
              const sendResult = await sendSol(connection, payerPrivateKey, winnerPublicKey, payoutLamports);
 
              if (sendResult.success) {
-                 await bot.sendMessage(chat_id, `💰 Payout successful! TX: \`${sendResult.signature}\``, { parse_mode: 'Markdown'});
+                 await bot.sendMessage(chat_id, `ð° Payout successful! TX: \`${sendResult.signature}\``, { parse_mode: 'Markdown'});
                  // Record payout signature and final status
                  await recordPayout(betId, 'completed_win_paid', sendResult.signature);
              } else {
-                 await bot.sendMessage(chat_id, `⚠️ Payout failed: ${sendResult.error}. Please contact support with Bet ID ${betId}.`);
+                 await bot.sendMessage(chat_id, `â ï¸ Payout failed: ${sendResult.error}. Please contact support with Bet ID ${betId}.`);
                  // Update status to reflect payout failure after win
                  await updateBetStatus(betId, 'completed_win_payout_failed');
              }
          } catch(e) {
              console.error(`Bet ${betId}: Error during payout process:`, e);
-             await bot.sendMessage(chat_id, `⚠️ Payout failed due to an internal error. Please contact support with Bet ID ${betId}.`);
+             await bot.sendMessage(chat_id, `â ï¸ Payout failed due to an internal error. Please contact support with Bet ID ${betId}.`);
              await updateBetStatus(betId, 'error_payout_exception');
          }
 
     } else {
         console.log(`Bet ${betId}: User ${user_id} LOST Coinflip.`);
-        await bot.sendMessage(chat_id, `❌ *YOU LOSE!*\n\nYou guessed *${choice}*, but the coin landed *${result}*. Better luck next time!`, { parse_mode: "Markdown" });
+        await bot.sendMessage(chat_id, `â *YOU LOSE!*\n\nYou guessed *${choice}*, but the coin landed *${result}*. Better luck next time!`, { parse_mode: "Markdown" });
         await updateBetStatus(betId, 'completed_loss'); // Final status
     }
 }
@@ -666,7 +666,7 @@ async function handleRaceGame(bet) {
 
     // Race Logic
      const horses = [
-        { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: '🔵', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: '🔷', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: '⚪', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: '🔴', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: '⚫', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: '🌸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: '🟢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 },
+        { name: 'Yellow', emoji: 'ð¡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: 'ð ', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: 'ðµ', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: 'ð·', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: 'âª', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: 'ð´', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: 'â«', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: 'ð¸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: 'ð£', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: 'ð¢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: 'ð', odds: 15.0, winProbability: 0.01 },
     ]; // Use the same horse data as before
     let winningHorse;
     const randomNumber = Math.random();
@@ -678,12 +678,12 @@ async function handleRaceGame(bet) {
     if (!winningHorse) winningHorse = horses[horses.length - 1]; // Fallback just in case
 
     // Send race commentary...
-    await bot.sendMessage(chatId, `🏇 Race for Bet ID ${betId} is starting! You picked *${horseName}*!`, {parse_mode: 'Markdown'});
+    await bot.sendMessage(chatId, `ð Race for Bet ID ${betId} is starting! You picked *${horseName}*!`, {parse_mode: 'Markdown'});
     await new Promise(resolve => setTimeout(resolve, 2000)); // Pause for effect
     await bot.sendMessage(chatId, `...and they're off!`);
     // Add more commentary here if desired...
     await new Promise(resolve => setTimeout(resolve, 3000));
-    await bot.sendMessage(chatId, `🏁 **The winner is... ${winningHorse.emoji} *${winningHorse.name}*!** 🏁`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, `ð **The winner is... ${winningHorse.emoji} *${winningHorse.name}*!** ð`, { parse_mode: 'Markdown' });
 
     // Payout or Lose Message
     const win = (horseName.toLowerCase() === winningHorse.name.toLowerCase()); // Case-insensitive compare
@@ -702,7 +702,7 @@ async function handleRaceGame(bet) {
 
         if (!winnerAddress) {
              console.error(`Bet ${betId}: Cannot find winner address for race payout!`);
-              await bot.sendMessage(chat_id, `🎉 Congratulations, ${displayName}! Your horse *${horseName}* won!\nPayout: ${payoutSOL.toFixed(6)} SOL\n⚠️ Payout failed: Could not determine your linked wallet address.`, { parse_mode: 'Markdown'});
+              await bot.sendMessage(chat_id, `ð Congratulations, ${displayName}! Your horse *${horseName}* won!\nPayout: ${payoutSOL.toFixed(6)} SOL\nâ ï¸ Payout failed: Could not determine your linked wallet address.`, { parse_mode: 'Markdown'});
               await updateBetStatus(betId, 'error_payout_no_wallet'); // Final status
               return;
         }
@@ -710,27 +710,27 @@ async function handleRaceGame(bet) {
          try {
              const winnerPublicKey = new PublicKey(winnerAddress);
              // Send win message FIRST
-              await bot.sendMessage(chat_id, `🎉 Congratulations, ${displayName}! Your horse *${horseName}* won!\nPayout: ${payoutSOL.toFixed(6)} SOL\n\n💸 Attempting payout...`, {parse_mode: 'Markdown'});
+              await bot.sendMessage(chat_id, `ð Congratulations, ${displayName}! Your horse *${horseName}* won!\nPayout: ${payoutSOL.toFixed(6)} SOL\n\nð¸ Attempting payout...`, {parse_mode: 'Markdown'});
              // Pass BigInt payoutLamports
              const sendResult = await sendSol(connection, payerPrivateKey, winnerPublicKey, payoutLamports);
 
              if (sendResult.success) {
-                 await bot.sendMessage(chat_id, `💰 Race payout successful! TX: \`${sendResult.signature}\``, { parse_mode: 'Markdown'});
+                 await bot.sendMessage(chat_id, `ð° Race payout successful! TX: \`${sendResult.signature}\``, { parse_mode: 'Markdown'});
                  // Record payout signature and final status
                   await recordPayout(betId, 'completed_win_paid', sendResult.signature);
              } else {
-                 await bot.sendMessage(chat_id, `⚠️ Race payout failed: ${sendResult.error}. Please contact support with Bet ID ${betId}.`);
+                 await bot.sendMessage(chat_id, `â ï¸ Race payout failed: ${sendResult.error}. Please contact support with Bet ID ${betId}.`);
                  // Update status to reflect payout failure after win
                  await updateBetStatus(betId, 'completed_win_payout_failed');
              }
          } catch(e) {
              console.error(`Bet ${betId}: Error during race payout process:`, e);
-             await bot.sendMessage(chat_id, `⚠️ Race payout failed due to an internal error. Please contact support with Bet ID ${betId}.`);
+             await bot.sendMessage(chat_id, `â ï¸ Race payout failed due to an internal error. Please contact support with Bet ID ${betId}.`);
              await updateBetStatus(betId, 'error_payout_exception');
          }
     } else {
         console.log(`Bet ${betId}: User ${user_id} LOST Race.`);
-        await bot.sendMessage(chat_id, `❌ *Horse Lost!*\n\nYou picked *${horseName}*, but *${winningHorse.name}* won the race. Better luck next time!`, { parse_mode: "Markdown" });
+        await bot.sendMessage(chat_id, `â *Horse Lost!*\n\nYou picked *${horseName}*, but *${winningHorse.name}* won the race. Better luck next time!`, { parse_mode: "Markdown" });
         await updateBetStatus(betId, 'completed_loss'); // Final status
     }
 }
@@ -746,36 +746,32 @@ async function startServer() {
         // Set up webhook before starting server ONLY if on Railway
         // Ensure RAILWAY_PUBLIC_DOMAIN environment variable is available in Railway service settings
         if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_PUBLIC_DOMAIN) {
-             // Construct the full URL for the webhook endpoint using the correct variable
              const webhookFullUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}${webhookPath}`;
              try {
-                // Attempt to set the webhook
-                await bot.setWebHook(webhookFullUrl, {
-                    // drop_pending_updates: true // Optional: Ignore updates sent while bot was offline
-                });
-                console.log(`✅ Telegram Webhook set to: ${webhookFullUrl}`);
+                 const webhookInfo = await bot.getWebHookInfo();
+                 if (webhookInfo.url !== webhookFullUrl) {
+                     await bot.setWebHook(webhookFullUrl);
+                     console.log(`â Telegram Webhook set to: ${webhookFullUrl}`);
+                 } else {
+                     console.log(`â¹ï¸ Webhook already correctly set to: ${webhookInfo.url}`);
+                 }
 
-                // Verify webhook setup (optional but recommended)
-                const webhookInfo = await bot.getWebHookInfo();
-                if (webhookInfo.url !== webhookFullUrl) {
-                     console.error(`❌ Failed to verify webhook URL! Telegram reports: ${webhookInfo.url} Expected: ${webhookFullUrl}`);
-                } else if (webhookInfo.last_error_date) {
-                     console.warn(`⚠️ Webhook Status: Last error reported by Telegram on ${new Date(webhookInfo.last_error_date * 1000)}`);
-                } else {
-                     console.log(`ℹ️ Webhook status confirmed by Telegram.`);
-                }
-
-             } catch(webhookError) {
-                 console.error(`❌ Failed to set Telegram Webhook to ${webhookUrl}:`, webhookError.message);
+                 if (webhookInfo.last_error_date) {
+                     console.warn(`â ï¸ Webhook Status: Last error reported by Telegram on ${new Date(webhookInfo.last_error_date * 1000)}`);
+                 } else {
+                     console.log(`â¹ï¸ Webhook status confirmed by Telegram.`);
+                 }
+             } catch (webhookError) {
+                 console.error(`â Failed to verify/set Telegram Webhook:`, webhookError.message);
                  console.warn("Continuing without Webhook functionality due to setup error.");
              }
         } else {
-             console.log("ℹ️ Skipping webhook setup (not on Railway or RAILWAY_PUBLIC_DOMAIN missing).");
+             console.log("â¹ï¸ Skipping webhook setup (not on Railway or RAILWAY_PUBLIC_DOMAIN missing).");
         }
 
         // Listen on 0.0.0.0 to accept connections from Railway proxy
         app.listen(PORT, "0.0.0.0", () => {
-            console.log(`✅ Healthcheck server listening on 0.0.0.0:${PORT}`);
+            console.log(`â Healthcheck server listening on 0.0.0.0:${PORT}`);
             console.log("Application fully started.");
 
             // Start polling ONLY if NOT on Railway (for local dev)
@@ -783,7 +779,7 @@ async function startServer() {
             if (!process.env.RAILWAY_ENVIRONMENT) {
                  bot.getWebHookInfo().then(info => {
                     if (info && info.url) {
-                        console.log(`ℹ️ Deleting existing webhook (${info.url}) before starting polling locally.`);
+                        console.log(`â¹ï¸ Deleting existing webhook (${info.url}) before starting polling locally.`);
                         return bot.deleteWebHook(); // Attempt to delete webhook before polling
                     }
                     return true; // No webhook set, safe to poll
@@ -828,7 +824,7 @@ async function startServer() {
              }
         });
     } catch (error) {
-        console.error("💥 Failed to start server:", error);
+        console.error("ð¥ Failed to start server:", error);
         process.exit(1); // Exit if essential startup fails (like DB init error)
     }
 }
