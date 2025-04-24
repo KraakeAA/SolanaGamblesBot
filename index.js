@@ -10,13 +10,14 @@ const REQUIRED_ENV_VARS = [
     'RACE_WALLET_ADDRESS',// Wallet for Race bets
     'RPC_URL'             // Solana RPC endpoint
 ];
-// Also check Railway specific vars if using webhook logic later
-// if (process.env.RAILWAY_ENVIRONMENT) { REQUIRED_ENV_VARS.push('RAILWAY_STATIC_URL'); }
-
+// Also check Railway specific vars if using webhook logic
+if (process.env.RAILWAY_ENVIRONMENT) {
+    REQUIRED_ENV_VARS.push('RAILWAY_STATIC_URL');
+}
 let missingVars = false;
 REQUIRED_ENV_VARS.forEach((key) => {
     if (!process.env[key]) {
-        // Allow RAILWAY_STATIC_URL to be missing locally (for future webhook use)
+        // Allow RAILWAY_STATIC_URL to be missing locally
         if (key === 'RAILWAY_STATIC_URL' && !process.env.RAILWAY_ENVIRONMENT) {
              // It's ok if this is missing locally
         } else {
@@ -43,7 +44,6 @@ const {
     SystemProgram,
     sendAndConfirmTransaction,
     ComputeBudgetProgram,
-    // MemoProgram,
 } = require('@solana/web3.js');
 const bs58 = require('bs58');
 const { randomBytes } = require('crypto');
@@ -63,46 +63,23 @@ async function initializeDatabase() {
   console.log("Initializing Database...");
   let client;
   try {
-    client = await pool.connect();
-    console.log("DB client connected.");
-    // Bets table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS bets (
-        id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, chat_id TEXT NOT NULL,
-        game_type TEXT NOT NULL, bet_details JSONB, expected_lamports BIGINT NOT NULL,
-        memo_id TEXT UNIQUE NOT NULL, status TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        expires_at TIMESTAMPTZ NOT NULL, paid_tx_signature TEXT UNIQUE, payout_tx_signature TEXT UNIQUE
-      );
-    `);
+    client = await pool.connect(); console.log("DB client connected.");
+    await client.query(`CREATE TABLE IF NOT EXISTS bets ( id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, chat_id TEXT NOT NULL, game_type TEXT NOT NULL, bet_details JSONB, expected_lamports BIGINT NOT NULL, memo_id TEXT UNIQUE NOT NULL, status TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), expires_at TIMESTAMPTZ NOT NULL, paid_tx_signature TEXT UNIQUE, payout_tx_signature TEXT UNIQUE );`);
     console.log("✅ Base 'bets' table structure checked/created.");
-    // Check/Add columns
     const columnsToAdd = [ { name: 'paid_tx_signature', type: 'TEXT UNIQUE' }, { name: 'payout_tx_signature', type: 'TEXT UNIQUE' } ];
-    for (const col of columnsToAdd) {
-         const checkColumnQuery = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'bets' AND column_name = $1;`;
-         const colExistsResult = await client.query(checkColumnQuery, [col.name]);
-         if (colExistsResult.rowCount === 0) {
-             const addColumnQuery = `ALTER TABLE public.bets ADD COLUMN ${col.name} ${col.type};`;
-             await client.query(addColumnQuery);
-             console.log(`✅ Added missing column '${col.name}' to 'bets' table.`);
-         }
-    }
+    for (const col of columnsToAdd) { const checkColumnQuery = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'bets' AND column_name = $1;`; const colExistsResult = await client.query(checkColumnQuery, [col.name]); if (colExistsResult.rowCount === 0) { const addColumnQuery = `ALTER TABLE public.bets ADD COLUMN ${col.name} ${col.type};`; await client.query(addColumnQuery); console.log(`✅ Added missing column '${col.name}' to 'bets' table.`); } }
     console.log("✅ All required columns in 'bets' table verified/added.");
-    // Wallets table
     await client.query(`CREATE TABLE IF NOT EXISTS wallets ( user_id TEXT PRIMARY KEY, wallet_address TEXT NOT NULL, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW() );`);
     console.log("✅ Database table 'wallets' checked/created successfully.");
-  } catch (err) {
-    console.error("❌ Error initializing database tables:", err); throw err;
-  } finally {
-    if (client) { client.release(); console.log("ℹ️ Database client released after initialization check."); }
-  }
+  } catch (err) { console.error("❌ Error initializing database tables:", err); throw err;
+  } finally { if (client) { client.release(); console.log("ℹ️ Database client released after initialization check."); } }
 }
 // --- End PostgreSQL Setup ---
 
 
 // --- Bot and Solana Initialization ---
-console.log("Initializing Telegram Bot (NO POLLING)...");
-// Initialize bot WITHOUT polling for stability on Railway
-const bot = new TelegramBot(process.env.BOT_TOKEN); // <<< POLLING IS DISABLED
+console.log("Initializing Telegram Bot...");
+const bot = new TelegramBot(process.env.BOT_TOKEN); // NO POLLING HERE
 console.log("Telegram Bot initialized.");
 
 console.log("Initializing Solana Connection...");
@@ -110,14 +87,32 @@ const connection = new Connection(process.env.RPC_URL, 'confirmed');
 console.log("Solana Connection initialized.");
 // --- End Initialization ---
 
-// --- Express Setup (Needed for Health Check and Webhooks later) ---
-// Middleware to parse JSON bodies (needed for Telegram webhook later)
+
+// --- Express Setup ---
+// Middleware to parse JSON bodies (IMPORTANT for webhook)
 app.use(express.json());
+
+// Health check endpoint
 app.get('/', (req, res) => {
-  // console.log("Health check endpoint '/' hit!");
   res.status(200).send('OK');
 });
-// --- NOTE: We will add the app.post('/webhook/...') route later ---
+
+// *** Webhook endpoint ***
+// Define the route BEFORE bot command handlers that might rely on `bot.processUpdate`
+// Use the BOT_TOKEN as a secret path to ensure only Telegram hits this endpoint
+const webhookPath = `/bot${process.env.BOT_TOKEN}`;
+app.post(webhookPath, (req, res) => {
+    try {
+        // console.log("Webhook update received:", JSON.stringify(req.body, null, 2)); // Very verbose log
+        bot.processUpdate(req.body); // Feed the update to the bot library
+        res.sendStatus(200); // Send OK back to Telegram immediately
+    } catch (error) {
+         console.error("Error processing webhook update:", error);
+         res.sendStatus(500); // Indicate server error
+    }
+});
+// --- End Express Setup ---
+
 
 // --- In-Memory State (Minimal) ---
 const confirmCooldown = {};
@@ -129,18 +124,18 @@ const MIN_BET = 0.01; const MAX_BET = 1.0; const RACE_MIN_BET = 0.01; const RACE
 // --- Helper Functions ---
 function generateMemoId(prefix = 'BET') { return prefix + randomBytes(6).toString('hex').toUpperCase(); }
 function findMemoInTx(tx) { if (!tx?.transaction?.message?.instructions) return null; try { const MEMO_PROGRAM_ID = 'Memo1UhkJRfHyvLMcVuc6beZNRYqUP2VZwW'; for (const instruction of tx.transaction.message.instructions) { let programId = ''; if (instruction.programIdIndex !== undefined && tx.transaction.message.accountKeys) { const keyInfo = tx.transaction.message.accountKeys[instruction.programIdIndex]; if (keyInfo?.pubkey) programId = keyInfo.pubkey.toBase58(); else if (typeof keyInfo === 'string') programId = new PublicKey(keyInfo).toBase58(); } else if (instruction.programId) { programId = instruction.programId.toBase58 ? instruction.programId.toBase58() : instruction.programId.toString(); } if (programId === MEMO_PROGRAM_ID && instruction.data) return bs58.decode(instruction.data).toString('utf-8'); } } catch (e) { console.error("Error parsing memo:", e); } return null; }
-function getPayerFromTransaction(tx) { if (!tx || !tx.meta || !tx.transaction?.message?.accountKeys) return null; const message = tx.transaction.message; const preBalances = tx.meta.preBalances; const postBalances = tx.meta.postBalances; if (message.accountKeys.length > 0 && message.accountKeys[0]?.signer) { let firstSignerKey; if (message.accountKeys[0].pubkey) firstSignerKey = message.accountKeys[0].pubkey; else if (typeof message.accountKeys[0] === 'string') firstSignerKey = new PublicKey(message.accountKeys[0]); else console.warn("Could not derive PublicKey from first signer account key."); if (firstSignerKey) { const balanceDiff = (preBalances[0] ?? 0) - (postBalances[0] ?? 0); if (balanceDiff > 0) { console.log(`getPayer: Identified payer as first signer: ${firstSignerKey.toBase58()}`); return firstSignerKey; } else console.warn(`getPayer: First signer ${firstSignerKey.toBase58()} had non-positive balance change.`); } } for (let i = 0; i < message.accountKeys.length; i++) { if (i >= preBalances.length || i >= postBalances.length) continue; if (message.accountKeys[i]?.signer) { let key; if (message.accountKeys[i].pubkey) key = message.accountKeys[i].pubkey; else if (typeof message.accountKeys[i] === 'string') key = new PublicKey(message.accountKeys[i]); else continue; const balanceDiff = (preBalances[i] ?? 0) - (postBalances[i] ?? 0); if (balanceDiff > 0) { console.log(`getPayer: Identified payer via fallback: ${key.toBase58()}`); return key; } } } console.error("getPayerFromTransaction: Could not determine transaction payer."); return null; }
-async function sendSol(connection, payerPrivateKey, recipientPublicKey, amountLamports) { const maxRetries = 3; let lastError = null; const recipientPubKey = (typeof recipientPublicKey === 'string') ? new PublicKey(recipientPublicKey) : recipientPublicKey; const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL; for (let retryCount = 0; retryCount < maxRetries; retryCount++) { try { const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey)); const latestBlockhash = await connection.getLatestBlockhash(); const transaction = new Transaction({ recentBlockhash: latestBlockhash.blockhash, feePayer: payerWallet.publicKey }).add( SystemProgram.transfer({ fromPubkey: payerWallet.publicKey, toPubkey: recipientPubKey, lamports: BigInt(amountLamports) }) ).add( ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }) ).add( ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1000 }) ); const signature = await sendAndConfirmTransaction( connection, transaction, [payerWallet], { commitment: 'confirmed', skipPreflight: false } ); console.log(`✅ Sent ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()}. Signature: ${signature}`); return { success: true, signature }; } catch (error) { console.error(`❌ Error sending ${amountSOL.toFixed(6)} SOL (attempt ${retryCount + 1}/${maxRetries}):`, error); lastError = error; if (error.message.includes('blockhash') || error.message.includes('Blockhash not found') || error.message.includes('timeout')) { await new Promise(resolve => setTimeout(resolve, 1500 * (retryCount + 1))); } else { break; } } } console.error(`❌ Failed to send ${amountSOL.toFixed(6)} SOL after ${maxRetries} retries.`); return { success: false, error: lastError ? lastError.message : 'Max retries exceeded without success' }; }
+function getPayerFromTransaction(tx) { if (!tx || !tx.meta || !tx.transaction?.message?.accountKeys) return null; const message = tx.transaction.message; const preBalances = tx.meta.preBalances; const postBalances = tx.meta.postBalances; if (message.accountKeys.length > 0 && message.accountKeys[0]?.signer) { let firstSignerKey; if (message.accountKeys[0].pubkey) firstSignerKey = message.accountKeys[0].pubkey; else if (typeof message.accountKeys[0] === 'string') firstSignerKey = new PublicKey(message.accountKeys[0]); else console.warn("Could not derive PublicKey from first signer."); if (firstSignerKey) { const balanceDiff = (preBalances[0] ?? 0) - (postBalances[0] ?? 0); if (balanceDiff > 0) { console.log(`getPayer: Identified payer as first signer: ${firstSignerKey.toBase58()}`); return firstSignerKey; } else console.warn(`getPayer: First signer ${firstSignerKey.toBase58()} had non-positive balance change.`); } } for (let i = 0; i < message.accountKeys.length; i++) { if (i >= preBalances.length || i >= postBalances.length) continue; if (message.accountKeys[i]?.signer) { let key; if (message.accountKeys[i].pubkey) key = message.accountKeys[i].pubkey; else if (typeof message.accountKeys[i] === 'string') key = new PublicKey(message.accountKeys[i]); else continue; const balanceDiff = (preBalances[i] ?? 0) - (postBalances[i] ?? 0); if (balanceDiff > 0) { console.log(`getPayer: Identified payer via fallback: ${key.toBase58()}`); return key; } } } console.error("getPayer: Could not determine payer."); return null; }
+async function sendSol(connection, payerPrivateKey, recipientPublicKey, amountLamports) { const maxRetries = 3; let lastError = null; const recipientPubKey = (typeof recipientPublicKey === 'string') ? new PublicKey(recipientPublicKey) : recipientPublicKey; const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL; for (let retryCount = 0; retryCount < maxRetries; retryCount++) { try { const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey)); const latestBlockhash = await connection.getLatestBlockhash(); const transaction = new Transaction({ recentBlockhash: latestBlockhash.blockhash, feePayer: payerWallet.publicKey }).add( SystemProgram.transfer({ fromPubkey: payerWallet.publicKey, toPubkey: recipientPubKey, lamports: BigInt(amountLamports) }) ).add( ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }) ).add( ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1000 }) ); const signature = await sendAndConfirmTransaction( connection, transaction, [payerWallet], { commitment: 'confirmed', skipPreflight: false } ); console.log(`✅ Sent ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()}. Sig: ${signature}`); return { success: true, signature }; } catch (error) { console.error(`❌ Error sending ${amountSOL.toFixed(6)} SOL (attempt ${retryCount + 1}/${maxRetries}):`, error); lastError = error; if (error.message.includes('blockhash') || error.message.includes('Blockhash not found') || error.message.includes('timeout')) { await new Promise(resolve => setTimeout(resolve, 1500 * (retryCount + 1))); } else { break; } } } console.error(`❌ Failed send ${amountSOL.toFixed(6)} SOL after ${maxRetries} retries.`); return { success: false, error: lastError ? lastError.message : 'Max retries exceeded' }; }
 
 // --- Database Interaction Functions ---
-async function savePendingBet(userId, chatId, gameType, details, lamports, memoId, expiresAt) { const query = ` INSERT INTO bets (user_id, chat_id, game_type, bet_details, expected_lamports, memo_id, status, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id; `; const values = [ String(userId), String(chatId), gameType, details, BigInt(lamports), memoId, 'awaiting_payment', expiresAt ]; try { const res = await pool.query(query, values); console.log(`DB: Saved pending ${gameType} bet ID ${res.rows[0].id} for user ${userId} with memo ${memoId}`); return { success: true, id: res.rows[0].id }; } catch (err) { console.error(`DB Error: Failed to save bet for user ${userId}:`, err); if (err.code === '23505' && err.constraint === 'bets_memo_id_key') return { success: false, error: 'Memo ID collision occurred.' }; return { success: false, error: err.message }; } }
-async function findBetByMemo(memoId) { const query = `SELECT * FROM bets WHERE memo_id = $1 AND status = 'awaiting_payment'`; try { const res = await pool.query(query, [memoId]); return res.rows[0]; } catch (err) { console.error(`DB Error: Error finding bet by memo ${memoId}:`, err); return undefined; } }
-async function findPendingBets() { const query = `SELECT * FROM bets WHERE status = 'awaiting_payment' AND expires_at > NOW()`; try { const res = await pool.query(query); return res.rows; } catch(err) { console.error(`DB Error: Error finding pending bets:`, err); return []; } }
-async function updateBetStatus(betId, newStatus) { const query = 'UPDATE bets SET status = $1 WHERE id = $2'; try { const res = await pool.query(query, [newStatus, betId]); if (res.rowCount > 0) console.log(`DB: Updated bet ${betId} status to ${newStatus}.`); else console.warn(`DB Warn: Update status bet ${betId} to ${newStatus} no row affected.`); return { success: res.rowCount > 0 }; } catch (err) { console.error(`DB Error: Updating bet ${betId} status to ${newStatus}:`, err); return { success: false, error: err.message }; } }
-async function markBetPaid(betId, txSignature) { const query = ` UPDATE bets SET status = $1, paid_tx_signature = $2 WHERE id = $3 AND status = $4`; try { const res = await pool.query(query, ['payment_verified', txSignature, betId, 'awaiting_payment']); console.log(`DB: Marked bet ${betId} as paid by tx ${txSignature}. Rows affected: ${res.rowCount}`); return { success: res.rowCount > 0 }; } catch (err) { console.error(`DB Error: Marking bet ${betId} paid:`, err); if (err.code === '23505') { console.warn(`DB Warn: Constraint violation mark bet ${betId} paid ${txSignature}.`); return { success: false, error: 'Tx sig already used or constraint failed.' }; } return { success: false, error: err.message }; } }
-async function linkUserWallet(userId, walletAddress) { try { new PublicKey(walletAddress); } catch(e) { console.error(`DB Error: Invalid wallet addr ${userId}: ${walletAddress}`); return { success: false, error: 'Invalid wallet address format.' }; } const query = ` INSERT INTO wallets (user_id, wallet_address, linked_at) VALUES ($1, $2, NOW()) ON CONFLICT (user_id) DO UPDATE SET wallet_address = EXCLUDED.wallet_address, linked_at = NOW(); `; try { await pool.query(query, [String(userId), walletAddress]); console.log(`DB: Linked/Updated wallet user ${userId} to ${walletAddress}`); return { success: true }; } catch (err) { console.error(`DB Error: Linking wallet user ${userId}:`, err); return { success: false, error: err.message }; } }
-async function getLinkedWallet(userId) { const query = 'SELECT wallet_address FROM wallets WHERE user_id = $1'; try { const res = await pool.query(query, [String(userId)]); return res.rows[0]?.wallet_address; } catch (err) { console.error(`DB Error: Error fetching wallet user ${userId}:`, err); return undefined; } }
-async function recordPayout(betId, newStatus, payoutSignature) { const query = ` UPDATE bets SET status = $1, payout_tx_signature = $2 WHERE id = $3`; try { const res = await pool.query(query, [newStatus, payoutSignature, betId]); console.log(`DB: Recorded payout tx ${payoutSignature} bet ${betId} status ${newStatus}. Rows: ${res.rowCount}`); return { success: res.rowCount > 0 }; } catch (err) { console.error(`DB Error: Recording payout bet ${betId}:`, err); return { success: false, error: err.message }; } }
+async function savePendingBet(userId, chatId, gameType, details, lamports, memoId, expiresAt) { const query = ` INSERT INTO bets (user_id, chat_id, game_type, bet_details, expected_lamports, memo_id, status, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id; `; const values = [ String(userId), String(chatId), gameType, details, BigInt(lamports), memoId, 'awaiting_payment', expiresAt ]; try { const res = await pool.query(query, values); console.log(`DB: Saved bet ${res.rows[0].id} user ${userId} memo ${memoId}`); return { success: true, id: res.rows[0].id }; } catch (err) { console.error(`DB Error save bet ${userId}:`, err); if (err.code === '23505') return { success: false, error: 'Memo ID collision.' }; return { success: false, error: err.message }; } }
+async function findBetByMemo(memoId) { const query = `SELECT * FROM bets WHERE memo_id = $1 AND status = 'awaiting_payment'`; try { const res = await pool.query(query, [memoId]); return res.rows[0]; } catch (err) { console.error(`DB Error find bet ${memoId}:`, err); return undefined; } }
+async function findPendingBets() { const query = `SELECT * FROM bets WHERE status = 'awaiting_payment' AND expires_at > NOW()`; try { const res = await pool.query(query); return res.rows; } catch(err) { console.error(`DB Error find pending:`, err); return []; } }
+async function updateBetStatus(betId, newStatus) { const query = 'UPDATE bets SET status = $1 WHERE id = $2'; try { const res = await pool.query(query, [newStatus, betId]); if (res.rowCount > 0) console.log(`DB: Update bet ${betId} status ${newStatus}.`); else console.warn(`DB Warn: Update bet ${betId} status ${newStatus} no row.`); return { success: res.rowCount > 0 }; } catch (err) { console.error(`DB Error Update bet ${betId} status ${newStatus}:`, err); return { success: false, error: err.message }; } }
+async function markBetPaid(betId, txSignature) { const query = ` UPDATE bets SET status = $1, paid_tx_signature = $2 WHERE id = $3 AND status = $4`; try { const res = await pool.query(query, ['payment_verified', txSignature, betId, 'awaiting_payment']); console.log(`DB: Marked bet ${betId} paid ${txSignature}. Rows: ${res.rowCount}`); return { success: res.rowCount > 0 }; } catch (err) { console.error(`DB Error Mark bet ${betId} paid:`, err); if (err.code === '23505') { console.warn(`DB Warn: Constraint violation mark paid ${betId} ${txSignature}.`); return { success: false, error: 'Tx sig used or constraint failed.' }; } return { success: false, error: err.message }; } }
+async function linkUserWallet(userId, walletAddress) { try { new PublicKey(walletAddress); } catch(e) { console.error(`DB Error: Invalid wallet ${userId}: ${walletAddress}`); return { success: false, error: 'Invalid wallet addr format.' }; } const query = ` INSERT INTO wallets (user_id, wallet_address, linked_at) VALUES ($1, $2, NOW()) ON CONFLICT (user_id) DO UPDATE SET wallet_address = EXCLUDED.wallet_address, linked_at = NOW(); `; try { await pool.query(query, [String(userId), walletAddress]); console.log(`DB: Link wallet user ${userId} to ${walletAddress}`); return { success: true }; } catch (err) { console.error(`DB Error Link wallet ${userId}:`, err); return { success: false, error: err.message }; } }
+async function getLinkedWallet(userId) { const query = 'SELECT wallet_address FROM wallets WHERE user_id = $1'; try { const res = await pool.query(query, [String(userId)]); return res.rows[0]?.wallet_address; } catch (err) { console.error(`DB Error Fetch wallet ${userId}:`, err); return undefined; } }
+async function recordPayout(betId, newStatus, payoutSignature) { const query = ` UPDATE bets SET status = $1, payout_tx_signature = $2 WHERE id = $3`; try { const res = await pool.query(query, [newStatus, payoutSignature, betId]); console.log(`DB: Recorded payout ${payoutSignature} bet ${betId} status ${newStatus}. Rows: ${res.rowCount}`); return { success: res.rowCount > 0 }; } catch (err) { console.error(`DB Error Record payout ${betId}:`, err); return { success: false, error: err.message }; } }
 
 // --- END OF CHUNK 1 of 5 ---
 // --- Payment Monitoring Logic ---
@@ -335,9 +330,11 @@ async function monitorPayments() {
     }
 }
 const monitorIntervalSeconds = 30;
-console.log(`ℹ️ Starting payment monitor interval. Interval: ${monitorIntervalSeconds} seconds.`);
+console.log(`ℹ️ Setting up payment monitor interval. Interval: ${monitorIntervalSeconds} seconds.`);
 let monitorInterval = null; // Define variable to hold interval ID
 // --- End Payment Monitor ---
+
+// --- END OF CHUNK 2 of 5 ---
 // --- Bot Command Handlers ---
 // Wrapped in try/catch for basic error handling
 
@@ -353,21 +350,25 @@ bot.on('polling_error', (error) => {
 });
 
 bot.on('webhook_error', (error) => {
+    // This will be relevant when we implement webhooks
     console.error(`Webhook error: ${error.code} - ${error.message}`);
 });
 
 bot.on('error', (error) => {
+    // General catch-all for library errors
     console.error('General Bot Error:', error);
 });
 
 
 bot.onText(/\/start$/, async (msg) => {
+    // Handler for /start command
     try {
         const chatId = msg.chat.id;
         const imageUrl = 'https://i.ibb.co/9vDo58q/banner.gif'; // Example static URL
         await bot.sendAnimation(chatId, imageUrl, { caption: `🎰 Welcome to *Solana Gambles*!\n\nUse /coinflip or /race to start.\nUse /wallet to see linked wallet.`, parse_mode: 'Markdown' });
     } catch (error) {
         console.error("Error in /start handler:", error);
+        // Fallback message if animation fails
         if (msg && msg.chat && msg.chat.id) {
              try { await bot.sendMessage(msg.chat.id, "Welcome! Use /coinflip or /race."); } catch (e) {}
         }
@@ -375,14 +376,14 @@ bot.onText(/\/start$/, async (msg) => {
 });
 
 bot.onText(/\/reset$/, async (msg) => {
+    // Handler for /reset command (currently only clears cooldown)
     try {
         const chatId = msg.chat.id;
         if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
             await bot.sendMessage(chatId, `⚠️ The /reset command is disabled in group chats.`);
         } else {
             delete confirmCooldown[msg.from.id]; // Clear memory cooldown
-            // Optional: Clear pending bets for this user? Or let them expire?
-            // await pool.query("UPDATE bets SET status = 'expired' WHERE user_id = $1 AND status = 'awaiting_payment'", [String(msg.from.id)]);
+            // Future: Consider if /reset should clear pending bets from DB for this user
             await bot.sendMessage(chatId, `🔄 Cooldowns reset.`);
         }
     } catch (error) {
@@ -393,9 +394,10 @@ bot.onText(/\/reset$/, async (msg) => {
     }
 });
 
-bot.onText(/\/coinflip$/, async (msg) => { // Added async
+bot.onText(/\/coinflip$/, async (msg) => {
+    // Handler for /coinflip command
     try {
-        // Fixed syntax for backticks in previous step's example
+        // Corrected message formatting for commands
         const helpMessage = `🪙 Coinflip! Choose amount and side:\n\n` +
                             `\`/bet amount heads\`\n` + // Use Markdown code format
                             `\`/bet amount tails\`\n\n` + // Use Markdown code format
@@ -410,6 +412,7 @@ bot.onText(/\/coinflip$/, async (msg) => { // Added async
 });
 
 bot.onText(/\/wallet$/, async (msg) => {
+    // Handler for /wallet command - uses database
     try {
         const userId = String(msg.from.id); // Ensure user ID is string for DB consistency
         const walletAddress = await getLinkedWallet(userId); // Fetch from DB
@@ -427,6 +430,7 @@ bot.onText(/\/wallet$/, async (msg) => {
 });
 
 bot.onText(/\/refresh$/, async (msg) => {
+    // Handler for /refresh command
      try {
          const chatId = msg.chat.id;
          const imageUrl = 'https://i.ibb.co/9vDo58q/banner.gif';
@@ -440,7 +444,7 @@ bot.onText(/\/refresh$/, async (msg) => {
     }
 });
 
-// /bet command (Coinflip)
+// /bet command (Coinflip) - Saves bet to DB, gives memo
 bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
     const userId = String(msg.from.id); // Ensure string
     const chatId = String(msg.chat.id); // Ensure string
@@ -450,7 +454,7 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
 
         if (isNaN(betAmount) || betAmount < MIN_BET || betAmount > MAX_BET) {
              await bot.sendMessage(chatId, `⚠️ Bet must be between ${MIN_BET} - ${MAX_BET} SOL`);
-             return; // Exit handler
+             return;
         }
         if (confirmCooldown[userId] && (Date.now() - confirmCooldown[userId]) < cooldownInterval) {
              await bot.sendMessage(chatId, `⚠️ Please wait a few seconds...`);
@@ -461,13 +465,13 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
         // TODO: Optional check for existing pending bet for this user?
 
         const memoId = generateMemoId('CF');
-        const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL)); // Use BigInt
+        const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
         const expiresAt = new Date(Date.now() + PAYMENT_EXPIRY_MINUTES * 60 * 1000);
         const betDetails = { choice: userChoice };
 
         // Save to DB
         const saveResult = await savePendingBet(userId, chatId, 'coinflip', betDetails, expectedLamports, memoId, expiresAt);
-        if (!saveResult.success) { throw new Error(saveResult.error || 'Failed to save bet to database.'); } // Throw error to be caught
+        if (!saveResult.success) { throw new Error(saveResult.error || 'Failed to save bet to database.'); }
 
         // Instruct User
         await bot.sendMessage(chatId,
@@ -480,7 +484,6 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
         );
     } catch (error) {
         console.error(`Error in /bet handler for user ${userId}:`, error);
-        // Inform user about the error
         await bot.sendMessage(chatId, `⚠️ An error occurred registering your bet. ${error.message.includes('collision') ? 'Please try again.' : 'Please try again later.'}`);
     }
 });
@@ -514,7 +517,7 @@ bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
         const horses = [ { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 }, { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 }, { name: 'Blue', emoji: '🔵', odds: 3.0, winProbability: 0.15 }, { name: 'Cyan', emoji: '🔷', odds: 4.0, winProbability: 0.12 }, { name: 'White', emoji: '⚪', odds: 5.0, winProbability: 0.09 }, { name: 'Red', emoji: '🔴', odds: 6.0, winProbability: 0.07 }, { name: 'Black', emoji: '⚫', odds: 7.0, winProbability: 0.05 }, { name: 'Pink', emoji: '🌸', odds: 8.0, winProbability: 0.03 }, { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 }, { name: 'Green', emoji: '🟢', odds: 10.0, winProbability: 0.01 }, { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 }, ];
         const horse = horses.find(h => h.name.toLowerCase() === chosenHorseName.toLowerCase());
 
-        if (!horse) { return await bot.sendMessage(chatId, `⚠️ Invalid horse name.`); }
+        if (!horse) { return await bot.sendMessage(chatId, `⚠️ Invalid horse name.`); } // Use await
         if (isNaN(betAmount) || betAmount < RACE_MIN_BET || betAmount > RACE_MAX_BET) { return await bot.sendMessage(chatId, `⚠️ Bet must be ${RACE_MIN_BET} - ${RACE_MAX_BET} SOL`); }
         if (confirmCooldown[userId] && (Date.now() - confirmCooldown[userId]) < cooldownInterval) { return await bot.sendMessage(chatId, `⚠️ Please wait...`); }
         confirmCooldown[userId] = Date.now();
@@ -544,11 +547,13 @@ bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
     }
 });
 
-// Disabled /confirm commands - Send message informing user
-bot.onText(/^\/confirm$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirm no longer needed.`); } catch(e){} });
-bot.onText(/^\/confirmrace$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirmrace no longer needed.`); } catch(e){} });
+// Disabled /confirm commands - Inform user they are no longer needed
+bot.onText(/^\/confirm$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirm command no longer needed. Verification is automatic.`); } catch(e){} });
+bot.onText(/^\/confirmrace$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirmrace command no longer needed.`); } catch(e){} });
 
 // --- End Command Handlers ---
+
+// --- END OF CHUNK 3 of 5 ---
 // --- Game Processing Logic ---
 // These functions handle the actual game mechanics after payment verification
 
@@ -727,33 +732,88 @@ async function handleRaceGame(bet) {
     }
 }
 // --- End Game Processing ---
+
+// --- END OF CHUNK 4 of 5 ---
 // --- Main Server Start Function ---
 async function startServer() {
     try {
         await initializeDatabase(); // Ensure DB is ready first
         const PORT = process.env.PORT || 3000; // Use 3000 based on successful deploy config
 
+        // Set up webhook before starting server ONLY if on Railway
+        // Ensure RAILWAY_STATIC_URL environment variable is available in Railway service settings
+        if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_STATIC_URL) {
+             const webhookUrl = `https://${process.env.RAILWAY_STATIC_URL}${webhookPath}`; // Use HTTPS
+             try {
+                await bot.setWebHook(webhookUrl);
+                console.log(`✅ Telegram Webhook set to: ${webhookUrl}`);
+             } catch(webhookError) {
+                 console.error(`❌ Failed to set Telegram Webhook to ${webhookUrl}:`, webhookError.message);
+                 // Decide if bot should exit or continue without webhook
+             }
+        } else {
+             console.log("ℹ️ Skipping webhook setup (not on Railway or RAILWAY_STATIC_URL missing).");
+        }
+
         // Listen on 0.0.0.0 to accept connections from Railway proxy
-        // *** THIS IS THE LINE WITH THE 0.0.0.0 FIX ***
         app.listen(PORT, "0.0.0.0", () => {
-            console.log(`✅ Healthcheck server listening on 0.0.0.0:${PORT}`); // Log host too
+            console.log(`✅ Healthcheck server listening on 0.0.0.0:${PORT}`);
             console.log("Application fully started.");
-            // Log polling status correctly based on bot state
-            if (bot.isPolling()) {
-                 // This should not be reached because polling is disabled above
-                 console.warn("--- Bot is POLLING (WARNING: May cause instability) ---");
+
+            // Start polling ONLY if NOT on Railway (for local dev)
+            // Also checks if a webhook was successfully set (it shouldn't poll if webhook is active)
+            if (!process.env.RAILWAY_ENVIRONMENT) {
+                // Check if webhook is already set (e.g., from a previous run or manual setting)
+                bot.getWebHookInfo().then(info => {
+                    if (info && info.url) {
+                        console.log(`ℹ️ Found existing webhook set to ${info.url}. Deleting before starting polling.`);
+                        return bot.deleteWebHook(); // Delete webhook before polling
+                    }
+                    return true; // No webhook set, safe to poll
+                }).then(deleted => {
+                    if(deleted) {
+                        console.log('Attempting to start polling for local development...');
+                        bot.startPolling({/* options if needed */}).then(() => {
+                             console.log("--- Bot is ACTIVE and POLLING for messages (Local Development) ---");
+                        }).catch(pollError => {
+                             console.error("Error starting polling:", pollError.message);
+                        });
+                    } else {
+                        console.error("Could not delete existing webhook. Polling NOT started.");
+                    }
+                }).catch(err => {
+                     console.error('Error checking/deleting webhook:', err.message);
+                     // Maybe still try polling? Or log error and continue without?
+                     // For safety, let's not poll if we couldn't check/delete webhook
+                     console.log("--- Bot NOT POLLING due to webhook check error ---");
+                });
             } else {
-                 console.log("--- Bot is initialized but NOT POLLING (Webhooks needed for interaction) ---");
+                // On Railway, confirm webhook status
+                 bot.getWebHookInfo().then(info => {
+                     if (info && info.url) {
+                         console.log(`--- Bot configured for WEBHOOK at ${info.url} ---`);
+                         if (info.last_error_date) {
+                             console.warn(`--- WARNING: Webhook has recent errors! Last error on ${new Date(info.last_error_date * 1000)} ---`);
+                         }
+                         if (info.pending_update_count > 0) {
+                             console.warn(`--- WARNING: Webhook has ${info.pending_update_count} pending updates! ---`);
+                         }
+                     } else {
+                          console.warn(`--- WARNING: Bot running on Railway but Webhook is NOT SET or failed to set! Bot will not receive messages. ---`);
+                     }
+                 }).catch(err => {
+                      console.error("--- Error checking webhook status on Railway:", err.message, "---");
+                 });
             }
-             // Start monitor after a short delay to allow server to stabilize
+
+             // Start monitor after a short delay
              if (!monitorInterval) { // Prevent multiple intervals if restart happens
                  console.log("--- Starting payment monitor... ---");
                  // Delay starting the interval slightly
-                 setTimeout(() => {
-                     monitorInterval = setInterval(monitorPayments, monitorIntervalSeconds * 1000);
-                     monitorPayments(); // Run once immediately after delay
-                     console.log(`--- Payment monitor started (Interval: ${monitorIntervalSeconds}s) ---`);
-                 }, 5000); // Start monitor after 5 seconds
+                 monitorInterval = setInterval(monitorPayments, monitorIntervalSeconds * 1000);
+                 // Run once immediately only after a delay to ensure server is fully up
+                 setTimeout(monitorPayments, 5000); // Start first check after 5 seconds
+                 console.log(`--- Payment monitor started (Interval: ${monitorIntervalSeconds}s) ---`);
              }
         });
     } catch (error) {
@@ -772,9 +832,6 @@ const gracefulShutdown = (signal) => {
         clearInterval(monitorInterval); // Stop monitor first
         console.log("Payment monitor stopped.");
     }
-    // Optional: Inform users bot is restarting if possible/needed
-    // bot.sendMessage(...).catch(...); // Might fail if bot already stopping
-
     // Attempt to close DB pool
     console.log("Closing database pool...");
     pool.end().then(() => {
@@ -799,7 +856,6 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM')); // e.g., Railway stop/
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
   // Optional: Decide if you want to crash or attempt recovery
-  // Consider adding more robust error reporting here (e.g., to an external service)
   // gracefulShutdown('Unhandled Rejection'); // Optional: attempt graceful shutdown
 });
 process.on('uncaughtException', (error) => {
@@ -811,3 +867,5 @@ process.on('uncaughtException', (error) => {
 });
 
 console.log("--- Bot script finished executing initial setup code ---"); // Final log message
+
+// --- END OF CHUNK 5 of 5 ---
