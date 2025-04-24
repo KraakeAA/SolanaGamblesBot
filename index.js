@@ -549,8 +549,11 @@ async function monitorPayments() {
             try {
                 // New version (using built-in rate limiting)
 const signatures = await solanaConnection.getSignaturesForAddress(
-    new PublicKey(wallet.address),
-    { limit: 10 }
+    new PublicKey(wallet.address), 
+    { 
+        limit: 15, // Increased from 10
+        before: lastProcessedSignature[wallet.address] // New: pagination tracking
+    }
 );
                 if (!signatures || signatures.length === 0) continue;
 
