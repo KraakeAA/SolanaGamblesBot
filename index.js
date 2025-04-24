@@ -1,22 +1,11 @@
-// Minimal app + Bot/Solana Init (NO POLLING)
+// Test: Ensure DB init completes before app listens
 require('dotenv').config();
 const express = require('express');
-const { Pool } = require('pg'); // Keep pg
-const TelegramBot = require('node-telegram-bot-api'); // Add back TelegramBot require
-const { // Add back Solana requires
-    Connection,
-    // clusterApiUrl,
-    PublicKey,
-    LAMPORTS_PER_SOL,
-    Keypair,
-    Transaction,
-    SystemProgram,
-    sendAndConfirmTransaction,
-    ComputeBudgetProgram
-} = require('@solana/web3.js');
-const bs58 = require('bs58'); // Add back bs58 require
+const { Pool } = require('pg');
+const TelegramBot = require('node-telegram-bot-api');
+const { Connection } = require('@solana/web3.js'); // Simplified Solana require for init only
 
-// Check only BOT_TOKEN for now
+// Check only BOT_TOKEN
 if (!process.env.BOT_TOKEN) {
      console.error(`Environment variable BOT_TOKEN is missing.`);
      process.exit(1);
@@ -25,14 +14,20 @@ if (!process.env.BOT_TOKEN) {
 const app = express();
 
 // --- PostgreSQL Setup ---
+console.log("Setting up PostgreSQL Pool...");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // ssl: { rejectUnauthorized: false } // Keep commented unless needed
+  // ssl: { rejectUnauthorized: false }
 });
+console.log("PostgreSQL Pool created.");
+
+// Function to make sure the 'bets' table exists
 async function initializeDatabase() {
+  console.log("Initializing Database...");
   let client;
   try {
     client = await pool.connect();
+    console.log("DB client connected.");
     await client.query(`
       CREATE TABLE IF NOT EXISTS bets (
         id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, chat_id TEXT NOT NULL,
@@ -44,7 +39,7 @@ async function initializeDatabase() {
     console.log("✅ Database table 'bets' checked/created successfully.");
   } catch (err) {
     console.error("❌ Error initializing database table:", err);
-    process.exit(1);
+    throw err; // Re-throw error to be caught by calling function
   } finally {
     if (client) {
       client.release();
@@ -52,64 +47,55 @@ async function initializeDatabase() {
     }
   }
 }
-initializeDatabase().catch(err => {
-    console.error("Unhandled error during async DB initialization:", err);
-    process.exit(1);
-});
 // --- End of PostgreSQL section ---
 
 // --- Bot and Solana Initialization ---
-console.log("Initializing Telegram Bot...");
-// IMPORTANT: Initialize bot WITHOUT polling for this test
+console.log("Initializing Telegram Bot (NO POLLING)...");
+// IMPORTANT: Initialize bot WITHOUT polling
 const bot = new TelegramBot(process.env.BOT_TOKEN);
 console.log("Telegram Bot initialized.");
 
 console.log("Initializing Solana Connection...");
-// Ensure RPC_URL is set in Railway variables or default to a public one
 const connection = new Connection(process.env.RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
 console.log("Solana Connection initialized.");
 // --- End Initialization ---
 
-
-// --- Express Healthcheck ---
+// --- Express Healthcheck Route ---
 app.get('/', (req, res) => {
   console.log("Health check endpoint '/' hit!");
   res.status(200).send('OK');
 });
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-    console.log(`✅ Healthcheck server listening on port ${PORT}`);
-    console.log("Waiting for requests or signals...");
-});
+
+// --- Main Server Start Function ---
+async function startServer() {
+    try {
+        // Ensure DB is ready first
+        await initializeDatabase();
+
+        // Then start listening for HTTP requests
+        const PORT = process.env.PORT || 8080;
+        app.listen(PORT, () => {
+            console.log(`✅ Healthcheck server listening on port ${PORT}`);
+            console.log("Application fully started. Waiting for requests or signals...");
+        });
+
+    } catch (error) {
+        console.error("💥 Failed to start server:", error);
+        process.exit(1); // Exit if essential startup fails
+    }
+}
+
+// --- Start the server ---
+startServer();
 
 
 /* ===============================================
-   BOT LOGIC REMAINS COMMENTED OUT FOR NOW
+   BOT LOGIC REMAINS COMMENTED OUT
    =============================================== */
 
 /*
-
-// --- Constants and In-Memory State ---
-// ... (all constants and in-memory state variables remain commented) ...
-
-// --- Functions (checkPayment, sendSol, etc.) ---
-// ... (all these functions remain commented) ...
-
-// --- Bot Command Handlers ---
-// ... (all bot.onText handlers remain commented) ...
-
-// --- Payment Monitoring Logic ---
-// ... (monitorPayments function remains commented) ...
-
-// --- Database Interaction Functions ---
-// ... (findBetByMemo, updateBetStatus remain commented for now) ...
-
-// --- Game Processing Logic ---
-// ... (processPaidBet, handleCoinflipGame, handleRaceGame remain commented) ...
-
-console.log("Bot logic initialization skipped (commented out).");
-
-*/ // <--- END OF COMMENTED OUT CODE
+// ... (All commented out code remains here) ...
+*/
 
 
 // --- Graceful shutdown ---
@@ -130,7 +116,5 @@ process.on('unhandledRejection', (reason, promise) => {
 // Catch uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
-  process.exit(1); // Exit on uncaught exception
+  process.exit(1);
 });
-
-console.log("Application started with Bot/Solana initializers (NO POLLING).");
