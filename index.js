@@ -10,16 +10,16 @@ const REQUIRED_ENV_VARS = [
     'RACE_WALLET_ADDRESS',// Wallet for Race bets
     'RPC_URL'             // Solana RPC endpoint
 ];
-// Also check Railway specific vars if using webhook logic
+// Check for the correct Railway public domain variable only when running on Railway
 if (process.env.RAILWAY_ENVIRONMENT) {
-    REQUIRED_ENV_VARS.push('RAILWAY_STATIC_URL');
+    REQUIRED_ENV_VARS.push('RAILWAY_PUBLIC_DOMAIN'); // <<< Use RAILWAY_PUBLIC_DOMAIN
 }
 let missingVars = false;
 REQUIRED_ENV_VARS.forEach((key) => {
     if (!process.env[key]) {
-        // Allow RAILWAY_STATIC_URL to be missing locally
-        if (key === 'RAILWAY_STATIC_URL' && !process.env.RAILWAY_ENVIRONMENT) {
-            // It's ok if this is missing locally
+        // Allow RAILWAY_PUBLIC_DOMAIN to be missing locally
+        if (key === 'RAILWAY_PUBLIC_DOMAIN' && !process.env.RAILWAY_ENVIRONMENT) {
+             // It's ok if this is missing locally
         } else {
             console.error(`❌ Environment variable ${key} is missing.`);
             missingVars = true;
@@ -102,7 +102,7 @@ app.get('/', (req, res) => {
 const webhookPath = `/bot${process.env.BOT_TOKEN}`;
 app.post(webhookPath, (req, res) => {
     try {
-        // console.log("Webhook update received:", JSON.stringify(req.body, null, 2)); // Log if debugging webhook
+        // console.log("Webhook update received:", JSON.stringify(req.body, null, 2)); // Verbose log
         bot.processUpdate(req.body); // Feed update to bot library
         res.sendStatus(200); // OK back to Telegram
     } catch (error) {
@@ -453,9 +453,8 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
         const userChoice = match[2].toLowerCase();
 
         if (isNaN(betAmount) || betAmount < MIN_BET || betAmount > MAX_BET) {
-            // Don't need return if we throw/catch, just send message
              await bot.sendMessage(chatId, `⚠️ Bet must be between ${MIN_BET} - ${MAX_BET} SOL`);
-             return; // Exit handler after sending message
+             return; // Exit handler
         }
         if (confirmCooldown[userId] && (Date.now() - confirmCooldown[userId]) < cooldownInterval) {
              await bot.sendMessage(chatId, `⚠️ Please wait a few seconds...`);
@@ -550,7 +549,7 @@ bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
     }
 });
 
-// Disabled /confirm commands - Send message informing user
+// Disabled /confirm commands - Inform user they are no longer needed
 bot.onText(/^\/confirm$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirm command no longer needed.`); } catch(e){} });
 bot.onText(/^\/confirmrace$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirmrace command no longer needed.`); } catch(e){} });
 
@@ -738,28 +737,28 @@ async function handleRaceGame(bet) {
 // --- End Game Processing ---
 
 // --- END OF CHUNK 4 of 5 ---
-// --- Main Server Start Function (Corrected webhookUrl scope) ---
+// --- Main Server Start Function ---
 async function startServer() {
     try {
         await initializeDatabase(); // Ensure DB is ready first
-        const PORT = process.env.PORT || 3000; // Use 3000 based on successful deploy config
+        const PORT = process.env.PORT || 3000; // Use 3000 based on Railway config
 
         // Set up webhook before starting server ONLY if on Railway
-        // Ensure RAILWAY_STATIC_URL environment variable is available in Railway service settings
-        if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_STATIC_URL) {
-             // Define webhookUrl HERE, within the scope where it's used
-             const webhookUrl = `https://<span class="math-inline">\{process\.env\.RAILWAY\_STATIC\_URL\}</span>{webhookPath}`; // Use HTTPS
+        // Ensure RAILWAY_PUBLIC_DOMAIN environment variable is available in Railway service settings
+        if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_PUBLIC_DOMAIN) {
+             // Construct the full URL for the webhook endpoint using the correct variable
+             const webhookFullUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}${webhookPath}`;
              try {
                 // Attempt to set the webhook
-                await bot.setWebHook(webhookUrl, {
-                    // drop_pending_updates: true // Optional
+                await bot.setWebHook(webhookFullUrl, {
+                    // drop_pending_updates: true // Optional: Ignore updates sent while bot was offline
                 });
-                console.log(`✅ Telegram Webhook set to: ${webhookUrl}`);
+                console.log(`✅ Telegram Webhook set to: ${webhookFullUrl}`);
 
-                // Verify webhook setup using the defined variable
+                // Verify webhook setup (optional but recommended)
                 const webhookInfo = await bot.getWebHookInfo();
-                if (webhookInfo.url !== webhookUrl) { // Use webhookUrl variable here
-                     console.error(`❌ Failed to verify webhook URL! Telegram reports: ${webhookInfo.url} Expected: ${webhookUrl}`);
+                if (webhookInfo.url !== webhookFullUrl) {
+                     console.error(`❌ Failed to verify webhook URL! Telegram reports: ${webhookInfo.url} Expected: ${webhookFullUrl}`);
                 } else if (webhookInfo.last_error_date) {
                      console.warn(`⚠️ Webhook Status: Last error reported by Telegram on ${new Date(webhookInfo.last_error_date * 1000)}`);
                 } else {
@@ -771,7 +770,7 @@ async function startServer() {
                  console.warn("Continuing without Webhook functionality due to setup error.");
              }
         } else {
-             console.log("ℹ️ Skipping webhook setup (not on Railway or RAILWAY_STATIC_URL missing).");
+             console.log("ℹ️ Skipping webhook setup (not on Railway or RAILWAY_PUBLIC_DOMAIN missing).");
         }
 
         // Listen on 0.0.0.0 to accept connections from Railway proxy
@@ -780,41 +779,42 @@ async function startServer() {
             console.log("Application fully started.");
 
             // Start polling ONLY if NOT on Railway (for local dev)
-            // Also checks if a webhook is unexpectedly set
+            // Check first if a webhook is set (it shouldn't be if not on Railway or setWebhook failed)
             if (!process.env.RAILWAY_ENVIRONMENT) {
                  bot.getWebHookInfo().then(info => {
                     if (info && info.url) {
                         console.log(`ℹ️ Deleting existing webhook (${info.url}) before starting polling locally.`);
-                        return bot.deleteWebHook();
+                        return bot.deleteWebHook(); // Attempt to delete webhook before polling
                     }
-                    return true; // No webhook, safe to poll
+                    return true; // No webhook set, safe to poll
                 }).then(deleted => {
                     if(deleted) {
                         console.log('Attempting to start polling for local development...');
-                        // Start polling and add error handling
+                        // Start polling and add error handling for polling itself
                         bot.startPolling({/* options if needed */})
                             .then(() => console.log("--- Bot is ACTIVE and POLLING for messages (Local Development) ---"))
-                            .catch(pollError => console.error("Error starting polling:", pollError.message));
+                            .catch(pollError => console.error("Error starting polling:", pollError.message)); // Catch polling start errors
                     } else {
-                        console.error("Could not delete existing webhook. Polling NOT started locally.");
+                        console.error("Could not delete existing webhook. Polling NOT started locally to avoid conflicts.");
                     }
                 }).catch(err => {
                      console.error('Error checking/deleting webhook for local polling:', err.message);
                      console.log("--- Bot NOT POLLING due to webhook check error ---");
                 });
             } else {
-                // On Railway, we already logged webhook status after setting it, confirm again maybe
+                // On Railway, confirm webhook status again just in case
                  bot.getWebHookInfo().then(info => {
                      if (info && info.url) {
-                        console.log(`--- Bot configured for WEBHOOK at ${info.url} ---`);
-                         // Optional: Re-check for errors/pending updates later if needed
+                         // Already logged success or failure during setWebhook attempt
+                         console.log(`--- Bot should be using WEBHOOK at ${info.url} ---`);
                      } else {
-                          console.warn(`--- WARNING: Bot running on Railway but Webhook is NOT SET or failed to set! Bot will not receive messages. ---`);
+                          // This confirms the setWebhook call failed earlier
+                          console.warn(`--- WARNING: Bot running on Railway but Webhook is NOT SET! Bot will not receive messages. Check previous logs for setWebhook errors. ---`);
                      }
                  }).catch(err => {
                       console.error("--- Error checking webhook status on Railway:", err.message, "---");
                  });
-                 console.log("--- Bot should be using WEBHOOK (Railway Environment) ---")
+                 console.log("--- Bot configured for WEBHOOK (Railway Environment) ---")
             }
 
              // Start monitor after a short delay
@@ -843,8 +843,10 @@ const gracefulShutdown = (signal) => {
         clearInterval(monitorInterval); // Stop monitor first
         console.log("Payment monitor stopped.");
     }
-    // Optional: Tell Telegram to remove webhook on shutdown?
-    // bot.deleteWebHook().then(() => console.log("Webhook deleted.")).catch(e=>console.error("Webhook deletion failed",e));
+    // Optional: Tell Telegram to remove webhook on shutdown? Might cause issues if next deploy fails.
+    // if (process.env.RAILWAY_ENVIRONMENT) {
+    //    bot.deleteWebHook().then(() => console.log("Webhook deleted.")).catch(e=>console.error("Webhook deletion failed",e));
+    // }
 
     // Attempt to close DB pool
     console.log("Closing database pool...");
@@ -869,16 +871,18 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM')); // e.g., Railway stop/
 // --- Error Handlers ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Consider whether to crash or attempt recovery
-  // gracefulShutdown('Unhandled Rejection'); // Optional: attempt graceful shutdown
+  // Consider logging to an external service or attempting graceful shutdown
+  // gracefulShutdown('Unhandled Rejection');
 });
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
-  // Definitely exit after uncaught exception, but try to shutdown gracefully first
+  // Attempt graceful shutdown before exiting
   gracefulShutdown('Uncaught Exception');
   // Ensure process exits even if graceful shutdown hangs
   setTimeout(() => process.exit(1), 7000);
 });
 
 console.log("--- Bot script finished executing initial setup code ---"); // Final log message
+
 // --- END OF CHUNK 5 of 5 ---
+// --- END OF FILE ---
