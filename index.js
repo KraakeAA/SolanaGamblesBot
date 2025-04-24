@@ -862,7 +862,10 @@ const gracefulShutdown = (signal) => {
 };
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT')); // e.g., Ctrl+C
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM')); // e.g., Railway stop/restart
+process.on('SIGTERM', () => {
+    console.log("â ï¸ SIGTERM RECEIVED â Railway is likely stopping the container.");
+    gracefulShutdown('SIGTERM');
+}); // e.g., Railway stop/restart
 
 // --- Error Handlers ---
 process.on('unhandledRejection', (reason, promise) => {
