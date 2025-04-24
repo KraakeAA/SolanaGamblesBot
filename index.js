@@ -608,10 +608,16 @@ bot.onText(/\/reset$/, async (msg) => {
 });
 
 bot.onText(/\/coinflip$/, (msg) => {
+    // Use Markdown backticks for code formatting within the main template literal
+    const helpMessage = `🪙 Coinflip! Choose amount and side:\n\n` +
+                        `\`/bet amount heads\`\n` + // Use Markdown code format
+                        `\`/bet amount tails\`\n\n` + // Use Markdown code format
+                        `Min: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`;
+
     bot.sendMessage(
         msg.chat.id,
-        `🪙 Coinflip! Choose amount and side:\n\n`/bet amount heads`\n`/bet amount tails`\n\nMin: ${MIN_BET} SOL | Max: ${MAX_BET} SOL`,
-        { parse_mode: 'Markdown' }
+        helpMessage,
+        { parse_mode: 'Markdown' } // Ensure Markdown parsing is enabled
     );
 });
 
