@@ -544,11 +544,11 @@ async function monitorPayments() {
         // Process each wallet with priority awareness
         for (const wallet of walletsToMonitor) {
             try {
-                const signatures = await solanaConnection.executeWithRetry(
-                    'getSignaturesForAddress',
-                    [new PublicKey(wallet.address), { limit: 10 }]
-                );
-
+                // New version (using built-in rate limiting)
+const signatures = await solanaConnection.getSignaturesForAddress(
+    new PublicKey(wallet.address),
+    { limit: 10 }
+);
                 if (!signatures || signatures.length === 0) continue;
 
                 // Process signatures with priority queuing
