@@ -746,23 +746,27 @@ async function startServer() {
         // Set up webhook before starting server ONLY if on Railway
         // Ensure RAILWAY_PUBLIC_DOMAIN environment variable is available in Railway service settings
         if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_PUBLIC_DOMAIN) {
+             // Construct the full URL for the webhook endpoint using the correct variable
              const webhookFullUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}${webhookPath}`;
              try {
-                 const webhookInfo = await bot.getWebHookInfo();
-                 if (webhookInfo.url !== webhookFullUrl) {
-                     await bot.setWebHook(webhookFullUrl);
-                     console.log(`â Telegram Webhook set to: ${webhookFullUrl}`);
-                 } else {
-                     console.log(`â¹ï¸ Webhook already correctly set to: ${webhookInfo.url}`);
-                 }
+                // Attempt to set the webhook
+                await bot.setWebHook(webhookFullUrl, {
+                    // drop_pending_updates: true // Optional: Ignore updates sent while bot was offline
+                });
+                console.log(`â Telegram Webhook set to: ${webhookFullUrl}`);
 
-                 if (webhookInfo.last_error_date) {
+                // Verify webhook setup (optional but recommended)
+                const webhookInfo = await bot.getWebHookInfo();
+                if (webhookInfo.url !== webhookFullUrl) {
+                     console.error(`â Failed to verify webhook URL! Telegram reports: ${webhookInfo.url} Expected: ${webhookFullUrl}`);
+                } else if (webhookInfo.last_error_date) {
                      console.warn(`â ï¸ Webhook Status: Last error reported by Telegram on ${new Date(webhookInfo.last_error_date * 1000)}`);
-                 } else {
+                } else {
                      console.log(`â¹ï¸ Webhook status confirmed by Telegram.`);
-                 }
-             } catch (webhookError) {
-                 console.error(`â Failed to verify/set Telegram Webhook:`, webhookError.message);
+                }
+
+             } catch(webhookError) {
+                 console.error(`â Failed to set Telegram Webhook to ${webhookUrl}:`, webhookError.message);
                  console.warn("Continuing without Webhook functionality due to setup error.");
              }
         } else {
@@ -862,10 +866,7 @@ const gracefulShutdown = (signal) => {
 };
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT')); // e.g., Ctrl+C
-process.on('SIGTERM', () => {
-    console.log("â ï¸ SIGTERM RECEIVED â Railway is likely stopping the container.");
-    gracefulShutdown('SIGTERM');
-}); // e.g., Railway stop/restart
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM')); // e.g., Railway stop/restart
 
 // --- Error Handlers ---
 process.on('unhandledRejection', (reason, promise) => {
