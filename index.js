@@ -59,13 +59,16 @@ const app = express();
 // 1. Enhanced Solana Connection with Rate Limiting
 console.log("Initializing scalable Solana connection...");
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 3,
-    retryBaseDelay: 300,
+    maxConcurrent: 3, // Keep same concurrency
+    retryBaseDelay: 600, // Increased from 300ms for more conservative retries
     commitment: 'confirmed',
     httpHeaders: {
         'Content-Type': 'application/json',
-        'solana-client': 'SolanaGamblesBot/1.0'
-    }
+        'solana-client': `SolanaGamblesBot/2.0 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Added version/env info
+    },
+    // New properties:
+    rateLimitCooloff: 10000, // 10s pause after hitting rate limits
+    disableRetryOnRateLimit: false // Enable automatic retry
 });
 console.log("✅ Scalable Solana connection initialized");
 
