@@ -39,7 +39,7 @@ if (!process.env.FEE_MARGIN) {
 
 // --- Scalable Infrastructure Imports ---
 const { RateLimitedConnection } = require('./lib/solana-connection');
-const PQueue = require('p-queue');
+import { default as PQueue } from 'p-queue';
 const { Pool } = require('pg');
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
@@ -312,7 +312,7 @@ async function savePendingBet(userId, chatId, gameType, details, lamports, memoI
         const res = await pool.query(query, values);
         return { success: true, id: res.rows[0].id };
     } catch (err) {
-        console.error(`DB Error saving bet:`, err);
+        console.error('DB Error saving bet:', err);
         return { 
             success: false, 
             error: err.code === '23505' ? 'Memo ID collision' : err.message 
@@ -727,8 +727,8 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
     ),
     new Promise((_, reject) => {
         setTimeout(() => {
-            reject(new Error('Transaction timeout after 30 seconds'));
-        }, 30000);
+    reject(new Error('Transaction timeout after 30s'));
+}, 30000);
     })
 ]);
             console.log(`✅ Sent ${(Number(transferAmount)/LAMPORTS_PER_SOL).toFixed(6)} SOL`);
