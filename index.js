@@ -1,4 +1,20 @@
-require('dotenv').config();
+import 'dotenv/config';
+import { Pool } from 'pg';
+import express from 'express';
+import TelegramBot from 'node-telegram-bot-api';
+import { 
+    PublicKey, 
+    LAMPORTS_PER_SOL, 
+    Keypair, 
+    Transaction, 
+    SystemProgram, 
+    sendAndConfirmTransaction, 
+    ComputeBudgetProgram 
+} from '@solana/web3.js';
+import bs58 from 'bs58';
+import { randomBytes } from 'crypto';
+import PQueue from 'p-queue';
+import { RateLimitedConnection } from './lib/solana-connection.js';
 
 // --- Enhanced Environment Variable Checks ---
 const REQUIRED_ENV_VARS = [
@@ -36,24 +52,6 @@ if (missingVars) {
 if (!process.env.FEE_MARGIN) {
     process.env.FEE_MARGIN = '5000';
 }
-
-// --- Scalable Infrastructure Imports ---
-const { RateLimitedConnection } = require('./lib/solana-connection');
-import { default as PQueue } from 'p-queue';
-const { Pool } = require('pg');
-const express = require('express');
-const TelegramBot = require('node-telegram-bot-api');
-const {
-    PublicKey,
-    LAMPORTS_PER_SOL,
-    Keypair,
-    Transaction,
-    SystemProgram,
-    sendAndConfirmTransaction,
-    ComputeBudgetProgram,
-} = require('@solana/web3.js');
-const bs58 = require('bs58');
-const { randomBytes } = require('crypto');
 
 // --- Initialize Scalable Components ---
 const app = express();
@@ -135,7 +133,7 @@ async function initializeDatabase() {
                 payout_tx_signature TEXT UNIQUE,
                 processed_at TIMESTAMPTZ,
                 fees_paid BIGINT,
-                priority INT DEFAULT 0  -- New field for priority handling
+                priority INT DEFAULT 0
             );
         `);
         
@@ -153,7 +151,7 @@ async function initializeDatabase() {
             CREATE INDEX IF NOT EXISTS idx_bets_status ON bets(status);
             CREATE INDEX IF NOT EXISTS idx_bets_user_id ON bets(user_id);
             CREATE INDEX IF NOT EXISTS idx_bets_expires_at ON bets(expires_at);
-            CREATE INDEX IF NOT EXISTS idx_bets_priority ON bets(priority);  -- New priority index
+            CREATE INDEX IF NOT EXISTS idx_bets_priority ON bets(priority);
         `);
         
         console.log("✅ Database initialized with scalable schema");
@@ -715,22 +713,23 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
             );
 
             const signature = await Promise.race([
-    sendAndConfirmTransaction(
-        connection,
-        transaction,
-        [payerWallet],
-        { 
-            commitment: 'confirmed',
-            skipPreflight: false,
-            maxRetries: 3
-        }
-    ),
-    new Promise((_, reject) => {
-        setTimeout(() => {
-    reject(new Error('Transaction timeout after 30s'));
-}, 30000);
-    })
-]);
+                sendAndConfirmTransaction(
+                    solanaConnection,
+                    transaction,
+                    [payerWallet],
+                    { 
+                        commitment: 'confirmed',
+                        skipPreflight: false,
+                        maxRetries: 3
+                    }
+                ),
+                new Promise((_, reject) => {
+                    setTimeout(() => {
+                        reject(new Error('Transaction timeout after 30s'));
+                    }, 30000);
+                })
+            ]);
+
             console.log(`✅ Sent ${(Number(transferAmount)/LAMPORTS_PER_SOL).toFixed(6)} SOL`);
             return { success: true, signature };
             
@@ -844,7 +843,7 @@ async function handleCoinflipGame(bet) {
                 amount: payoutLamports,
                 gameType: 'coinflip',
                 priority: 2, // Higher than monitoring
-                chatId,
+                chatId: chat_id,
                 displayName,
                 result
             });
@@ -960,8 +959,7 @@ async function handleRaceGame(bet) {
     } catch (e) {
         console.warn(`Couldn't get username for user ${user_id}:`, e.message);
     }
-
-    if (win) {
+        if (win) {
         const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
         console.log(`Bet ${betId}: ${displayName} WON ${payoutSOL} SOL`);
 
@@ -994,7 +992,7 @@ async function handleRaceGame(bet) {
                 amount: payoutLamports,
                 gameType: 'race',
                 priority: 2,
-                chatId,
+                chatId: chat_id,
                 displayName,
                 horseName,
                 winningHorse
@@ -1018,6 +1016,7 @@ async function handleRaceGame(bet) {
         await updateBetStatus(betId, 'completed_loss');
     }
 }
+
 // --- Enhanced Bot Command Handlers ---
 bot.on('polling_error', (error) => {
     console.error(`Polling error: ${error.code} - ${error.message}`);
@@ -1254,7 +1253,6 @@ async function handleBetRaceCommand(msg) {
         { parse_mode: 'Markdown' }
     );
 }
-
 // --- Server Startup & Shutdown ---
 async function startServer() {
     try {
