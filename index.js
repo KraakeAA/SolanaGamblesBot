@@ -19,7 +19,7 @@ REQUIRED_ENV_VARS.forEach((key) => {
     if (!process.env[key]) {
         // Allow RAILWAY_STATIC_URL to be missing locally
         if (key === 'RAILWAY_STATIC_URL' && !process.env.RAILWAY_ENVIRONMENT) {
-             // It's ok if this is missing locally
+            // It's ok if this is missing locally
         } else {
             console.error(`❌ Environment variable ${key} is missing.`);
             missingVars = true;
@@ -79,7 +79,7 @@ async function initializeDatabase() {
 
 // --- Bot and Solana Initialization ---
 console.log("Initializing Telegram Bot...");
-const bot = new TelegramBot(process.env.BOT_TOKEN); // NO POLLING HERE
+const bot = new TelegramBot(process.env.BOT_TOKEN); // NO POLLING HERE!
 console.log("Telegram Bot initialized.");
 
 console.log("Initializing Solana Connection...");
@@ -98,17 +98,16 @@ app.get('/', (req, res) => {
 });
 
 // *** Webhook endpoint ***
-// Define the route BEFORE bot command handlers that might rely on `bot.processUpdate`
-// Use the BOT_TOKEN as a secret path to ensure only Telegram hits this endpoint
+// Use the BOT_TOKEN as a secret path
 const webhookPath = `/bot${process.env.BOT_TOKEN}`;
 app.post(webhookPath, (req, res) => {
     try {
-        // console.log("Webhook update received:", JSON.stringify(req.body, null, 2)); // Very verbose log
-        bot.processUpdate(req.body); // Feed the update to the bot library
-        res.sendStatus(200); // Send OK back to Telegram immediately
+        // console.log("Webhook update received:", JSON.stringify(req.body, null, 2)); // Log if debugging webhook
+        bot.processUpdate(req.body); // Feed update to bot library
+        res.sendStatus(200); // OK back to Telegram
     } catch (error) {
          console.error("Error processing webhook update:", error);
-         res.sendStatus(500); // Indicate server error
+         res.sendStatus(500);
     }
 });
 // --- End Express Setup ---
@@ -124,7 +123,7 @@ const MIN_BET = 0.01; const MAX_BET = 1.0; const RACE_MIN_BET = 0.01; const RACE
 // --- Helper Functions ---
 function generateMemoId(prefix = 'BET') { return prefix + randomBytes(6).toString('hex').toUpperCase(); }
 function findMemoInTx(tx) { if (!tx?.transaction?.message?.instructions) return null; try { const MEMO_PROGRAM_ID = 'Memo1UhkJRfHyvLMcVuc6beZNRYqUP2VZwW'; for (const instruction of tx.transaction.message.instructions) { let programId = ''; if (instruction.programIdIndex !== undefined && tx.transaction.message.accountKeys) { const keyInfo = tx.transaction.message.accountKeys[instruction.programIdIndex]; if (keyInfo?.pubkey) programId = keyInfo.pubkey.toBase58(); else if (typeof keyInfo === 'string') programId = new PublicKey(keyInfo).toBase58(); } else if (instruction.programId) { programId = instruction.programId.toBase58 ? instruction.programId.toBase58() : instruction.programId.toString(); } if (programId === MEMO_PROGRAM_ID && instruction.data) return bs58.decode(instruction.data).toString('utf-8'); } } catch (e) { console.error("Error parsing memo:", e); } return null; }
-function getPayerFromTransaction(tx) { if (!tx || !tx.meta || !tx.transaction?.message?.accountKeys) return null; const message = tx.transaction.message; const preBalances = tx.meta.preBalances; const postBalances = tx.meta.postBalances; if (message.accountKeys.length > 0 && message.accountKeys[0]?.signer) { let firstSignerKey; if (message.accountKeys[0].pubkey) firstSignerKey = message.accountKeys[0].pubkey; else if (typeof message.accountKeys[0] === 'string') firstSignerKey = new PublicKey(message.accountKeys[0]); else console.warn("Could not derive PublicKey from first signer."); if (firstSignerKey) { const balanceDiff = (preBalances[0] ?? 0) - (postBalances[0] ?? 0); if (balanceDiff > 0) { console.log(`getPayer: Identified payer as first signer: ${firstSignerKey.toBase58()}`); return firstSignerKey; } else console.warn(`getPayer: First signer ${firstSignerKey.toBase58()} had non-positive balance change.`); } } for (let i = 0; i < message.accountKeys.length; i++) { if (i >= preBalances.length || i >= postBalances.length) continue; if (message.accountKeys[i]?.signer) { let key; if (message.accountKeys[i].pubkey) key = message.accountKeys[i].pubkey; else if (typeof message.accountKeys[i] === 'string') key = new PublicKey(message.accountKeys[i]); else continue; const balanceDiff = (preBalances[i] ?? 0) - (postBalances[i] ?? 0); if (balanceDiff > 0) { console.log(`getPayer: Identified payer via fallback: ${key.toBase58()}`); return key; } } } console.error("getPayer: Could not determine payer."); return null; }
+function getPayerFromTransaction(tx) { if (!tx || !tx.meta || !tx.transaction?.message?.accountKeys) return null; const message = tx.transaction.message; const preBalances = tx.meta.preBalances; const postBalances = tx.meta.postBalances; if (message.accountKeys.length > 0 && message.accountKeys[0]?.signer) { let firstSignerKey; if (message.accountKeys[0].pubkey) firstSignerKey = message.accountKeys[0].pubkey; else if (typeof message.accountKeys[0] === 'string') firstSignerKey = new PublicKey(message.accountKeys[0]); else console.warn("Could not derive PublicKey from first signer."); if (firstSignerKey) { const balanceDiff = (preBalances[0] ?? 0) - (postBalances[0] ?? 0); if (balanceDiff > 0) { /* console.log(`getPayer: Identified payer as first signer: ${firstSignerKey.toBase58()}`); */ return firstSignerKey; } else console.warn(`getPayer: First signer ${firstSignerKey.toBase58()} had non-positive balance change.`); } } for (let i = 0; i < message.accountKeys.length; i++) { if (i >= preBalances.length || i >= postBalances.length) continue; if (message.accountKeys[i]?.signer) { let key; if (message.accountKeys[i].pubkey) key = message.accountKeys[i].pubkey; else if (typeof message.accountKeys[i] === 'string') key = new PublicKey(message.accountKeys[i]); else continue; const balanceDiff = (preBalances[i] ?? 0) - (postBalances[i] ?? 0); if (balanceDiff > 0) { /* console.log(`getPayer: Identified payer via fallback: ${key.toBase58()}`); */ return key; } } } console.error("getPayer: Could not determine payer."); return null; }
 async function sendSol(connection, payerPrivateKey, recipientPublicKey, amountLamports) { const maxRetries = 3; let lastError = null; const recipientPubKey = (typeof recipientPublicKey === 'string') ? new PublicKey(recipientPublicKey) : recipientPublicKey; const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL; for (let retryCount = 0; retryCount < maxRetries; retryCount++) { try { const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey)); const latestBlockhash = await connection.getLatestBlockhash(); const transaction = new Transaction({ recentBlockhash: latestBlockhash.blockhash, feePayer: payerWallet.publicKey }).add( SystemProgram.transfer({ fromPubkey: payerWallet.publicKey, toPubkey: recipientPubKey, lamports: BigInt(amountLamports) }) ).add( ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }) ).add( ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1000 }) ); const signature = await sendAndConfirmTransaction( connection, transaction, [payerWallet], { commitment: 'confirmed', skipPreflight: false } ); console.log(`✅ Sent ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()}. Sig: ${signature}`); return { success: true, signature }; } catch (error) { console.error(`❌ Error sending ${amountSOL.toFixed(6)} SOL (attempt ${retryCount + 1}/${maxRetries}):`, error); lastError = error; if (error.message.includes('blockhash') || error.message.includes('Blockhash not found') || error.message.includes('timeout')) { await new Promise(resolve => setTimeout(resolve, 1500 * (retryCount + 1))); } else { break; } } } console.error(`❌ Failed send ${amountSOL.toFixed(6)} SOL after ${maxRetries} retries.`); return { success: false, error: lastError ? lastError.message : 'Max retries exceeded' }; }
 
 // --- Database Interaction Functions ---
@@ -384,6 +383,7 @@ bot.onText(/\/reset$/, async (msg) => {
         } else {
             delete confirmCooldown[msg.from.id]; // Clear memory cooldown
             // Future: Consider if /reset should clear pending bets from DB for this user
+            // await pool.query("UPDATE bets SET status = 'expired' WHERE user_id = $1 AND status = 'awaiting_payment'", [String(msg.from.id)]);
             await bot.sendMessage(chatId, `🔄 Cooldowns reset.`);
         }
     } catch (error) {
@@ -394,7 +394,7 @@ bot.onText(/\/reset$/, async (msg) => {
     }
 });
 
-bot.onText(/\/coinflip$/, async (msg) => {
+bot.onText(/\/coinflip$/, async (msg) => { // Added async
     // Handler for /coinflip command
     try {
         // Corrected message formatting for commands
@@ -453,24 +453,26 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
         const userChoice = match[2].toLowerCase();
 
         if (isNaN(betAmount) || betAmount < MIN_BET || betAmount > MAX_BET) {
+            // Don't need return if we throw/catch, just send message
              await bot.sendMessage(chatId, `⚠️ Bet must be between ${MIN_BET} - ${MAX_BET} SOL`);
-             return;
+             return; // Exit handler after sending message
         }
         if (confirmCooldown[userId] && (Date.now() - confirmCooldown[userId]) < cooldownInterval) {
              await bot.sendMessage(chatId, `⚠️ Please wait a few seconds...`);
              return;
         }
-        confirmCooldown[userId] = Date.now();
+        confirmCooldown[userId] = Date.now(); // Set cooldown
 
         // TODO: Optional check for existing pending bet for this user?
 
         const memoId = generateMemoId('CF');
-        const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
+        const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL)); // Use BigInt
         const expiresAt = new Date(Date.now() + PAYMENT_EXPIRY_MINUTES * 60 * 1000);
         const betDetails = { choice: userChoice };
 
         // Save to DB
         const saveResult = await savePendingBet(userId, chatId, 'coinflip', betDetails, expectedLamports, memoId, expiresAt);
+        // If save failed, throw error to be caught below
         if (!saveResult.success) { throw new Error(saveResult.error || 'Failed to save bet to database.'); }
 
         // Instruct User
@@ -484,6 +486,7 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
         );
     } catch (error) {
         console.error(`Error in /bet handler for user ${userId}:`, error);
+        // Inform user about the error
         await bot.sendMessage(chatId, `⚠️ An error occurred registering your bet. ${error.message.includes('collision') ? 'Please try again.' : 'Please try again later.'}`);
     }
 });
@@ -547,8 +550,8 @@ bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
     }
 });
 
-// Disabled /confirm commands - Inform user they are no longer needed
-bot.onText(/^\/confirm$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirm command no longer needed. Verification is automatic.`); } catch(e){} });
+// Disabled /confirm commands - Send message informing user
+bot.onText(/^\/confirm$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirm command no longer needed.`); } catch(e){} });
 bot.onText(/^\/confirmrace$/, async (msg) => { try { await bot.sendMessage(msg.chat.id, `⚠️ /confirmrace command no longer needed.`); } catch(e){} });
 
 // --- End Command Handlers ---
@@ -563,9 +566,10 @@ async function processPaidBet(bet) {
     if (bet.status !== 'payment_verified') {
         console.warn(`Attempted to process bet ${bet.id} but status was ${bet.status} instead of payment_verified. Aborting.`);
         // If status indicates already processed or error, just return
-        if (bet.status !== 'awaiting_payment') return; // Avoid resetting error statuses etc.
-        // If somehow still awaiting_payment, mark error? Or rely on monitor retries? For now, just abort.
-        return;
+        // Avoid resetting error statuses etc. by checking for specific states
+        if (bet.status !== 'awaiting_payment' && bet.status !== 'payment_verified') return;
+        // If somehow still awaiting_payment (race condition?), mark error or rely on monitor retries? For now, just abort.
+        if (bet.status === 'awaiting_payment') return;
     }
     // Lock the bet status to prevent concurrent processing
     const updateResult = await updateBetStatus(bet.id, 'processing_game');
@@ -743,13 +747,30 @@ async function startServer() {
         // Set up webhook before starting server ONLY if on Railway
         // Ensure RAILWAY_STATIC_URL environment variable is available in Railway service settings
         if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_STATIC_URL) {
-             const webhookUrl = `https://${process.env.RAILWAY_STATIC_URL}${webhookPath}`; // Use HTTPS
+             // Construct the full URL for the webhook endpoint
+             const webhookFullUrl = `https://${process.env.RAILWAY_STATIC_URL}${webhookPath}`;
              try {
-                await bot.setWebHook(webhookUrl);
-                console.log(`✅ Telegram Webhook set to: ${webhookUrl}`);
+                // Attempt to set the webhook
+                await bot.setWebHook(webhookFullUrl, {
+                    // drop_pending_updates: true // Optional: Ignore updates sent while bot was offline
+                });
+                console.log(`✅ Telegram Webhook set to: ${webhookFullUrl}`);
+
+                // Verify webhook setup (optional but recommended)
+                const webhookInfo = await bot.getWebHookInfo();
+                if (webhookInfo.url !== webhookUrl) {
+                     console.error(`❌ Failed to verify webhook URL! Telegram reports: ${webhookInfo.url}`);
+                } else if (webhookInfo.last_error_date) {
+                     console.warn(`⚠️ Webhook Status: Last error reported by Telegram on ${new Date(webhookInfo.last_error_date * 1000)}`);
+                } else {
+                     console.log(`ℹ️ Webhook status confirmed by Telegram.`);
+                }
+
              } catch(webhookError) {
                  console.error(`❌ Failed to set Telegram Webhook to ${webhookUrl}:`, webhookError.message);
-                 // Decide if bot should exit or continue without webhook
+                 // Decide if bot should exit or continue without webhook functionality
+                 // Continuing might make sense if monitor can still function
+                 console.warn("Continuing without Webhook functionality due to setup error.");
              }
         } else {
              console.log("ℹ️ Skipping webhook setup (not on Railway or RAILWAY_STATIC_URL missing).");
@@ -761,49 +782,31 @@ async function startServer() {
             console.log("Application fully started.");
 
             // Start polling ONLY if NOT on Railway (for local dev)
-            // Also checks if a webhook was successfully set (it shouldn't poll if webhook is active)
+            // Check first if a webhook is unexpectedly set
             if (!process.env.RAILWAY_ENVIRONMENT) {
-                // Check if webhook is already set (e.g., from a previous run or manual setting)
-                bot.getWebHookInfo().then(info => {
+                 bot.getWebHookInfo().then(info => {
                     if (info && info.url) {
-                        console.log(`ℹ️ Found existing webhook set to ${info.url}. Deleting before starting polling.`);
-                        return bot.deleteWebHook(); // Delete webhook before polling
+                        console.log(`ℹ️ Deleting existing webhook (${info.url}) before starting polling locally.`);
+                        return bot.deleteWebHook();
                     }
-                    return true; // No webhook set, safe to poll
+                    return true; // No webhook, safe to poll
                 }).then(deleted => {
                     if(deleted) {
                         console.log('Attempting to start polling for local development...');
-                        bot.startPolling({/* options if needed */}).then(() => {
-                             console.log("--- Bot is ACTIVE and POLLING for messages (Local Development) ---");
-                        }).catch(pollError => {
-                             console.error("Error starting polling:", pollError.message);
-                        });
+                        // Start polling and add error handling
+                        bot.startPolling({/* options if needed */})
+                            .then(() => console.log("--- Bot is ACTIVE and POLLING for messages (Local Development) ---"))
+                            .catch(pollError => console.error("Error starting polling:", pollError.message));
                     } else {
-                        console.error("Could not delete existing webhook. Polling NOT started.");
+                        console.error("Could not delete existing webhook. Polling NOT started locally.");
                     }
                 }).catch(err => {
-                     console.error('Error checking/deleting webhook:', err.message);
-                     // Maybe still try polling? Or log error and continue without?
-                     // For safety, let's not poll if we couldn't check/delete webhook
+                     console.error('Error checking/deleting webhook for local polling:', err.message);
                      console.log("--- Bot NOT POLLING due to webhook check error ---");
                 });
             } else {
-                // On Railway, confirm webhook status
-                 bot.getWebHookInfo().then(info => {
-                     if (info && info.url) {
-                         console.log(`--- Bot configured for WEBHOOK at ${info.url} ---`);
-                         if (info.last_error_date) {
-                             console.warn(`--- WARNING: Webhook has recent errors! Last error on ${new Date(info.last_error_date * 1000)} ---`);
-                         }
-                         if (info.pending_update_count > 0) {
-                             console.warn(`--- WARNING: Webhook has ${info.pending_update_count} pending updates! ---`);
-                         }
-                     } else {
-                          console.warn(`--- WARNING: Bot running on Railway but Webhook is NOT SET or failed to set! Bot will not receive messages. ---`);
-                     }
-                 }).catch(err => {
-                      console.error("--- Error checking webhook status on Railway:", err.message, "---");
-                 });
+                // We already logged webhook status after setting it
+                console.log("--- Bot configured for WEBHOOK messages (Railway Environment) ---");
             }
 
              // Start monitor after a short delay
@@ -832,6 +835,9 @@ const gracefulShutdown = (signal) => {
         clearInterval(monitorInterval); // Stop monitor first
         console.log("Payment monitor stopped.");
     }
+    // Optional: Tell Telegram to remove webhook on shutdown?
+    // bot.deleteWebHook().then(() => console.log("Webhook deleted.")).catch(e=>console.error("Webhook deletion failed",e));
+
     // Attempt to close DB pool
     console.log("Closing database pool...");
     pool.end().then(() => {
@@ -855,7 +861,7 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM')); // e.g., Railway stop/
 // --- Error Handlers ---
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Optional: Decide if you want to crash or attempt recovery
+  // Consider whether to crash or attempt recovery
   // gracefulShutdown('Unhandled Rejection'); // Optional: attempt graceful shutdown
 });
 process.on('uncaughtException', (error) => {
@@ -867,5 +873,4 @@ process.on('uncaughtException', (error) => {
 });
 
 console.log("--- Bot script finished executing initial setup code ---"); // Final log message
-
 // --- END OF CHUNK 5 of 5 ---
