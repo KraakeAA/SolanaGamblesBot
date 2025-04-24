@@ -14,7 +14,7 @@ import {
 import bs58 from 'bs58';
 import { randomBytes } from 'crypto';
 import PQueue from 'p-queue';
-import { RateLimitedConnection } from './lib/solana-connection.js';
+import RateLimitedConnection from './lib/solana-connection.js';
 
 // --- Enhanced Environment Variable Checks ---
 const REQUIRED_ENV_VARS = [
