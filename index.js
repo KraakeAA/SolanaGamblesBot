@@ -130,7 +130,7 @@ async function initializeDatabase() {
 // --- Bot and Solana Initialization ---
 console.log("Initializing Telegram Bot (POLLING ENABLED)...");
 // Initialize bot WITH polling
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true }); // <<< POLLING IS TRUE HERE
+const bot = new TelegramBot(process.env.BOT_TOKEN); // <<< POLLING IS TRUE HERE
 console.log("Telegram Bot initialized with polling.");
 
 console.log("Initializing Solana Connection...");
