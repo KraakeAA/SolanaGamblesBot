@@ -8,7 +8,8 @@ const REQUIRED_ENV_VARS = [
     'RACE_BOT_PRIVATE_KEY', // For Race payouts
     'MAIN_WALLET_ADDRESS',// Wallet for Coinflip bets
     'RACE_WALLET_ADDRESS',// Wallet for Race bets
-    'RPC_URL'             // Solana RPC endpoint
+    'RPC_URL',            // Solana RPC endpoint
+    'FEE_MARGIN'          // NEW: For fee safety buffer
 ];
 
 // Check for Railway-specific variables
@@ -31,6 +32,11 @@ REQUIRED_ENV_VARS.forEach((key) => {
 if (missingVars) {
     console.error("Please set all required environment variables. Exiting.");
     process.exit(1);
+}
+
+// Set default fee margin if not specified
+if (!process.env.FEE_MARGIN) {
+    process.env.FEE_MARGIN = '5000'; // 5000 lamports (~0.000005 SOL)
 }
 
 // --- Optimized Requires ---
@@ -89,7 +95,8 @@ async function initializeDatabase() {
                 expires_at TIMESTAMPTZ NOT NULL,
                 paid_tx_signature TEXT UNIQUE,
                 payout_tx_signature TEXT UNIQUE,
-                processed_at TIMESTAMPTZ
+                processed_at TIMESTAMPTZ,
+                fees_paid BIGINT  -- NEW: Track fee deductions
             );
         `);
         
@@ -124,6 +131,7 @@ async function initializeDatabase() {
         }
     }
 }
+
 // --- Optimized Solana Connection ---
 console.log("Initializing enhanced Solana Connection...");
 const connection = new Connection(process.env.RPC_URL, {
@@ -208,9 +216,25 @@ const RACE_MIN_BET = 0.01;
 const RACE_MAX_BET = 1.0;
 const PAYMENT_EXPIRY_MINUTES = 15;
 const HOUSE_EDGE = 0.02; // 2% house edge
+const FEE_BUFFER = BigInt(process.env.FEE_MARGIN); // NEW: Safety margin for fees
+const PRIORITY_FEE_RATE = 0.0001; // NEW: 0.01% of tx amount
+
 // --- Optimized Helper Functions ---
+// STRICTER MEMO HANDLING (NEW)
 function generateMemoId(prefix = 'BET') {
-    return prefix + randomBytes(6).toString('hex').toUpperCase();
+    const validPrefixes = ['BET', 'CF', 'RA'];
+    if (!validPrefixes.includes(prefix)) {
+        throw new Error('Invalid memo prefix');
+    }
+    return `${prefix}-${randomBytes(6).toString('hex').toUpperCase()}`;
+}
+
+function validateMemoFormat(memo) {
+    if (!memo) return false;
+    const parts = memo.split('-');
+    return parts.length === 2 && 
+           ['BET', 'CF', 'RA'].includes(parts[0]) && 
+           /^[A-F0-9]{12}$/.test(parts[1]);
 }
 
 function findMemoInTx(tx) {
@@ -232,7 +256,8 @@ function findMemoInTx(tx) {
             }
             
             if (programId === MEMO_PROGRAM_ID && instruction.data) {
-                return bs58.decode(instruction.data).toString('utf-8');
+                const memo = bs58.decode(instruction.data).toString('utf-8');
+                return validateMemoFormat(memo) ? memo : null; // NEW: Validation check
             }
         }
     } catch (e) {
@@ -241,6 +266,16 @@ function findMemoInTx(tx) {
     return null;
 }
 
+// NEW: Fee-aware payout calculation
+function calculatePayoutWithFees(lamports, gameType, betDetails = {}) {
+    const basePayout = gameType === 'coinflip'
+        ? BigInt(Math.floor(Number(lamports) * (2 - HOUSE_EDGE)))
+        : BigInt(Math.floor(Number(lamports) * (betDetails.odds || 1) * (1 - HOUSE_EDGE)));
+    
+    return basePayout > FEE_BUFFER 
+        ? basePayout - FEE_BUFFER 
+        : 0n;
+}
 function getPayerFromTransaction(tx) {
     if (!tx || !tx.meta || !tx.transaction?.message?.accountKeys) return null;
     
@@ -291,11 +326,15 @@ function getPayerFromTransaction(tx) {
 
 // --- Enhanced Database Operations ---
 async function savePendingBet(userId, chatId, gameType, details, lamports, memoId, expiresAt) {
+    if (!validateMemoFormat(memoId)) { // NEW: Memo validation
+        throw new Error('Invalid memo ID format');
+    }
+
     const query = `
         INSERT INTO bets (
             user_id, chat_id, game_type, bet_details, 
-            expected_lamports, memo_id, status, expires_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            expected_lamports, memo_id, status, expires_at, fees_paid
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING id;
     `;
     
@@ -307,7 +346,8 @@ async function savePendingBet(userId, chatId, gameType, details, lamports, memoI
         BigInt(lamports), 
         memoId, 
         'awaiting_payment', 
-        expiresAt
+        expiresAt,
+        FEE_BUFFER // NEW: Track fee buffer
     ];
     
     try {
@@ -324,6 +364,10 @@ async function savePendingBet(userId, chatId, gameType, details, lamports, memoI
 }
 
 async function findBetByMemo(memoId) {
+    if (!validateMemoFormat(memoId)) { // NEW: Memo validation
+        return undefined;
+    }
+
     const query = `
         SELECT * FROM bets 
         WHERE memo_id = $1 AND status = 'awaiting_payment'
@@ -374,6 +418,7 @@ async function getLinkedWallet(userId) {
         return undefined;
     }
 }
+
 // --- Optimized Payment Monitoring ---
 let isMonitorRunning = false;
 let monitorIntervalSeconds = 30;
@@ -382,7 +427,7 @@ let monitorInterval = null;
 
 async function processSignature(signature, wallet) {
     if (processedSignaturesThisSession.has(signature)) {
-        return 0; // Skip if already processed
+        return 0;
     }
 
     // Check if already processed in DB
@@ -426,9 +471,7 @@ async function processSignature(signature, wallet) {
         return 0;
     }
 
-    if (memo.startsWith('CF') || memo.startsWith('RA') || memo.startsWith('BET')) {
-        console.log(`Monitor: Found memo "${memo}" in tx ${signature}`);
-    }
+    console.log(`Monitor: Found memo "${memo}" in tx ${signature}`);
 
     const bet = await findBetByMemo(memo);
     if (!bet || bet.status !== 'awaiting_payment') {
@@ -476,7 +519,7 @@ async function processSignature(signature, wallet) {
         }
     }
 
-    // Validate amount
+    // Validate amount with fee buffer consideration
     const expectedLamportsBigInt = BigInt(bet.expected_lamports);
     const lamportTolerance = 5000n;
     
@@ -597,6 +640,15 @@ async function sendSol(connection, payerPrivateKey, recipientPublicKey, amountLa
         new PublicKey(recipientPublicKey) : recipientPublicKey;
     const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL;
     
+    // NEW: Dynamic priority fee calculation
+    const priorityFee = Math.min(
+        1000000, // Max 1 SOL
+        Math.max(
+            1000, // Min 1000 microLamports
+            Math.floor(Number(amountLamports) * PRIORITY_FEE_RATE) // 0.01% of amount
+        )
+    );
+    
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const payerWallet = Keypair.fromSecretKey(bs58.decode(payerPrivateKey));
@@ -612,17 +664,27 @@ async function sendSol(connection, payerPrivateKey, recipientPublicKey, amountLa
                 feePayer: payerWallet.publicKey
             });
             
-            // Add priority fee
+            // NEW: Add priority fee instruction
             transaction.add(
-                ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1000 })
+                ComputeBudgetProgram.setComputeUnitPrice({ 
+                    microLamports: priorityFee 
+                })
             );
             
-            // Add transfer instruction
+            // NEW: Deduct fee buffer from amount
+            const transferAmount = amountLamports > FEE_BUFFER ? 
+                amountLamports - FEE_BUFFER : 
+                0n;
+                
+            if (transferAmount <= 0n) {
+                throw new Error('Insufficient amount after fee deduction');
+            }
+            
             transaction.add(
                 SystemProgram.transfer({
                     fromPubkey: payerWallet.publicKey,
                     toPubkey: recipientPubKey,
-                    lamports: BigInt(amountLamports)
+                    lamports: transferAmount
                 })
             );
             
@@ -632,14 +694,18 @@ async function sendSol(connection, payerPrivateKey, recipientPublicKey, amountLa
                     connection,
                     transaction,
                     [payerWallet],
-                    { commitment: 'confirmed', skipPreflight: true }
+                    { 
+                        commitment: 'confirmed', 
+                        skipPreflight: false, // NEW: Enable preflight checks
+                        maxRetries: 3
+                    }
                 ),
                 new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Transaction timeout')), 15000)
+                    setTimeout(() => reject(new Error('Transaction timeout')), 30000)
                 )
             ]);
             
-            console.log(`✅ Sent ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()}`);
+            console.log(`✅ Sent ${(Number(transferAmount)/LAMPORTS_PER_SOL).toFixed(6)} SOL to ${recipientPubKey.toBase58()}`);
             return { success: true, signature };
             
         } catch (error) {
@@ -706,7 +772,9 @@ async function handleCoinflipGame(bet) {
     // Apply house edge (2%)
     const result = Math.random() < (0.5 - HOUSE_EDGE/2) ? 'heads' : 'tails';
     const win = (result === choice);
-    const payoutLamports = win ? BigInt(Math.floor(Number(expected_lamports) * (2 - HOUSE_EDGE))) : 0n;
+    
+    // NEW: Fee-aware payout calculation
+    const payoutLamports = win ? calculatePayoutWithFees(expected_lamports, 'coinflip') : 0n;
 
     // Get user info for messaging
     let displayName = `User ${user_id}`;
@@ -744,7 +812,7 @@ async function handleCoinflipGame(bet) {
                 { parse_mode: 'Markdown' }
             );
 
-            // Send payout
+            // Send payout with updated fee handling
             const sendResult = await sendSol(
                 connection,
                 process.env.BOT_PRIVATE_KEY,
@@ -837,8 +905,10 @@ async function handleRaceGame(bet) {
 
     // Determine result
     const win = (horseName.toLowerCase() === winningHorse.name.toLowerCase());
+    
+    // NEW: Fee-aware payout calculation
     const payoutLamports = win ? 
-        BigInt(Math.floor(Number(expected_lamports) * odds * (1 - HOUSE_EDGE))) : 
+        calculatePayoutWithFees(expected_lamports, 'race', bet_details) : 
         0n;
 
     // Get user info
@@ -851,8 +921,7 @@ async function handleRaceGame(bet) {
     } catch (e) {
         console.warn(`Couldn't get username for user ${user_id}:`, e.message);
     }
-
-    if (win) {
+        if (win) {
         const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
         console.log(`Bet ${betId}: ${displayName} WON ${payoutSOL} SOL`);
 
@@ -877,7 +946,7 @@ async function handleRaceGame(bet) {
                 { parse_mode: 'Markdown' }
             );
 
-            // Send payout
+            // Send payout with updated fee handling
             const sendResult = await sendSol(
                 connection,
                 process.env.RACE_BOT_PRIVATE_KEY,
@@ -918,6 +987,7 @@ async function handleRaceGame(bet) {
         await updateBetStatus(betId, 'completed_loss');
     }
 }
+
 // --- Bot Command Handlers ---
 bot.on('polling_error', (error) => {
     console.error(`Polling error: ${error.code} - ${error.message}`);
@@ -1016,7 +1086,7 @@ bot.onText(/\/bet (\d+\.?\d*) (heads|tails)/i, async (msg, match) => {
         }
 
         const userChoice = match[2].toLowerCase();
-        const memoId = generateMemoId('CF');
+        const memoId = generateMemoId('CF'); // NEW: Strict memo format
         const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
         const expiresAt = new Date(Date.now() + PAYMENT_EXPIRY_MINUTES * 60 * 1000);
 
@@ -1132,7 +1202,7 @@ bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
             return;
         }
 
-        const memoId = generateMemoId('RA');
+        const memoId = generateMemoId('RA'); // NEW: Strict memo format
         const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
         const expiresAt = new Date(Date.now() + PAYMENT_EXPIRY_MINUTES * 60 * 1000);
 
@@ -1167,7 +1237,6 @@ bot.onText(/\/betrace (\d+\.?\d*) (\w+)/i, async (msg, match) => {
         }
     }
 });
-
 // --- Server Startup & Shutdown ---
 async function startServer() {
     try {
@@ -1179,33 +1248,79 @@ async function startServer() {
             const webhookUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}${webhookPath}`;
             
             try {
-                await bot.setWebHook(webhookUrl);
-                console.log(`✅ Webhook set to: ${webhookUrl}`);
-                
-                const webhookInfo = await bot.getWebHookInfo();
-                if (webhookInfo.url !== webhookUrl) {
-                    console.error("❌ Webhook URL mismatch");
+                // Configure webhook with retries
+                let attempts = 0;
+                while (attempts < 3) {
+                    try {
+                        await bot.setWebHook(webhookUrl);
+                        console.log(`✅ Webhook set to: ${webhookUrl}`);
+                        
+                        const webhookInfo = await bot.getWebHookInfo();
+                        if (webhookInfo.url !== webhookUrl) {
+                            throw new Error('Webhook URL mismatch');
+                        }
+                        break;
+                    } catch (webhookError) {
+                        attempts++;
+                        console.error(`Webhook setup attempt ${attempts} failed:`, webhookError.message);
+                        if (attempts >= 3) throw webhookError;
+                        await new Promise(resolve => setTimeout(resolve, 2000 * attempts));
+                    }
                 }
             } catch (webhookError) {
-                console.error("❌ Webhook setup failed:", webhookError.message);
+                console.error("❌ Webhook setup failed after retries:", webhookError.message);
             }
         }
 
-        // Start server
-        app.listen(PORT, "0.0.0.0", () => {
+        // Start server with enhanced error handling
+        const server = app.listen(PORT, "0.0.0.0", () => {
             console.log(`✅ Server running on port ${PORT}`);
             
-            // Start payment monitor
-            monitorInterval = setInterval(monitorPayments, monitorIntervalSeconds * 1000);
-            setTimeout(monitorPayments, 5000); // Initial run
+            // Initialize payment monitor with backoff
+            let monitorAttempts = 0;
+            const startMonitor = () => {
+                monitorInterval = setInterval(() => {
+                    monitorPayments().catch(err => {
+                        console.error('Monitor error:', err);
+                        if (monitorAttempts++ > 5) {
+                            console.error('Restarting monitor...');
+                            clearInterval(monitorInterval);
+                            setTimeout(startMonitor, 5000);
+                        }
+                    });
+                }, monitorIntervalSeconds * 1000);
+                
+                // Initial run with delay
+                setTimeout(() => {
+                    monitorPayments().catch(console.error);
+                }, 3000);
+            };
+            
+            startMonitor();
             
             // Start polling if not in production
             if (!process.env.RAILWAY_ENVIRONMENT) {
-                bot.startPolling().then(() => {
-                    console.log("🔵 Bot polling started");
-                }).catch(pollError => {
-                    console.error("Polling error:", pollError);
-                });
+                let pollingAttempts = 0;
+                const startPolling = () => {
+                    bot.startPolling().then(() => {
+                        console.log("🔵 Bot polling started");
+                    }).catch(pollError => {
+                        console.error(`Polling attempt ${++pollingAttempts} failed:`, pollError);
+                        if (pollingAttempts <= 3) {
+                            setTimeout(startPolling, 2000 * pollingAttempts);
+                        }
+                    });
+                };
+                startPolling();
+            }
+        });
+
+        // Enhanced server error handling
+        server.on('error', (err) => {
+            console.error('Server error:', err);
+            if (err.code === 'EADDRINUSE') {
+                console.error(`Port ${PORT} already in use`);
+                process.exit(1);
             }
         });
 
@@ -1215,30 +1330,65 @@ async function startServer() {
     }
 }
 
-// Graceful shutdown handler
+// Enhanced graceful shutdown
 const shutdown = (signal) => {
-    console.log(`\n${signal} received, shutting down...`);
+    console.log(`\n${signal} received, shutting down gracefully...`);
     
-    clearInterval(monitorInterval);
+    // 1. Stop monitoring first
+    if (monitorInterval) {
+        clearInterval(monitorInterval);
+        console.log("🛑 Stopped payment monitor");
+    }
+    
+    // 2. Close Telegram bot
+    try {
+        if (bot.isPolling()) {
+            bot.stopPolling();
+            console.log("🛑 Stopped bot polling");
+        }
+        if (process.env.RAILWAY_ENVIRONMENT) {
+            bot.deleteWebHook();
+            console.log("🛑 Removed webhook");
+        }
+    } catch (e) {
+        console.error("Error stopping bot:", e);
+    }
+    
+    // 3. Close database pool with timeout
+    const dbTimeout = setTimeout(() => {
+        console.warn("⚠️ Forcing database pool closure");
+        process.exit(1);
+    }, 5000);
     
     pool.end().then(() => {
+        clearTimeout(dbTimeout);
         console.log("✅ Database pool closed");
         process.exit(0);
     }).catch(err => {
         console.error("❌ Pool close error:", err);
         process.exit(1);
     });
-    
-    setTimeout(() => {
-        console.warn("⚠️ Forcing shutdown");
-        process.exit(1);
-    }, 5000);
 };
 
+// Handle signals
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-// Start the server
-startServer();
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    shutdown('UNCAUGHT_EXCEPTION');
+});
 
-console.log("🚀 Bot initialization complete");
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled Rejection:', reason);
+});
+
+// Start the server
+startServer().then(() => {
+    console.log("🚀 Bot initialization complete");
+}).catch(err => {
+    console.error("🔥 Failed to initialize:", err);
+});
+
+// --- End of File ---
