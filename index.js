@@ -738,7 +738,7 @@ async function handleRaceGame(bet) {
 // --- End Game Processing ---
 
 // --- END OF CHUNK 4 of 5 ---
-// --- Main Server Start Function ---
+// --- Main Server Start Function (Corrected webhookUrl scope) ---
 async function startServer() {
     try {
         await initializeDatabase(); // Ensure DB is ready first
@@ -747,19 +747,19 @@ async function startServer() {
         // Set up webhook before starting server ONLY if on Railway
         // Ensure RAILWAY_STATIC_URL environment variable is available in Railway service settings
         if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_STATIC_URL) {
-             // Construct the full URL for the webhook endpoint
-             const webhookFullUrl = `https://${process.env.RAILWAY_STATIC_URL}${webhookPath}`;
+             // Define webhookUrl HERE, within the scope where it's used
+             const webhookUrl = `https://<span class="math-inline">\{process\.env\.RAILWAY\_STATIC\_URL\}</span>{webhookPath}`; // Use HTTPS
              try {
                 // Attempt to set the webhook
-                await bot.setWebHook(webhookFullUrl, {
-                    // drop_pending_updates: true // Optional: Ignore updates sent while bot was offline
+                await bot.setWebHook(webhookUrl, {
+                    // drop_pending_updates: true // Optional
                 });
-                console.log(`✅ Telegram Webhook set to: ${webhookFullUrl}`);
+                console.log(`✅ Telegram Webhook set to: ${webhookUrl}`);
 
-                // Verify webhook setup (optional but recommended)
+                // Verify webhook setup using the defined variable
                 const webhookInfo = await bot.getWebHookInfo();
-                if (webhookInfo.url !== webhookUrl) {
-                     console.error(`❌ Failed to verify webhook URL! Telegram reports: ${webhookInfo.url}`);
+                if (webhookInfo.url !== webhookUrl) { // Use webhookUrl variable here
+                     console.error(`❌ Failed to verify webhook URL! Telegram reports: ${webhookInfo.url} Expected: ${webhookUrl}`);
                 } else if (webhookInfo.last_error_date) {
                      console.warn(`⚠️ Webhook Status: Last error reported by Telegram on ${new Date(webhookInfo.last_error_date * 1000)}`);
                 } else {
@@ -768,8 +768,6 @@ async function startServer() {
 
              } catch(webhookError) {
                  console.error(`❌ Failed to set Telegram Webhook to ${webhookUrl}:`, webhookError.message);
-                 // Decide if bot should exit or continue without webhook functionality
-                 // Continuing might make sense if monitor can still function
                  console.warn("Continuing without Webhook functionality due to setup error.");
              }
         } else {
@@ -782,7 +780,7 @@ async function startServer() {
             console.log("Application fully started.");
 
             // Start polling ONLY if NOT on Railway (for local dev)
-            // Check first if a webhook is unexpectedly set
+            // Also checks if a webhook is unexpectedly set
             if (!process.env.RAILWAY_ENVIRONMENT) {
                  bot.getWebHookInfo().then(info => {
                     if (info && info.url) {
@@ -805,8 +803,18 @@ async function startServer() {
                      console.log("--- Bot NOT POLLING due to webhook check error ---");
                 });
             } else {
-                // We already logged webhook status after setting it
-                console.log("--- Bot configured for WEBHOOK messages (Railway Environment) ---");
+                // On Railway, we already logged webhook status after setting it, confirm again maybe
+                 bot.getWebHookInfo().then(info => {
+                     if (info && info.url) {
+                        console.log(`--- Bot configured for WEBHOOK at ${info.url} ---`);
+                         // Optional: Re-check for errors/pending updates later if needed
+                     } else {
+                          console.warn(`--- WARNING: Bot running on Railway but Webhook is NOT SET or failed to set! Bot will not receive messages. ---`);
+                     }
+                 }).catch(err => {
+                      console.error("--- Error checking webhook status on Railway:", err.message, "---");
+                 });
+                 console.log("--- Bot should be using WEBHOOK (Railway Environment) ---")
             }
 
              // Start monitor after a short delay
