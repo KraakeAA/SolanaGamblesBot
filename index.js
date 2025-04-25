@@ -71,7 +71,7 @@ const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
         'solana-client': `SolanaGamblesBot/2.0 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info
     },
     rateLimitCooloff: 10000,  // Pause duration after hitting rate limits (ms)
-    disableRetryOnRateLimit: false // Enable automatic retry on rate limit errors
+    disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
 });
 console.log("✅ Scalable Solana connection initialized");
 
@@ -718,11 +718,11 @@ class PaymentProcessor {
     // Wrapper to handle job execution, retries, and error logging
     async processJob(job) {
         // Prevent processing the same signature concurrently if added multiple times quickly
-        if (this.activeProcesses.has(job.signature)) {
+        if (job.signature && this.activeProcesses.has(job.signature)) { // Check only if signature exists
              console.warn(`Job for signature ${job.signature} already active, skipping duplicate.`);
              return;
         }
-        this.activeProcesses.add(job.signature); // Mark as active
+        if (job.signature) this.activeProcesses.add(job.signature); // Mark as active if signature exists
 
         try {
             let result;
@@ -758,7 +758,10 @@ class PaymentProcessor {
                 job.retries = (job.retries || 0) + 1;
                 console.log(`Retrying job for signature ${job.signature} (Attempt ${job.retries})...`);
                 await new Promise(resolve => setTimeout(resolve, 1000 * job.retries)); // Exponential backoff
+                // Release active lock before requeueing for retry
+                if (job.signature) this.activeProcesses.delete(job.signature);
                 await this.addPaymentJob(job); // Re-add the job for retry
+                return; // Prevent falling through to finally block immediately after requeueing
             } else {
                 // Log final failure or non-retryable error
                  console.error(`Job failed permanently or exceeded retries: ${job.signature || job.betId}`, error);
@@ -768,7 +771,7 @@ class PaymentProcessor {
                  }
             }
         } finally {
-             // Always remove signature from active set when processing finishes (success or fail)
+             // Always remove signature from active set when processing finishes (success or final fail)
             if (job.signature) {
                 this.activeProcesses.delete(job.signature);
             }
@@ -802,17 +805,21 @@ class PaymentProcessor {
 
         // 3. Fetch the transaction details from Solana
         console.log(`Workspaceing transaction details for signature: ${signature} (Attempt ${attempt + 1})`);
-        const tx = await solanaConnection.executeWithRetry(
-            'getParsedTransaction',
-            [signature, { maxSupportedTransactionVersion: 0 }], // Request parsed format
-            attempt // Pass attempt number for retry logic in connection class
+        // --- FIX: Call standard method directly ---
+        const tx = await solanaConnection.getParsedTransaction(
+            signature,
+            { maxSupportedTransactionVersion: 0 } // Request parsed format
+            // Note: Relying on RateLimitedConnection's internal retry/rate-limit handling now.
         );
+        // --- END FIX ---
 
         // 4. Validate transaction
         if (!tx) {
              console.warn(`Transaction ${signature} not found or failed to fetch after retries.`);
              // Don't add to processed set yet, might appear later
-             return { processed: false, reason: 'tx_fetch_failed' };
+             // Re-throw to potentially trigger retry via processJob if RateLimitedConnection didn't handle it
+             throw new Error(`Transaction ${signature} null or fetch failed`);
+             // return { processed: false, reason: 'tx_fetch_failed' };
         }
          if (tx.meta?.err) {
              console.log(`Transaction ${signature} failed on-chain: ${JSON.stringify(tx.meta.err)}`);
@@ -990,7 +997,7 @@ async function monitorPayments() {
             } catch (error) {
                 // Log error for specific wallet but continue monitoring others
                 console.error(`[Monitor] Error fetching/processing signatures for wallet ${wallet.address}:`, error.message);
-                performanceMonitor.logRequest(false);
+                performanceMonitor.logRequest(false); // Log error for this wallet check
                 // Optionally reset pagination for this wallet on error?
                 // delete lastProcessedSignature[wallet.address];
             }
@@ -1069,10 +1076,17 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
             const payerWallet = Keypair.fromSecretKey(bs58.decode(privateKey));
 
             // Get latest blockhash before building transaction
-            const latestBlockhash = await solanaConnection.executeWithRetry(
-                'getLatestBlockhash',
-                [{ commitment: 'confirmed' }] // Use confirmed blockhash
+            // --- FIX: Call standard method directly ---
+            const latestBlockhash = await solanaConnection.getLatestBlockhash(
+                 { commitment: 'confirmed' } // Use confirmed blockhash
+                 // Note: Relying on RateLimitedConnection's internal retry/rate-limit handling now.
             );
+            // --- END FIX ---
+
+            if (!latestBlockhash || !latestBlockhash.blockhash) {
+                throw new Error('Failed to get latest blockhash');
+            }
+
 
             const transaction = new Transaction({
                 recentBlockhash: latestBlockhash.blockhash,
@@ -1373,7 +1387,7 @@ async function handleRaceGame(bet) {
                 recipient: winnerAddress,
                 amount: payoutLamports,
                 gameType: 'race',
-                priority: 2, // Higher priority
+                priority: 2,
                 // Pass details needed for final payout message
                 chatId: chat_id,
                 displayName,
