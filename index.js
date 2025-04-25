@@ -203,6 +203,18 @@ bot.on('message', (msg) => {
         });
 });
 
+
+// [PATCHED: THROTTLED TELEGRAM SEND]
+const telegramSendQueue = new PQueue({ concurrency: 1, interval: 1000, intervalCap: 1 });
+
+function safeSendMessage(chatId, message, options = {}) {
+    return telegramSendQueue.add(() =>
+        safeSendMessage(chatId, message, options).catch(err => {
+            console.error("❌ Telegram send error:", err.message);
+        })
+    );
+}
+
 console.log("✅ Telegram Bot initialized");
 
 // --- Express Setup for Webhook and Health Check ---
@@ -919,7 +931,7 @@ class PaymentProcessor {
             console.warn(`Amount mismatch for bet ${bet.id} (memo ${memo}). Expected ~${expectedAmount}, got ${transferAmount}.`);
             await updateBetStatus(bet.id, 'error_payment_mismatch');
             processedSignaturesThisSession.add(signature);
-            await bot.sendMessage(bet.chat_id, `⚠️ Payment amount mismatch for bet ${memo}. Expected ${Number(expectedAmount)/LAMPORTS_PER_SOL} SOL, received ${Number(transferAmount)/LAMPORTS_PER_SOL} SOL. Bet cancelled.`).catch(e => console.error("TG Send Error:", e.message));
+            await safeSendMessage(bet.chat_id, `⚠️ Payment amount mismatch for bet ${memo}. Expected ${Number(expectedAmount)/LAMPORTS_PER_SOL} SOL, received ${Number(transferAmount)/LAMPORTS_PER_SOL} SOL. Bet cancelled.`).catch(e => console.error("TG Send Error:", e.message));
             return { processed: false, reason: 'amount_mismatch' };
         }
 
@@ -931,7 +943,7 @@ class PaymentProcessor {
             console.warn(`Payment for bet ${bet.id} (memo ${memo}) received after expiry.`);
             await updateBetStatus(bet.id, 'error_payment_expired');
             processedSignaturesThisSession.add(signature);
-            await bot.sendMessage(bet.chat_id, `⚠️ Payment for bet ${memo} received after expiry time. Bet cancelled.`).catch(e => console.error("TG Send Error:", e.message));
+            await safeSendMessage(bet.chat_id, `⚠️ Payment for bet ${memo} received after expiry time. Bet cancelled.`).catch(e => console.error("TG Send Error:", e.message));
             return { processed: false, reason: 'expired' };
         }
 
@@ -1350,7 +1362,7 @@ async function handleCoinflipGame(bet) {
         const winnerAddress = await getLinkedWallet(user_id);
         if (!winnerAddress) {
              console.warn(`Coinflip Bet ${betId}: Winner ${displayName} has no linked wallet.`);
-             await bot.sendMessage(chat_id,
+             await safeSendMessage(chat_id,
                  `🎉 ${displayName}, you won the coinflip (Result: *${result}*) but have no wallet linked!\n` +
                  `Your payout of ${payoutSOL.toFixed(6)} SOL is waiting. Place another bet (any amount) to link your wallet and receive pending payouts.`,
                  { parse_mode: 'Markdown' }
@@ -1361,7 +1373,7 @@ async function handleCoinflipGame(bet) {
 
         // Send "processing payout" message and queue the actual payout
         try {
-            await bot.sendMessage(chat_id,
+            await safeSendMessage(chat_id,
                 `🎉 ${displayName}, you won ${payoutSOL.toFixed(6)} SOL!\n` +
                 `Result: *${result}*\n\n` +
                 `💸 Processing payout to your linked wallet...`,
@@ -1386,7 +1398,7 @@ async function handleCoinflipGame(bet) {
 
         } catch (e) {
             console.error(`❌ Error queuing payout for coinflip bet ${betId}:`, e);
-            await bot.sendMessage(chat_id,
+            await safeSendMessage(chat_id,
                 `⚠️ Error occurred while processing your coinflip win for bet ID ${betId}.\n` +
                 `Please contact support.`,
                 { parse_mode: 'Markdown' }
@@ -1396,7 +1408,7 @@ async function handleCoinflipGame(bet) {
 
     } else { // Loss
         console.log(`🪙 Coinflip Bet ${betId}: ${displayName} LOST. Choice: ${choice}, Result: ${result}`);
-        await bot.sendMessage(chat_id,
+        await safeSendMessage(chat_id,
             `❌ ${displayName}, you lost the coinflip!\n` +
             `You guessed *${choice}* but the result was *${result}*. Better luck next time!`,
             { parse_mode: 'Markdown' }
@@ -1449,11 +1461,11 @@ async function handleRaceGame(bet) {
     // Send race commentary messages
     let displayName = await getUserDisplayName(chat_id, user_id);
     try {
-        await bot.sendMessage(chat_id, `🐎 Race ${betId} starting! ${displayName} bet on ${chosenHorseName}!`).catch(e => console.error("TG Send Error:", e.message));
+        await safeSendMessage(chat_id, `🐎 Race ${betId} starting! ${displayName} bet on ${chosenHorseName}!`).catch(e => console.error("TG Send Error:", e.message));
         await new Promise(resolve => setTimeout(resolve, 2000)); // Pause
-        await bot.sendMessage(chat_id, "🚦 And they're off!").catch(e => console.error("TG Send Error:", e.message));
+        await safeSendMessage(chat_id, "🚦 And they're off!").catch(e => console.error("TG Send Error:", e.message));
         await new Promise(resolve => setTimeout(resolve, 3000)); // Pause
-        await bot.sendMessage(chat_id,
+        await safeSendMessage(chat_id,
             `🏆 The winner is... ${winningHorse.emoji} *${winningHorse.name}*! 🏆`,
             { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
@@ -1475,7 +1487,7 @@ async function handleRaceGame(bet) {
         const winnerAddress = await getLinkedWallet(user_id);
         if (!winnerAddress) {
             console.warn(`Race Bet ${betId}: Winner ${displayName} has no linked wallet.`);
-            await bot.sendMessage(chat_id,
+            await safeSendMessage(chat_id,
                 `🎉 ${displayName}, your horse *${chosenHorseName}* won the race!\n` +
                 `Your payout of ${payoutSOL.toFixed(6)} SOL is waiting. Place another bet (any amount) to link your wallet and receive pending payouts.`,
                 { parse_mode: 'Markdown' }
@@ -1486,7 +1498,7 @@ async function handleRaceGame(bet) {
 
         // Send "processing payout" message and queue the actual payout
         try {
-            await bot.sendMessage(chat_id,
+            await safeSendMessage(chat_id,
                 `🎉 ${displayName}, your horse *${chosenHorseName}* won!\n` +
                 `Payout: ${payoutSOL.toFixed(6)} SOL\n\n` +
                 `💸 Processing payout to your linked wallet...`,
@@ -1511,7 +1523,7 @@ async function handleRaceGame(bet) {
             });
         } catch (e) {
             console.error(`❌ Error queuing payout for race bet ${betId}:`, e);
-             await bot.sendMessage(chat_id,
+             await safeSendMessage(chat_id,
                  `⚠️ Error occurred while processing your race win for bet ID ${betId}.\n` +
                  `Please contact support.`,
                  { parse_mode: 'Markdown' }
@@ -1521,7 +1533,7 @@ async function handleRaceGame(bet) {
 
     } else { // Loss
         console.log(`🐎 Race Bet ${betId}: ${displayName} LOST. Horse: ${chosenHorseName}, Winner: ${winningHorse.name}`);
-        await bot.sendMessage(chat_id,
+        await safeSendMessage(chat_id,
             `❌ ${displayName}, your horse *${chosenHorseName}* lost the race!\n` +
             `Winner: ${winningHorse.emoji} *${winningHorse.name}*. Better luck next time!`,
             { parse_mode: 'Markdown' }
@@ -1540,7 +1552,7 @@ async function handlePayoutJob(job) {
     if (payoutAmountLamports <= 0n) {
         console.error(`❌ Payout job for bet ${betId} has zero or negative amount (${payoutAmountLamports}). Skipping send.`);
         await updateBetStatus(betId, 'error_payout_zero_amount');
-        await bot.sendMessage(chatId,
+        await safeSendMessage(chatId,
             `⚠️ There was an issue calculating the payout for bet ID ${betId} (amount was zero). Please contact support.`,
             { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
@@ -1556,7 +1568,7 @@ async function handlePayoutJob(job) {
         if (sendResult.success) {
             console.log(`💸 Payout successful for bet ${betId}, TX: ${sendResult.signature}`);
             // Send success message to user
-            await bot.sendMessage(chatId,
+            await safeSendMessage(chatId,
                 `✅ Payout successful for bet ${betId}!\n` +
                 `${(Number(payoutAmountLamports)/LAMPORTS_PER_SOL).toFixed(6)} SOL sent.\n` +
                 `TX: \`https://solscan.io/tx/${sendResult.signature}\``, // Add link
@@ -1568,7 +1580,7 @@ async function handlePayoutJob(job) {
         } else {
             // Payout failed after retries
             console.error(`❌ Payout failed permanently for bet ${betId}: ${sendResult.error}`);
-            await bot.sendMessage(chatId,
+            await safeSendMessage(chatId,
                 `⚠️ Payout failed for bet ID ${betId}: ${sendResult.error}\n` +
                 `The team has been notified. Please contact support if needed.`,
                 { parse_mode: 'Markdown' }
@@ -1583,7 +1595,7 @@ async function handlePayoutJob(job) {
         // Update status to reflect exception during payout attempt
         await updateBetStatus(betId, 'error_payout_exception');
         // Notify user of technical error
-         await bot.sendMessage(chatId,
+         await safeSendMessage(chatId,
              `⚠️ A technical error occurred during payout for bet ID ${betId}.\n` +
              `Please contact support.`,
              { parse_mode: 'Markdown' }
@@ -1668,7 +1680,7 @@ async function handleMessage(msg) {
             const lastTime = confirmCooldown.get(userId);
             if (now - lastTime < cooldownInterval) {
                 // Optionally send a cooldown message, or just ignore
-                // await bot.sendMessage(chatId, "⏱️ Please wait a moment before sending another command.");
+                // await safeSendMessage(chatId, "⏱️ Please wait a moment before sending another command.");
                 return; // Ignore command if user is on cooldown
             }
         }
@@ -1712,7 +1724,7 @@ async function handleMessage(msg) {
 
         // Send generic error message to user
         try {
-             await bot.sendMessage(chatId, "⚠️ An unexpected error occurred while processing your request. Please try again later or contact support if the issue persists.");
+             await safeSendMessage(chatId, "⚠️ An unexpected error occurred while processing your request. Please try again later or contact support if the issue persists.");
         } catch (tgError) {
              console.error("❌ Failed to send error message to chat:", tgError.message);
         }
@@ -1743,7 +1755,7 @@ async function handleStartCommand(msg) {
         }).catch(async (err) => {
              // Fallback if animation fails (e.g., invalid URL, Telegram issue)
              console.warn("⚠️ Failed to send start animation, sending text fallback:", err.message); // Use warn level
-             await bot.sendMessage(msg.chat.id,
+             await safeSendMessage(msg.chat.id,
                  `👋 Welcome, ${firstName}!\n\n` +
                  `🎰 *Solana Gambles Bot*\n\n` +
                  `Use /coinflip or /race to see game options.\n` +
@@ -1755,14 +1767,14 @@ async function handleStartCommand(msg) {
     } catch (error) {
          console.error("Start command error:", error);
          // Ensure some message is sent even if all else fails
-         await bot.sendMessage(msg.chat.id, `Welcome, ${firstName}! Use /help to see available commands.`).catch(e=>console.error("TG Send Error:", e.message));
+         await safeSendMessage(msg.chat.id, `Welcome, ${firstName}! Use /help to see available commands.`).catch(e=>console.error("TG Send Error:", e.message));
     }
 }
 
 // Handles the /coinflip command (shows instructions)
 async function handleCoinflipCommand(msg) {
     const config = GAME_CONFIG.coinflip;
-    await bot.sendMessage(msg.chat.id,
+    await safeSendMessage(msg.chat.id,
         `🪙 *Coinflip Game* 🪙\n\n` +
         `Bet on Heads or Tails!\n\n` +
         `*How to play:*\n` +
@@ -1806,7 +1818,7 @@ async function handleRaceCommand(msg) {
                    `- House Edge: ${(config.houseEdge * 100).toFixed(1)}% (applied to winnings)\n\n` +
                    `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`;
 
-    await bot.sendMessage(msg.chat.id, raceMessage, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
+    await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
 
 // Handles the /wallet command (shows linked wallet)
@@ -1815,13 +1827,13 @@ async function handleWalletCommand(msg) {
     const walletAddress = await getLinkedWallet(userId); // Uses cache
 
     if (walletAddress) {
-        await bot.sendMessage(msg.chat.id,
+        await safeSendMessage(msg.chat.id,
             `🔗 Your linked Solana wallet:\n\`${walletAddress}\`\n\n`+
             `Payouts will be sent here. It's linked automatically when you make your first paid bet.`,
             { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
     } else {
-        await bot.sendMessage(msg.chat.id,
+        await safeSendMessage(msg.chat.id,
             `🔗 No wallet linked yet.\n` +
             `Place a bet and send the required SOL. Your sending wallet will be automatically linked for future payouts.`
         ).catch(e => console.error("TG Send Error:", e.message));
@@ -1840,7 +1852,7 @@ async function handleBetCommand(msg) {
     // Validate bet amount
     const betAmount = parseFloat(match[1]);
     if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
-        await bot.sendMessage(chatId,
+        await safeSendMessage(chatId,
             `⚠️ Invalid bet amount. Please bet between ${config.minBet} and ${config.maxBet} SOL.\n` +
             `Example: \`/bet 0.1 heads\``,
              { parse_mode: 'Markdown' }
@@ -1861,13 +1873,13 @@ async function handleBetCommand(msg) {
     );
 
     if (!saveResult.success) {
-         await bot.sendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
+         await safeSendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
          // Don't throw, just return after notifying user
          return;
     }
 
     // Send payment instructions
-    await bot.sendMessage(chatId,
+    await safeSendMessage(chatId,
         `✅ Coinflip bet registered! (ID: ${memoId})\n\n` +
         `You chose: *${userChoice}*\n` +
         `Amount: *${betAmount.toFixed(6)} SOL*\n\n` +
@@ -1893,7 +1905,7 @@ async function handleBetRaceCommand(msg) {
     // Validate bet amount
     const betAmount = parseFloat(match[1]);
     if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
-        await bot.sendMessage(chatId,
+        await safeSendMessage(chatId,
             `⚠️ Invalid bet amount. Please bet between ${config.minBet} and ${config.maxBet} SOL.\n`+
             `Example: \`/betrace 0.1 Yellow\``,
             { parse_mode: 'Markdown' }
@@ -1914,7 +1926,7 @@ async function handleBetRaceCommand(msg) {
     const chosenHorse = horses.find(h => h.name.toLowerCase() === chosenHorseNameInput.toLowerCase());
 
     if (!chosenHorse) {
-        await bot.sendMessage(chatId,
+        await safeSendMessage(chatId,
              `⚠️ Invalid horse name: "${chosenHorseNameInput}". Please choose from the list in /race.`
         ).catch(e => console.error("TG Send Error:", e.message));
         return;
@@ -1932,7 +1944,7 @@ async function handleBetRaceCommand(msg) {
     );
 
       if (!saveResult.success) {
-         await bot.sendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
+         await safeSendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
          // Don't throw, just return
          return;
       }
@@ -1942,7 +1954,7 @@ async function handleBetRaceCommand(msg) {
      const potentialPayoutSOL = (Number(potentialPayoutLamports) / LAMPORTS_PER_SOL).toFixed(6);
 
     // Send payment instructions
-    await bot.sendMessage(chatId,
+    await safeSendMessage(chatId,
         `✅ Race bet registered! (ID: ${memoId})\n\n` +
         `You chose: ${chosenHorse.emoji} *${chosenHorse.name}*\n` +
         `Amount: *${betAmount.toFixed(6)} SOL*\n` +
@@ -1971,7 +1983,7 @@ async function handleHelpCommand(msg) {
                       `/wallet - View your linked Solana wallet for payouts\n\n` +
                       `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
 
-     await bot.sendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
+     await safeSendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
 
 
@@ -2011,7 +2023,27 @@ async function startServer() {
 
         // Start the Express server
         const server = app.listen(PORT, "0.0.0.0", () => { // Listen on all interfaces
-            console.log(`🚀 Server running on port ${PORT}`);
+            
+// --- Start Express Server ---
+console.log("🧩 TRACE: Starting Express server setup...");
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`🚀 TRACE: Express server is now listening on port ${PORT}`);
+});
+
+console.log("🧩 TRACE: Express server setup complete.");
+
+console.log("⚙️ Starting payment monitor (Interval: 30s)");
+setInterval(() => {
+    console.log(`[${new Date().toISOString()}] ==== Monitor Interval Fired (30s) ====`);
+    monitorPayments();
+}, 30000);
+
+setInterval(() => {
+    console.log("🫀 TRACE: Bot heartbeat at " + new Date().toISOString());
+}, 60000); // Keep-alive heartbeat
+
 
             // Start the payment monitor loop AFTER server starts listening
             console.log(`⚙️ Starting payment monitor (Interval: ${monitorIntervalSeconds}s)`);
@@ -2154,27 +2186,4 @@ const shutdown = async (signal) => {
 process.on('SIGINT', () => shutdown('SIGINT')); // Ctrl+C
 process.on('SIGTERM', () => shutdown('SIGTERM')); // Termination signal (e.g., from Docker/Railway)
 
-// Handle uncaught exceptions (log and attempt graceful shutdown)
-process.on('uncaughtException', (err, origin) => {
-    console.error(`🔥🔥🔥 Uncaught Exception at: ${origin}`, err);
-    // Attempt graceful shutdown, but exit quickly if it fails
-    shutdown('UNCAUGHT_EXCEPTION').catch(() => process.exit(1));
-    setTimeout(() => process.exit(1), 10000).unref(); // Force exit after 10s if shutdown hangs
-});
-
-// Handle unhandled promise rejections (log them)
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('🔥🔥🔥 Unhandled Rejection at:', promise, 'reason:', reason);
-    // Consider shutting down on unhandled rejections too? Maybe optional.
-    // shutdown('UNHANDLED_REJECTION').catch(() => process.exit(1));
-    // setTimeout(() => process.exit(1), 10000).unref();
-});
-
-// --- Start the Application ---
-startServer().then(() => {
-    console.log("🚀🚀🚀 Solana Gambles Bot is up and running! 🚀🚀🚀");
-}).catch(err => {
-    // This catch is for errors thrown *during* the async startServer call itself
-    console.error("🔥🔥🔥 Application failed to initialize:", err);
-    console.error("❌ Exiting due to missing environment variables."); process.exit(1);
-});
+// Handle uncaught exceptions (log and attempt graceful shutdo
