@@ -122,97 +122,103 @@ const performanceMonitor = {
     }
 };
 
-// --- Database Initialization (Updated) ---
-// --- Database Initialization (Updated with Detailed Logging) ---
+// --- Database Initialization (// --- Database Initialization (Updated with Detailed Logging AND Connection Retry) ---
 async function initializeDatabase() {
     console.log("⚙️ Initializing Database schema...");
     let client;
-    try {
-        console.log("Attempting pool.connect()..."); // ADD LOG
-        client = await pool.connect();
-        console.log("✅ pool.connect() successful."); // ADD LOG
+    const maxRetries = 3; // Number of times to retry connection
+    const retryDelay = 3000; // Delay between retries in milliseconds (3 seconds)
 
-        console.log("Attempting CREATE TABLE bets..."); // ADD LOG
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            console.log(`Attempting pool.connect() (Attempt ${attempt}/${maxRetries})...`);
+            client = await pool.connect();
+            console.log("✅ pool.connect() successful.");
+            break; // Exit loop if connection is successful
+        } catch (connectErr) {
+            console.error(`❌ pool.connect() failed on attempt ${attempt}:`, connectErr.message);
+            if (attempt === maxRetries) {
+                console.error("❌ Max DB connection retries reached. Throwing error.");
+                throw connectErr; // Throw error if max retries are exhausted
+            }
+            console.log(`Retrying DB connection in ${retryDelay / 1000} seconds...`);
+            await new Promise(resolve => setTimeout(resolve, retryDelay)); // Wait before retrying
+        }
+    }
+
+    // If client is null here, it means connection failed after all retries (error already thrown)
+    // Proceed with schema setup only if connection succeeded
+    try {
+        // --- Schema setup queries remain the same ---
+        console.log("Attempting CREATE TABLE bets...");
         await client.query(`
             CREATE TABLE IF NOT EXISTS bets (
-                id SERIAL PRIMARY KEY,                      -- Unique bet identifier
-                user_id TEXT NOT NULL,                      -- Telegram User ID
-                chat_id TEXT NOT NULL,                      -- Telegram Chat ID
-                game_type TEXT NOT NULL,                    -- 'coinflip' or 'race'
-                bet_details JSONB,                          -- Game-specific details (choice, horse, odds)
-                expected_lamports BIGINT NOT NULL,          -- Amount user should send (in lamports)
-                memo_id TEXT UNIQUE NOT NULL,               -- Unique memo for payment tracking
-                status TEXT NOT NULL,                       -- Bet status (e.g., 'awaiting_payment', 'completed_win_paid', 'error_...')
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- When the bet was initiated
-                expires_at TIMESTAMPTZ NOT NULL,            -- When the payment window closes
-                paid_tx_signature TEXT UNIQUE,              -- Signature of the user's payment transaction
-                payout_tx_signature TEXT UNIQUE,            -- Signature of the bot's payout transaction (if win)
-                processed_at TIMESTAMPTZ,                   -- When the bet was fully resolved
-                fees_paid BIGINT,                           -- Estimated fees buffer associated with this bet
-                priority INT DEFAULT 0                      -- Priority for processing (higher first)
+                id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, chat_id TEXT NOT NULL, game_type TEXT NOT NULL,
+                bet_details JSONB, expected_lamports BIGINT NOT NULL, memo_id TEXT UNIQUE NOT NULL, status TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), expires_at TIMESTAMPTZ NOT NULL,
+                paid_tx_signature TEXT UNIQUE, payout_tx_signature TEXT UNIQUE, processed_at TIMESTAMPTZ,
+                fees_paid BIGINT, priority INT DEFAULT 0
             );
         `);
-        console.log("✅ CREATE TABLE bets successful."); // ADD LOG
+        console.log("✅ CREATE TABLE bets successful.");
 
-        console.log("Attempting CREATE TABLE wallets..."); // ADD LOG
+        console.log("Attempting CREATE TABLE wallets...");
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
-                user_id TEXT PRIMARY KEY,                   -- Telegram User ID
-                wallet_address TEXT NOT NULL,               -- User's Solana wallet address
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- When the wallet was first linked
-                last_used_at TIMESTAMPTZ                    -- When the wallet was last used for a bet/payout
+                user_id TEXT PRIMARY KEY, wallet_address TEXT NOT NULL,
+                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_used_at TIMESTAMPTZ
             );
         `);
-        console.log("✅ CREATE TABLE wallets successful."); // ADD LOG
+        console.log("✅ CREATE TABLE wallets successful.");
 
-        console.log("Attempting ALTER TABLE bets (priority)..."); // ADD LOG
+        console.log("Attempting ALTER TABLE bets (priority)...");
         await client.query(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS priority INT DEFAULT 0;`);
-        console.log("✅ ALTER TABLE bets (priority) successful."); // ADD LOG
+        console.log("✅ ALTER TABLE bets (priority) successful.");
 
-        console.log("Attempting ALTER TABLE bets (fees_paid)..."); // ADD LOG
+        console.log("Attempting ALTER TABLE bets (fees_paid)...");
         await client.query(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS fees_paid BIGINT;`);
-        console.log("✅ ALTER TABLE bets (fees_paid) successful."); // ADD LOG
+        console.log("✅ ALTER TABLE bets (fees_paid) successful.");
 
-        console.log("Attempting CREATE INDEX idx_bets_status..."); // ADD LOG
+        console.log("Attempting CREATE INDEX idx_bets_status...");
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_status ON bets(status);`);
-        console.log("✅ CREATE INDEX idx_bets_status successful."); // ADD LOG
+        console.log("✅ CREATE INDEX idx_bets_status successful.");
 
-        console.log("Attempting CREATE INDEX idx_bets_user_id..."); // ADD LOG
+        console.log("Attempting CREATE INDEX idx_bets_user_id...");
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_user_id ON bets(user_id);`);
-        console.log("✅ CREATE INDEX idx_bets_user_id successful."); // ADD LOG
+        console.log("✅ CREATE INDEX idx_bets_user_id successful.");
 
-        console.log("Attempting CREATE INDEX idx_bets_expires_at..."); // ADD LOG
+        console.log("Attempting CREATE INDEX idx_bets_expires_at...");
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_expires_at ON bets(expires_at);`);
-        console.log("✅ CREATE INDEX idx_bets_expires_at successful."); // ADD LOG
+        console.log("✅ CREATE INDEX idx_bets_expires_at successful.");
 
-        console.log("Attempting CREATE INDEX idx_bets_priority..."); // ADD LOG
+        console.log("Attempting CREATE INDEX idx_bets_priority...");
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_priority ON bets(priority);`);
-        console.log("✅ CREATE INDEX idx_bets_priority successful."); // ADD LOG
+        console.log("✅ CREATE INDEX idx_bets_priority successful.");
 
-        console.log("Attempting CREATE UNIQUE INDEX idx_bets_memo_id..."); // ADD LOG
+        console.log("Attempting CREATE UNIQUE INDEX idx_bets_memo_id...");
         await client.query(`
             CREATE UNIQUE INDEX IF NOT EXISTS idx_bets_memo_id
             ON bets (memo_id)
             INCLUDE (status, expected_lamports, expires_at);
         `);
-        console.log("✅ CREATE UNIQUE INDEX idx_bets_memo_id successful.");// ADD LOG
+        console.log("✅ CREATE UNIQUE INDEX idx_bets_memo_id successful.");
 
+        console.log("✅ Database schema initialized/verified"); // Success log
 
-        console.log("✅ Database schema initialized/verified"); // Original success log
-    } catch (err) {
-        // --- ENHANCED ERROR LOGGING ---
-        console.error("❌ Database initialization error occurred!");
-        console.error("Error Code:", err.code);
-        console.error("Error Message:", err.message);
-        console.error("Error Stack:", err.stack); // Log the full stack trace
-        // --- END ENHANCED LOGGING ---
-        throw err; // Re-throw to prevent startup if DB fails
+    } catch (queryErr) {
+        // Log errors during query execution
+        console.error("❌ Database schema setup query error occurred!");
+        console.error("Error Code:", queryErr.code);
+        console.error("Error Message:", queryErr.message);
+        console.error("Error Stack:", queryErr.stack);
+        throw queryErr; // Re-throw to prevent startup
     } finally {
+        // Release client only if it was successfully acquired
         if (client) {
-            console.log("Releasing DB client."); // ADD LOG
+            console.log("Releasing DB client.");
             client.release();
         } else {
-            console.log("No DB client acquired to release."); // Changed log message slightly
+            console.log("No DB client acquired to release.");
         }
     }
 }
