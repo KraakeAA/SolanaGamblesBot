@@ -63,14 +63,14 @@ const app = express();
 // 1. Enhanced Solana Connection with Rate Limiting
 console.log("⚙️ Initializing scalable Solana connection...");
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 3,         // Max parallel requests
-    retryBaseDelay: 600,      // Initial delay for retries (ms)
+    maxConcurrent: 3,       // Max parallel requests
+    retryBaseDelay: 600,     // Initial delay for retries (ms)
     commitment: 'confirmed',  // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
         'solana-client': `SolanaGamblesBot/2.0 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info
     },
-    rateLimitCooloff: 10000,  // Pause duration after hitting rate limits (ms)
+    rateLimitCooloff: 10000,   // Pause duration after hitting rate limits (ms)
     disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
 });
 console.log("✅ Scalable Solana connection initialized");
@@ -86,9 +86,9 @@ console.log("✅ Message processing queue initialized");
 console.log("⚙️ Setting up optimized PostgreSQL Pool...");
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    max: 15,                   // Max connections in pool
-    min: 5,                    // Min connections maintained
-    idleTimeoutMillis: 30000,  // Close idle connections after 30s
+    max: 15,                    // Max connections in pool
+    min: 5,                     // Min connections maintained
+    idleTimeoutMillis: 30000,   // Close idle connections after 30s
     connectionTimeoutMillis: 5000, // Timeout for acquiring connection
     ssl: process.env.NODE_ENV === 'production' ? {
         rejectUnauthorized: false // Necessary for some cloud providers like Heroku/Railway
@@ -111,9 +111,9 @@ const performanceMonitor = {
             const errorRate = this.requests > 0 ? (this.errors / this.requests * 100).toFixed(1) : 0;
             console.log(`
 📊 Performance Metrics:
-   - Uptime: ${uptime.toFixed(0)}s
-   - Total Requests Handled: ${this.requests}
-   - Error Rate: ${errorRate}%
+    - Uptime: ${uptime.toFixed(0)}s
+    - Total Requests Handled: ${this.requests}
+    - Error Rate: ${errorRate}%
             `);
         }
     }
@@ -129,31 +129,31 @@ async function initializeDatabase() {
         // Bets Table: Tracks individual game bets
         await client.query(`
             CREATE TABLE IF NOT EXISTS bets (
-                id SERIAL PRIMARY KEY,                      -- Unique bet identifier
-                user_id TEXT NOT NULL,                      -- Telegram User ID
-                chat_id TEXT NOT NULL,                      -- Telegram Chat ID
-                game_type TEXT NOT NULL,                    -- 'coinflip' or 'race'
-                bet_details JSONB,                          -- Game-specific details (choice, horse, odds)
-                expected_lamports BIGINT NOT NULL,          -- Amount user should send (in lamports)
-                memo_id TEXT UNIQUE NOT NULL,               -- Unique memo for payment tracking
-                status TEXT NOT NULL,                       -- Bet status (e.g., 'awaiting_payment', 'completed_win_paid', 'error_...')
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- When the bet was initiated
-                expires_at TIMESTAMPTZ NOT NULL,            -- When the payment window closes
-                paid_tx_signature TEXT UNIQUE,              -- Signature of the user's payment transaction
-                payout_tx_signature TEXT UNIQUE,            -- Signature of the bot's payout transaction (if win)
-                processed_at TIMESTAMPTZ,                   -- When the bet was fully resolved
-                fees_paid BIGINT,                           -- Estimated fees buffer associated with this bet
-                priority INT DEFAULT 0                      -- Priority for processing (higher first)
+                id SERIAL PRIMARY KEY,                          -- Unique bet identifier
+                user_id TEXT NOT NULL,                          -- Telegram User ID
+                chat_id TEXT NOT NULL,                          -- Telegram Chat ID
+                game_type TEXT NOT NULL,                        -- 'coinflip' or 'race'
+                bet_details JSONB,                              -- Game-specific details (choice, horse, odds)
+                expected_lamports BIGINT NOT NULL,              -- Amount user should send (in lamports)
+                memo_id TEXT UNIQUE NOT NULL,                   -- Unique memo for payment tracking
+                status TEXT NOT NULL,                           -- Bet status (e.g., 'awaiting_payment', 'completed_win_paid', 'error_...')
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),  -- When the bet was initiated
+                expires_at TIMESTAMPTZ NOT NULL,                -- When the payment window closes
+                paid_tx_signature TEXT UNIQUE,                  -- Signature of the user's payment transaction
+                payout_tx_signature TEXT UNIQUE,                -- Signature of the bot's payout transaction (if win)
+                processed_at TIMESTAMPTZ,                       -- When the bet was fully resolved
+                fees_paid BIGINT,                               -- Estimated fees buffer associated with this bet
+                priority INT DEFAULT 0                          -- Priority for processing (higher first)
             );
         `);
 
         // Wallets Table: Links Telegram User ID to their Solana wallet address
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
-                user_id TEXT PRIMARY KEY,                   -- Telegram User ID
-                wallet_address TEXT NOT NULL,               -- User's Solana wallet address
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- When the wallet was first linked
-                last_used_at TIMESTAMPTZ                    -- When the wallet was last used for a bet/payout
+                user_id TEXT PRIMARY KEY,                       -- Telegram User ID
+                wallet_address TEXT NOT NULL,                   -- User's Solana wallet address
+                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),   -- When the wallet was first linked
+                last_used_at TIMESTAMPTZ                        -- When the wallet was last used for a bet/payout
             );
         `);
 
@@ -217,10 +217,10 @@ app.get('/', (req, res) => {
     res.status(200).json({
         status: 'ok',
         timestamp: new Date().toISOString(),
-        version: '2.0.0', // Bot version
+        version: '2.0.1', // Bot version (incremented for change)
         queueStats: { // Report queue status
-            pending: messageQueue.size,
-            active: messageQueue.pending
+            pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
+            active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
         }
     });
 });
@@ -358,17 +358,17 @@ function normalizeMemo(rawMemo) {
             // Check if ID part exists and is valid hex OR if only prefix exists
             if ((idPart.length > 0 && /^[A-F0-9]+$/.test(idPart)) || idPart.length === 0) {
                  // Return standardized format (e.g., CF-ABCDEF) or just prefix if no ID part
-                const normalized = idPart.length > 0 ? `${prefix}-${idPart}` : prefix;
+                 const normalized = idPart.length > 0 ? `${prefix}-${idPart}` : prefix;
 
-                // *** ADDED CHECK: Compare against original expected format before returning ***
-                // We still want the EXACT format CF-HEX12 preferably.
-                // If the normalized one happens to match the original strict format, return it.
-                // Otherwise, maybe log a warning and return null, or return the less strict format?
-                // Let's return the normalized one for now as requested, but log if it's weird.
-                if (!validateOriginalMemoFormat(normalized)) {
-                    console.warn(`Normalized memo "${normalized}" from raw "${rawMemo}" does not match strict format (PREFIX-HEX12). Accepting potentially invalid format.`);
-                }
-                return normalized;
+                 // *** ADDED CHECK: Compare against original expected format before returning ***
+                 // We still want the EXACT format CF-HEX12 preferably.
+                 // If the normalized one happens to match the original strict format, return it.
+                 // Otherwise, maybe log a warning and return null, or return the less strict format?
+                 // Let's return the normalized one for now as requested, but log if it's weird.
+                 if (!validateOriginalMemoFormat(normalized)) {
+                     console.warn(`Normalized memo "${normalized}" from raw "${rawMemo}" does not match strict format (PREFIX-HEX12). Accepting potentially invalid format.`);
+                 }
+                 return normalized;
             }
         }
     }
@@ -487,7 +487,7 @@ async function linkUserWallet(userId, walletAddress) {
         INSERT INTO wallets (user_id, wallet_address, last_used_at)
         VALUES ($1, $2, NOW())
         ON CONFLICT (user_id) -- If user already exists
-        DO UPDATE SET         -- Update their wallet address and last used time
+        DO UPDATE SET       -- Update their wallet address and last used time
             wallet_address = EXCLUDED.wallet_address,
             last_used_at = NOW()
         RETURNING *; -- Return the created/updated wallet entry
@@ -699,7 +699,7 @@ function getPayerFromTransaction(tx) {
      if (message.accountKeys.length > 0) {
          const feePayerKeyInfo = message.accountKeys[0];
          const feePayerAddress = feePayerKeyInfo?.pubkey ? feePayerKeyInfo.pubkey.toBase58() :
-                                (typeof feePayerKeyInfo === 'string' ? new PublicKey(feePayerKeyInfo).toBase58() : null);
+                                  (typeof feePayerKeyInfo === 'string' ? new PublicKey(feePayerKeyInfo).toBase58() : null);
          // console.log(`Identified fee payer as ${feePayerAddress}`); // Optional log
          return feePayerAddress ? new PublicKey(feePayerAddress) : null; // Return PublicKey or null
      }
@@ -714,27 +714,27 @@ function getPayerFromTransaction(tx) {
 
          // Check if the account is a signer in the transaction message
          if (message.accountKeys[i]?.signer || message.header?.numRequiredSignatures > 0 && i < message.header.numRequiredSignatures) {
-             let key;
-              if (message.accountKeys[i].pubkey) {
-                  key = message.accountKeys[i].pubkey;
-              } else if (typeof message.accountKeys[i] === 'string') {
-                  key = new PublicKey(message.accountKeys[i]);
-              } else {
-                  continue;
-              }
+              let key;
+               if (message.accountKeys[i].pubkey) {
+                   key = message.accountKeys[i].pubkey;
+               } else if (typeof message.accountKeys[i] === 'string') {
+                   key = new PublicKey(message.accountKeys[i]);
+               } else {
+                   continue;
+               }
 
-             // Check if balance decreased (paid fees or sent funds)
-             const balanceDiff = BigInt(preBalances[i] || 0) - BigInt(postBalances[i] || 0);
-             if (balanceDiff > 0) {
-                 // console.log(`Identified potential payer by balance change: ${key.toBase58()}`); // Optional log
-                 return key; // Return the PublicKey object
-             }
+               // Check if balance decreased (paid fees or sent funds)
+               const balanceDiff = BigInt(preBalances[i] || 0) - BigInt(postBalances[i] || 0);
+               if (balanceDiff > 0) {
+                   // console.log(`Identified potential payer by balance change: ${key.toBase58()}`); // Optional log
+                   return key; // Return the PublicKey object
+               }
          }
      }
 
      // console.warn("Could not definitively identify payer.");
      return null; // Could not determine payer
- }
+}
 
 // --- Payment Processing System ---
 
@@ -857,7 +857,7 @@ class PaymentProcessor {
         }
 
         // 3. Fetch the transaction details from Solana
-        console.log(`Workspaceing transaction details for signature: ${signature} (Attempt ${attempt + 1})`);
+        console.log(`Processing transaction details for signature: ${signature} (Attempt ${attempt + 1})`);
         // --- FIX: Call standard method directly ---
         const tx = await solanaConnection.getParsedTransaction(
             signature,
@@ -887,9 +887,9 @@ class PaymentProcessor {
          // Even if normalizeMemo is loose, findBetByMemo uses strict format check.
          const bet = await findBetByMemo(memo); // Uses strict check internally now
          if (!bet) {
-              console.warn(`No matching pending bet found for memo "${memo}" from TX ${signature} (strict format search).`);
-              processedSignaturesThisSession.add(signature);
-              return { processed: false, reason: 'no_matching_bet_strict' };
+             console.warn(`No matching pending bet found for memo "${memo}" from TX ${signature} (strict format search).`);
+             processedSignaturesThisSession.add(signature);
+             return { processed: false, reason: 'no_matching_bet_strict' };
          }
          // If found, proceed with the bet object we retrieved
          console.log(`Processing payment TX ${signature} with validated memo: ${memo} for Bet ID: ${bet.id}`);
@@ -911,7 +911,7 @@ class PaymentProcessor {
 
         // 8. Validate amount sent vs expected (with tolerance)
         const expectedAmount = BigInt(bet.expected_lamports);
-        const tolerance = BigInt(5000);
+        const tolerance = BigInt(5000); // Allow small deviation (e.g., 0.000005 SOL)
         if (transferAmount < (expectedAmount - tolerance) ||
             transferAmount > (expectedAmount + tolerance)) {
             console.warn(`Amount mismatch for bet ${bet.id} (memo ${memo}). Expected ~${expectedAmount}, got ${transferAmount}.`);
@@ -924,7 +924,7 @@ class PaymentProcessor {
         // 9. Validate transaction time vs bet expiry
         const txTime = tx.blockTime ? new Date(tx.blockTime * 1000) : new Date(0);
         if (txTime === 0) {
-            console.warn(`Could not determine blockTime for TX ${signature}. Skipping expiry check.`);
+             console.warn(`Could not determine blockTime for TX ${signature}. Skipping expiry check.`);
         } else if (txTime > new Date(bet.expires_at)) {
             console.warn(`Payment for bet ${bet.id} (memo ${memo}) received after expiry.`);
             await updateBetStatus(bet.id, 'error_payment_expired');
@@ -937,7 +937,7 @@ class PaymentProcessor {
         const markResult = await markBetPaid(bet.id, signature);
         if (!markResult.success) {
             console.error(`Failed to mark bet ${bet.id} as paid: ${markResult.error}`);
-             processedSignaturesThisSession.add(signature);
+             processedSignaturesThisSession.add(signature); // Add sig here to prevent retries if DB fails persistently
             return { processed: false, reason: 'db_mark_paid_failed' };
         }
 
@@ -962,7 +962,7 @@ class PaymentProcessor {
             type: 'process_bet',
             betId: bet.id,
             priority: 1, // Higher priority than monitoring
-            signature
+            signature // Pass signature for context/logging if needed
         });
 
         return { processed: true };
@@ -977,9 +977,10 @@ let isMonitorRunning = false; // Flag to prevent concurrent monitor runs
 let monitorIntervalSeconds = 30; // Initial interval
 let monitorInterval = null; // Holds the setInterval ID
 
+// *** UPDATED FUNCTION with adaptive throttling ***
 async function monitorPayments() {
     // <<< Logging Added Here >>>
-    console.log(`[${new Date().toISOString()}] ---- monitorPayments function START ----`);
+    // console.log(`[${new Date().toISOString()}] ---- monitorPayments function START ----`); // Reduce log noise
 
     if (isMonitorRunning) {
         // console.log('[Monitor] Cycle already running, skipping.'); // Reduce log noise
@@ -991,6 +992,22 @@ async function monitorPayments() {
     let signaturesFound = 0;
 
     try {
+        // --- START: Adaptive Rate Limiting Logic ---
+        const currentLoad = paymentProcessor.highPriorityQueue.pending +
+                            paymentProcessor.normalQueue.pending;
+
+        // Calculate delay: 50ms per pending item, max 5000ms (5 seconds)
+        // Adjusted delay calculation to be less aggressive (50ms per item)
+        const throttleDelay = Math.min(5000, currentLoad * 50);
+
+        if (throttleDelay > 0) {
+            console.log(`[Monitor] Queues have ${currentLoad} pending items. Throttling monitor check for ${throttleDelay}ms.`);
+            await new Promise(resolve => setTimeout(resolve, throttleDelay));
+        }
+        // --- END: Adaptive Rate Limiting Logic ---
+
+
+        // --- Original Monitor Logic Start ---
         const walletsToMonitor = [
             { address: process.env.MAIN_WALLET_ADDRESS, type: 'coinflip', priority: 0 },
             { address: process.env.RACE_WALLET_ADDRESS, type: 'race', priority: 0 },
@@ -1007,18 +1024,19 @@ async function monitorPayments() {
                 const signatures = await solanaConnection.getSignaturesForAddress(
                     new PublicKey(wallet.address),
                     {
-                        limit: 15,         // Fetch a reasonable batch size
+                        limit: 15,       // Fetch a reasonable batch size
                         before: beforeSig  // Use the specific 'before' signature for pagination
                     }
                 );
 
                 if (!signatures || signatures.length === 0) {
-                   continue;
+                    continue; // No new signatures for this wallet
                 }
 
                 signaturesFound += signatures.length; // Count total found signatures
 
                 // *** PAGINATION FIX: Update the last processed signature state for the *next* query cycle ***
+                // Use the *oldest* signature in this batch as the 'before' marker for the next run
                 const oldestSignatureInBatch = signatures[signatures.length - 1].signature;
                 lastProcessedSignature[wallet.address] = oldestSignatureInBatch;
                 // console.log(`[Monitor] Updated last signature for ${wallet.address} to: ${oldestSignatureInBatch}`); // Optional: Logging
@@ -1026,9 +1044,11 @@ async function monitorPayments() {
 
                 // Queue each found signature for processing by the PaymentProcessor
                 for (const sigInfo of signatures) {
+                    // Double check session cache before queuing
                     if (processedSignaturesThisSession.has(sigInfo.signature)) {
-                       continue;
+                        continue;
                     }
+                    // Queue the job
                     await paymentProcessor.addPaymentJob({
                         type: 'monitor_payment',
                         signature: sigInfo.signature,
@@ -1040,8 +1060,11 @@ async function monitorPayments() {
             } catch (error) {
                 console.error(`[Monitor] Error fetching/processing signatures for wallet ${wallet.address}:`, error.message);
                 performanceMonitor.logRequest(false);
+                 // Maybe reset lastProcessedSignature for this wallet on error? Or rely on retry?
+                 // For now, let's rely on the next successful run.
             }
         } // End loop through wallets
+        // --- Original Monitor Logic End ---
 
     } catch (error) {
         console.error("[Monitor] Unexpected error in main monitor loop:", error);
@@ -1049,12 +1072,17 @@ async function monitorPayments() {
     } finally {
         isMonitorRunning = false; // Release the lock
         const duration = Date.now() - startTime;
-        // console.log(`[Monitor] Cycle finished in ${duration}ms. Found ${signaturesFound} new signatures.`); // Reduce log noise unless signatures found > 0
+        if (signaturesFound > 0) { // Only log duration if something happened
+             console.log(`[Monitor] Cycle finished in ${duration}ms. Found ${signaturesFound} new signatures.`);
+        }
 
         // Adjust monitoring interval based on activity
         adjustMonitorInterval(signaturesFound);
+
+        // console.log(`[${new Date().toISOString()}] ---- monitorPayments function END ----`); // Reduce log noise
     }
 }
+// *** END UPDATED FUNCTION ***
 
 
 // Adjusts the monitor interval based on how many new signatures were found
@@ -1072,15 +1100,15 @@ function adjustMonitorInterval(processedCount) {
         monitorInterval = setInterval(() => { // Reschedule with new interval
              console.log(`[${new Date().toISOString()}] ==== Monitor Interval Fired (${monitorIntervalSeconds}s) ====`); // Log interval fire
              try {
-                  monitorPayments().catch(err => {
-                      console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
-                      performanceMonitor.logRequest(false);
-                  });
+                 monitorPayments().catch(err => {
+                     console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
+                     performanceMonitor.logRequest(false);
+                 });
              } catch (syncErr) {
-                  console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
-                  performanceMonitor.logRequest(false);
+                 console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
+                 performanceMonitor.logRequest(false);
              }
-              console.log(`[${new Date().toISOString()}] ==== Monitor Interval Callback End ====`);
+             // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Callback End ====`);
          }, monitorIntervalSeconds * 1000);
         console.log(`ℹ️ Adjusted monitor interval to ${monitorIntervalSeconds}s`);
     }
@@ -1108,15 +1136,31 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
 
     // Calculate dynamic priority fee based on payout amount (adjust rate as needed)
     const priorityFeeMicroLamports = Math.min(
-        1000000, // Max priority fee (in microLamports)
+        1000000, // Max priority fee (in microLamports, e.g., 0.001 SOL)
         Math.max(1000, Math.floor(Number(amountLamports) * PRIORITY_FEE_RATE)) // Min 1000 microLamports
     );
 
     // Check if amount is sufficient after accounting for FEE_BUFFER
-    const netAmountToSend = BigInt(amountLamports) - FEE_BUFFER;
-    if (netAmountToSend <= 0n) {
-        console.error(`❌ Payout amount ${amountLamports} is less than or equal to fee buffer ${FEE_BUFFER}. Cannot send.`);
-        return { success: false, error: 'Payout amount too small after fee buffer' };
+    // Ensure gross amount is positive before deducting buffer
+    const grossAmountToSend = BigInt(amountLamports);
+    if (grossAmountToSend <= 0n) {
+         console.error(`❌ Payout amount ${amountLamports} is zero or negative. Cannot send.`);
+         return { success: false, error: 'Payout amount must be positive' };
+    }
+    const netAmountToSend = grossAmountToSend - FEE_BUFFER; // Note: We are sending the GROSS amount now, adjusted calculation
+    // *** Correction: sendSol should send the exact winning amount calculated BEFORE buffer subtraction.
+    // The buffer is accounted for in the game logic's calculation of the payout amount.
+    // So, send the 'amountLamports' passed to this function directly.
+    // We still need the buffer check to ensure the BOT has enough funds.
+    const amountToSend = BigInt(amountLamports); // Send the calculated win amount
+
+    // Re-evaluate: The FEE_BUFFER was likely intended to ensure the *bot* had enough funds *remaining*
+    // after the payout to cover future fees. Let's stick to sending the exact `amountLamports`
+    // passed in, assuming it was calculated correctly by `calculatePayoutWithFees`.
+
+    if (amountToSend <= 0n) {
+         console.error(`❌ Calculated payout amount ${amountLamports} is zero or negative. Cannot send.`);
+         return { success: false, error: 'Calculated payout amount is zero or negative' };
     }
 
 
@@ -1154,11 +1198,11 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
                 SystemProgram.transfer({
                     fromPubkey: payerWallet.publicKey,
                     toPubkey: recipientPubKey,
-                    lamports: netAmountToSend // Send the amount *after* buffer deduction
+                    lamports: amountToSend // Send the exact calculated amount
                 })
             );
 
-            console.log(`Sending TX (Attempt ${attempt})... Net Amount: ${netAmountToSend}, Priority Fee: ${priorityFeeMicroLamports} microLamports`);
+            console.log(`Sending TX (Attempt ${attempt})... Amount: ${amountToSend}, Priority Fee: ${priorityFeeMicroLamports} microLamports`);
 
             // Send and confirm transaction with timeout
             const signature = await Promise.race([
@@ -1180,7 +1224,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
                 })
             ]);
 
-            console.log(`✅ Payout successful! Sent ${Number(netAmountToSend)/LAMPORTS_PER_SOL} SOL to ${recipientPubKey.toBase58()}. TX: ${signature}`);
+            console.log(`✅ Payout successful! Sent ${Number(amountToSend)/LAMPORTS_PER_SOL} SOL to ${recipientPubKey.toBase58()}. TX: ${signature}`);
             return { success: true, signature };
 
         } catch (error) {
@@ -1188,8 +1232,9 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
 
             // Check for specific errors that shouldn't be retried
             if (error.message.includes('Invalid param') ||
-                error.message.includes('Insufficient funds') ||
-                error.message.includes('blockhash not found')) {
+                error.message.includes('Insufficient funds') || // Bot might be out of SOL
+                error.message.includes('blockhash not found') ||
+                error.message.includes('custom program error')) { // Catch on-chain program errors early
                  console.error("❌ Non-retryable error encountered. Aborting payout.");
                  return { success: false, error: `Non-retryable error: ${error.message}` }; // Exit retry loop
             }
@@ -1263,11 +1308,24 @@ async function handleCoinflipGame(bet) {
     const config = GAME_CONFIG.coinflip;
 
     // Determine outcome using pseudo-randomness with house edge applied
-    const result = Math.random() < (0.5 - config.houseEdge / 2) ? 'heads' : 'tails';
+    // Win probability for the player is (0.5 - houseEdge / 2) for *each* choice
+    const playerWinProbability = 0.5 - (config.houseEdge / 2.0);
+    const resultRandom = Math.random();
+    let result;
+    if (choice === 'heads') {
+        result = resultRandom < playerWinProbability ? 'heads' : 'tails';
+    } else { // choice === 'tails'
+        result = resultRandom < playerWinProbability ? 'tails' : 'heads';
+    }
+    // Simplified: Determine winning side first, then compare to choice
+    // const winningSide = Math.random() < 0.5 ? 'heads' : 'tails'; // This doesn't account for house edge correctly
+    // Let's stick to the probability calculation above.
+
     const win = (result === choice);
 
     // Calculate payout amount if win (uses helper function)
-    const payoutLamports = win ? calculatePayoutWithFees(expected_lamports, 'coinflip') : 0n;
+    // Pass the *original* expected lamports (the bet amount)
+    const payoutLamports = win ? calculatePayout(BigInt(expected_lamports), 'coinflip') : 0n;
 
     // Get user's display name for messages
     let displayName = await getUserDisplayName(chat_id, user_id);
@@ -1306,7 +1364,7 @@ async function handleCoinflipGame(bet) {
                 type: 'payout',
                 betId,
                 recipient: winnerAddress,
-                amount: payoutLamports,
+                amount: payoutLamports, // Send the calculated payout amount
                 gameType: 'coinflip',
                 priority: 2, // Higher priority than monitoring/game processing
                 chatId: chat_id,
@@ -1341,6 +1399,7 @@ async function handleRaceGame(bet) {
     const chosenHorseName = bet_details.horse;
     const config = GAME_CONFIG.race;
 
+    // Ensure probabilities sum close to 1 (adjust if needed)
     const horses = [
         { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 },
         { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 },
@@ -1352,8 +1411,14 @@ async function handleRaceGame(bet) {
         { name: 'Pink',   emoji: '🌸', odds: 8.0, winProbability: 0.03 },
         { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 },
         { name: 'Green',  emoji: '🟢', odds: 10.0, winProbability: 0.01 },
-        { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 }
+        { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 } // Total: 0.99 - adjust if needed
     ];
+    // Add a small adjustment to the last horse probability if needed to reach 1.0
+    const totalProb = horses.reduce((sum, h) => sum + h.winProbability, 0);
+    if (totalProb < 1.0) {
+        horses[horses.length - 1].winProbability += (1.0 - totalProb);
+    }
+
 
     // Determine the winning horse based on weighted probabilities
     let winningHorse;
@@ -1366,7 +1431,8 @@ async function handleRaceGame(bet) {
             break;
         }
     }
-    winningHorse = winningHorse || horses[horses.length - 1]; // Fallback
+    // Fallback just in case (shouldn't be needed if probabilities sum to 1)
+    winningHorse = winningHorse || horses[horses.length - 1];
 
     // Send race commentary messages
     let displayName = await getUserDisplayName(chat_id, user_id);
@@ -1386,7 +1452,7 @@ async function handleRaceGame(bet) {
     // Determine win/loss and payout
     const win = (chosenHorseName.toLowerCase() === winningHorse.name.toLowerCase());
     const payoutLamports = win
-        ? calculatePayoutWithFees(expected_lamports, 'race', winningHorse) // Pass winning horse for odds
+        ? calculatePayout(BigInt(expected_lamports), 'race', winningHorse) // Pass winning horse for odds
         : 0n;
 
     if (win) {
@@ -1423,7 +1489,7 @@ async function handleRaceGame(bet) {
                 type: 'payout',
                 betId,
                 recipient: winnerAddress,
-                amount: payoutLamports,
+                amount: payoutLamports, // Send calculated payout amount
                 gameType: 'race',
                 priority: 2,
                 chatId: chat_id,
@@ -1456,19 +1522,32 @@ async function handleRaceGame(bet) {
 // Handles the actual payout transaction after a win is confirmed
 async function handlePayoutJob(job) {
     const { betId, recipient, amount, gameType, chatId, displayName, result, horseName, winningHorse } = job;
-    console.log(`💸 Processing payout job for Bet ID: ${betId}, Amount: ${amount} lamports`);
+    const payoutAmountLamports = BigInt(amount); // Ensure amount is BigInt
+
+    // Ensure payout amount is positive before attempting to send
+    if (payoutAmountLamports <= 0n) {
+        console.error(`❌ Payout job for bet ${betId} has zero or negative amount (${payoutAmountLamports}). Skipping send.`);
+        await updateBetStatus(betId, 'error_payout_zero_amount');
+        await bot.sendMessage(chatId,
+            `⚠️ There was an issue calculating the payout for bet ID ${betId} (amount was zero). Please contact support.`,
+            { parse_mode: 'Markdown' }
+        ).catch(e => console.error("TG Send Error:", e.message));
+        return; // Don't proceed with sending 0
+    }
+
+    console.log(`💸 Processing payout job for Bet ID: ${betId}, Amount: ${payoutAmountLamports} lamports`);
 
     try {
         // Attempt to send the SOL payout
-        const sendResult = await sendSol(recipient, amount, gameType);
+        const sendResult = await sendSol(recipient, payoutAmountLamports, gameType);
 
         if (sendResult.success) {
             console.log(`💸 Payout successful for bet ${betId}, TX: ${sendResult.signature}`);
             // Send success message to user
             await bot.sendMessage(chatId,
                 `✅ Payout successful for bet ${betId}!\n` +
-                `${(Number(amount)/LAMPORTS_PER_SOL).toFixed(6)} SOL sent.\n` +
-                `TX: \`${sendResult.signature}\``,
+                `${(Number(payoutAmountLamports)/LAMPORTS_PER_SOL).toFixed(6)} SOL sent.\n` +
+                `TX: \`https://solscan.io/tx/${sendResult.signature}\``, // Add link
                 { parse_mode: 'Markdown', disable_web_page_preview: true } // Don't preview Solscan etc.
             ).catch(e => console.error("TG Send Error:", e.message));
             // Record payout signature and final status in DB
@@ -1484,7 +1563,7 @@ async function handlePayoutJob(job) {
             ).catch(e => console.error("TG Send Error:", e.message));
             // Update status to indicate payout failure
             await updateBetStatus(betId, 'error_payout_failed');
-            // TODO: Implement admin notification for failed payouts
+            // TODO: Implement admin notification for failed payouts (Log is already present)
         }
     } catch (error) {
         // Catch unexpected errors during payout processing
@@ -1502,27 +1581,28 @@ async function handlePayoutJob(job) {
 
 // --- Utility Functions ---
 
-// Calculates payout amount, applying house edge and subtracting fee buffer
-function calculatePayoutWithFees(betLamports, gameType, gameDetails = {}) {
+// Calculates payout amount, applying house edge. Returns BigInt lamports.
+function calculatePayout(betLamports, gameType, gameDetails = {}) {
     betLamports = BigInt(betLamports); // Ensure input is BigInt
-    let grossPayout = 0n;
+    let payoutLamports = 0n;
 
     if (gameType === 'coinflip') {
         // Payout is 2x minus house edge (e.g., 2 - 0.02 = 1.98 multiplier)
-        grossPayout = BigInt(Math.floor(Number(betLamports) * (2.0 - GAME_CONFIG.coinflip.houseEdge)));
+        const multiplier = 2.0 - GAME_CONFIG.coinflip.houseEdge;
+        payoutLamports = BigInt(Math.floor(Number(betLamports) * multiplier));
     } else if (gameType === 'race' && gameDetails.odds) {
         // Payout is Bet * Odds * (1 - House Edge)
-        grossPayout = BigInt(Math.floor(Number(betLamports) * gameDetails.odds * (1.0 - GAME_CONFIG.race.houseEdge)));
+        const multiplier = gameDetails.odds * (1.0 - GAME_CONFIG.race.houseEdge);
+        payoutLamports = BigInt(Math.floor(Number(betLamports) * multiplier));
     } else {
          console.error(`Cannot calculate payout: Unknown game type ${gameType} or missing race odds.`);
          return 0n; // Return 0 if calculation fails
     }
 
-    // Subtract the fee buffer AFTER calculating gross winnings
-    const netPayout = grossPayout > FEE_BUFFER ? grossPayout - FEE_BUFFER : 0n;
-
-    // console.log(`Payout Calc: Bet ${betLamports}, Gross ${grossPayout}, Net ${netPayout}`); // Debug log
-    return netPayout;
+    // Return the calculated payout amount. Fee buffer is *not* subtracted here.
+    // sendSol handles the sending; the bot needs sufficient balance overall.
+    // console.log(`Payout Calc: Bet ${betLamports}, Payout ${payoutLamports}`); // Debug log
+    return payoutLamports > 0n ? payoutLamports : 0n; // Ensure payout is not negative
 }
 
 // Fetches user's display name (username or first name) from Telegram
@@ -1536,7 +1616,7 @@ async function getUserDisplayName(chat_id, user_id) {
      } catch (e) {
          // Log error but return default name if fetching fails
          console.warn(`Couldn't get username for user ${user_id} in chat ${chat_id}:`, e.message);
-         return `User ${user_id.substring(0, 6)}...`; // Return partial ID as fallback
+         return `User ${String(user_id).substring(0, 6)}...`; // Return partial ID as fallback
      }
 }
 
@@ -1567,6 +1647,7 @@ async function handleMessage(msg) {
 
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
+    const messageText = msg.text || ''; // Ensure messageText is a string
 
     try {
         // --- User Cooldown Check ---
@@ -1579,10 +1660,14 @@ async function handleMessage(msg) {
                 return; // Ignore command if user is on cooldown
             }
         }
-        confirmCooldown.set(userId, now); // Update last command time
+        // Apply cooldown only to commands, not general messages
+        if (messageText.startsWith('/')) {
+             confirmCooldown.set(userId, now); // Update last command time
+        }
+
 
         // --- Command Routing ---
-        const text = msg.text.trim(); // Trim whitespace
+        const text = messageText.trim(); // Trim whitespace
 
         if (text.match(/^\/start$/i)) {
             await handleStartCommand(msg);
@@ -1602,7 +1687,6 @@ async function handleMessage(msg) {
         else if (text.match(/^\/betrace (\d+\.?\d*)\s+(\w+)/i)) { // Regex for /betrace amount horse
             await handleBetRaceCommand(msg);
         }
-        // Add /help command?
         else if (text.match(/^\/help$/i)) {
              await handleHelpCommand(msg);
         }
@@ -1611,7 +1695,7 @@ async function handleMessage(msg) {
         performanceMonitor.logRequest(true); // Log successful command handling
 
     } catch (error) {
-        console.error(`❌ Error processing message from user ${userId} in chat ${chatId}: "${msg.text}"`, error);
+        console.error(`❌ Error processing message from user ${userId} in chat ${chatId}: "${messageText}"`, error);
         performanceMonitor.logRequest(false); // Log error
 
         // Send generic error message to user
@@ -1735,7 +1819,7 @@ async function handleWalletCommand(msg) {
 // Handles /bet command (for Coinflip)
 async function handleBetCommand(msg) {
     const match = msg.text.match(/^\/bet (\d+\.?\d*)\s+(heads|tails)/i);
-    if (!match) return;
+    if (!match) return; // Should not happen if routing is correct, but safe check
 
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
@@ -1766,7 +1850,8 @@ async function handleBetCommand(msg) {
 
     if (!saveResult.success) {
          await bot.sendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
-         throw new Error(saveResult.error || "Failed to save coinflip bet");
+         // Don't throw, just return after notifying user
+         return;
     }
 
     // Send payment instructions
@@ -1787,7 +1872,7 @@ async function handleBetCommand(msg) {
 // Handles /betrace command
 async function handleBetRaceCommand(msg) {
     const match = msg.text.match(/^\/betrace (\d+\.?\d*)\s+(\w+)/i);
-     if (!match) return;
+     if (!match) return; // Safe check
 
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
@@ -1807,12 +1892,12 @@ async function handleBetRaceCommand(msg) {
     // Validate horse selection
     const chosenHorseNameInput = match[2];
     const horses = [
-        { name: 'Yellow', emoji: '🟡', odds: 1.1 }, { name: 'Orange', emoji: '🟠', odds: 2.0 },
-        { name: 'Blue',   emoji: '🔵', odds: 3.0 }, { name: 'Cyan',   emoji: '💧', odds: 4.0 },
-        { name: 'White',  emoji: '⚪️', odds: 5.0 }, { name: 'Red',    emoji: '🔴', odds: 6.0 },
-        { name: 'Black',  emoji: '⚫️', odds: 7.0 }, { name: 'Pink',   emoji: '🌸', odds: 8.0 },
-        { name: 'Purple', emoji: '🟣', odds: 9.0 }, { name: 'Green',  emoji: '🟢', odds: 10.0 },
-        { name: 'Silver', emoji: '💎', odds: 15.0 }
+         { name: 'Yellow', emoji: '🟡', odds: 1.1 }, { name: 'Orange', emoji: '🟠', odds: 2.0 },
+         { name: 'Blue',   emoji: '🔵', odds: 3.0 }, { name: 'Cyan',   emoji: '💧', odds: 4.0 },
+         { name: 'White',  emoji: '⚪️', odds: 5.0 }, { name: 'Red',    emoji: '🔴', odds: 6.0 },
+         { name: 'Black',  emoji: '⚫️', odds: 7.0 }, { name: 'Pink',   emoji: '🌸', odds: 8.0 },
+         { name: 'Purple', emoji: '🟣', odds: 9.0 }, { name: 'Green',  emoji: '🟢', odds: 10.0 },
+         { name: 'Silver', emoji: '💎', odds: 15.0 }
     ];
     const chosenHorse = horses.find(h => h.name.toLowerCase() === chosenHorseNameInput.toLowerCase());
 
@@ -1834,13 +1919,15 @@ async function handleBetRaceCommand(msg) {
         expectedLamports, memoId, expiresAt
     );
 
-     if (!saveResult.success) {
+      if (!saveResult.success) {
          await bot.sendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
-         throw new Error(saveResult.error || "Failed to save race bet");
-     }
+         // Don't throw, just return
+         return;
+      }
 
     // Calculate potential payout for display
-     const potentialPayoutSOL = (betAmount * chosenHorse.odds * (1.0 - config.houseEdge)).toFixed(6);
+     const potentialPayoutLamports = calculatePayout(expectedLamports, 'race', chosenHorse);
+     const potentialPayoutSOL = (Number(potentialPayoutLamports) / LAMPORTS_PER_SOL).toFixed(6);
 
     // Send payment instructions
     await bot.sendMessage(chatId,
@@ -1860,20 +1947,20 @@ async function handleBetRaceCommand(msg) {
 // Handles /help command
 async function handleHelpCommand(msg) {
      const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
-                     `/start - Show welcome message\n` +
-                     `/help - Show this help message\n\n` +
-                     `*Games:*\n` +
-                     `/coinflip - Show Coinflip game info & how to bet\n` +
-                     `/race - Show Horse Race game info & how to bet\n\n` +
-                     `*Betting:*\n` +
-                     `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
-                     `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
-                     `*Wallet:*\n` +
-                     `/wallet - View your linked Solana wallet for payouts\n\n` +
-                     `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
+                      `/start - Show welcome message\n` +
+                      `/help - Show this help message\n\n` +
+                      `*Games:*\n` +
+                      `/coinflip - Show Coinflip game info & how to bet\n` +
+                      `/race - Show Horse Race game info & how to bet\n\n` +
+                      `*Betting:*\n` +
+                      `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
+                      `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
+                      `*Wallet:*\n` +
+                      `/wallet - View your linked Solana wallet for payouts\n\n` +
+                      `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
 
      await bot.sendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
- }
+}
 
 
 // --- Server Startup & Shutdown Logic ---
@@ -1918,7 +2005,7 @@ async function startServer() {
             console.log(`⚙️ Starting payment monitor (Interval: ${monitorIntervalSeconds}s)`);
             // --- Logging Added Around Interval ---
             monitorInterval = setInterval(() => {
-                 console.log(`[${new Date().toISOString()}] ==== Monitor Interval Fired (${monitorIntervalSeconds}s) ====`); // Log interval fire
+                 // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Fired (${monitorIntervalSeconds}s) ====`); // Reduce log noise
                  try {
                       monitorPayments().catch(err => { // Catch async errors from monitorPayments
                           console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
@@ -1929,7 +2016,7 @@ async function startServer() {
                       performanceMonitor.logRequest(false);
                  }
                  // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Callback End ====`); // Optional: Log end
-            }, monitorIntervalSeconds * 1000);
+             }, monitorIntervalSeconds * 1000);
             // --- End Logging Added ---
 
 
@@ -1937,7 +2024,7 @@ async function startServer() {
             setTimeout(() => {
                  console.log("⚙️ Performing initial payment monitor run...");
                  // Also wrap this initial call
-                  try {
+                 try {
                       monitorPayments().catch(err => {
                           console.error('[FATAL MONITOR ERROR in initial run catch]:', err);
                           performanceMonitor.logRequest(false);
@@ -1949,7 +2036,7 @@ async function startServer() {
             }, 5000); // Delay initial run slightly
 
             // Start polling if webhook is NOT used (e.g., local development)
-            if (!process.env.RAILWAY_ENVIRONMENT) {
+            if (!process.env.RAILWAY_ENVIRONMENT && !process.env.RAILWAY_PUBLIC_DOMAIN) { // Check domain too
                 console.log("ℹ️ Starting bot polling for local development...");
                 // Delete any existing webhook first to avoid conflicts
                 bot.deleteWebHook({ drop_pending_updates: true })
@@ -1995,14 +2082,22 @@ const shutdown = async (signal) => {
         console.log("- Stopped payment monitor interval.");
     }
     try {
-         if (process.env.RAILWAY_ENVIRONMENT) {
-             await bot.deleteWebHook({ drop_pending_updates: true });
-             console.log("- Removed Telegram webhook.");
-         } else if (bot.isPolling()) {
+        let webhookDeleted = false;
+         if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_PUBLIC_DOMAIN) {
+             try {
+                 await bot.deleteWebHook({ drop_pending_updates: true });
+                 console.log("- Removed Telegram webhook.");
+                 webhookDeleted = true;
+             } catch (whErr) {
+                 console.error("⚠️ Error removing webhook:", whErr.message);
+             }
+         }
+         // Only stop polling if webhook wasn't set/deleted OR if polling was explicitly started
+         if (!webhookDeleted && bot.isPolling()) {
               await bot.stopPolling({ cancel: true }); // Cancel polling
               console.log("- Stopped Telegram polling.");
          }
-         // Close Express server? (Optional, depends on needs)
+         // Close Express server? (Usually handled by Railway/Docker itself)
          // server.close(() => console.log("- Express server closed."));
     } catch (e) {
         console.error("⚠️ Error stopping bot listeners:", e.message);
