@@ -38,7 +38,7 @@ let missingVars = false;
 REQUIRED_ENV_VARS.forEach((key) => {
     if (!process.env[key]) {
         if (key === 'RAILWAY_PUBLIC_DOMAIN' && !process.env.RAILWAY_ENVIRONMENT) return;
-        console.error(`❌ Environment variable ${key} is missing.`);
+        console.error(`â Environment variable ${key} is missing.`);
         missingVars = true;
     }
 });
@@ -70,7 +70,7 @@ const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
     rateLimitCooloff: 10000, // 10s pause after hitting rate limits
     disableRetryOnRateLimit: false // Enable automatic retry
 });
-console.log("✅ Scalable Solana connection initialized");
+console.log("â Scalable Solana connection initialized");
 
 // 2. Message Processing Queue
 const messageQueue = new PQueue({
@@ -90,7 +90,7 @@ const pool = new Pool({
         rejectUnauthorized: false 
     } : false
 });
-console.log("✅ PostgreSQL Pool created with optimized settings");
+console.log("â PostgreSQL Pool created with optimized settings");
 
 // 4. Performance Monitor
 const performanceMonitor = {
@@ -104,7 +104,7 @@ const performanceMonitor = {
         if (this.requests % 50 === 0) {
             const uptime = (Date.now() - this.startTime) / 1000;
             console.log(`
-                📊 Performance Metrics:
+                ð Performance Metrics:
                 - Uptime: ${uptime.toFixed(0)}s
                 - Total Requests: ${this.requests}
                 - Error Rate: ${(this.errors/this.requests*100).toFixed(1)}%
@@ -163,9 +163,9 @@ async function initializeDatabase() {
             CREATE INDEX IF NOT EXISTS idx_bets_priority ON bets(priority);
         `);
         
-        console.log("✅ Database initialized with scalable schema");
+        console.log("â Database initialized with scalable schema");
     } catch (err) {
-        console.error("❌ Database initialization error:", err);
+        console.error("â Database initialization error:", err);
         throw err;
     } finally {
         if (client) client.release();
@@ -194,7 +194,7 @@ bot.on('message', (msg) => {
         });
 });
 
-console.log("✅ Telegram Bot initialized with queue system");
+console.log("â Telegram Bot initialized with queue system");
 
 // --- Express Setup with Enhanced Monitoring ---
 app.use(express.json({
@@ -250,6 +250,7 @@ const walletCache = new Map();
 const CACHE_TTL = 300000;
 
 const processedSignaturesThisSession = new Set();
+const lastProcessedSignature = {};
 const MAX_PROCESSED_SIGNATURES = 1000;
 
 // --- Constants with Scalability in Mind ---
@@ -558,7 +559,11 @@ const signatures = await solanaConnection.getSignaturesForAddress(
                 if (!signatures || signatures.length === 0) continue;
 
                 // Process signatures with priority queuing
-                for (const sig of signatures) {
+                if (signatures.length > 0) {
+    lastProcessedSignature[wallet.address] = signatures[signatures.length - 1].signature;
+}
+
+for (const sig of signatures) {
                     await paymentProcessor.addPaymentJob({
                         type: 'monitor_payment',
                         signature: sig.signature,
@@ -742,7 +747,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
                 })
             ]);
 
-            console.log(`✅ Sent ${(Number(transferAmount)/LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+            console.log(`â Sent ${(Number(transferAmount)/LAMPORTS_PER_SOL).toFixed(6)} SOL`);
             return { success: true, signature };
             
         } catch (error) {
@@ -829,7 +834,7 @@ async function handleCoinflipGame(bet) {
         const winnerAddress = await getLinkedWallet(user_id);
         if (!winnerAddress) {
             await bot.sendMessage(chat_id,
-                `🎉 ${displayName}, you won but no wallet linked!\n` +
+                `ð ${displayName}, you won but no wallet linked!\n` +
                 `Result: *${result}*\n` +
                 `Please place another bet to link your wallet.`,
                 { parse_mode: 'Markdown' }
@@ -841,9 +846,9 @@ async function handleCoinflipGame(bet) {
         try {
             // Notify user first
             await bot.sendMessage(chat_id,
-                `🎉 ${displayName} won ${payoutSOL.toFixed(6)} SOL!\n` +
+                `ð ${displayName} won ${payoutSOL.toFixed(6)} SOL!\n` +
                 `Result: *${result}*\n\n` +
-                `💸 Processing payout...`,
+                `ð¸ Processing payout...`,
                 { parse_mode: 'Markdown' }
             );
 
@@ -863,7 +868,7 @@ async function handleCoinflipGame(bet) {
         } catch (e) {
             console.error(`Payout error for bet ${betId}:`, e);
             await bot.sendMessage(chat_id,
-                `⚠️ Payout failed due to technical error\n` +
+                `â ï¸ Payout failed due to technical error\n` +
                 `Please contact support with Bet ID: ${betId}`,
                 { parse_mode: 'Markdown' }
             );
@@ -871,7 +876,7 @@ async function handleCoinflipGame(bet) {
         }
     } else {
         await bot.sendMessage(chat_id,
-            `❌ ${displayName}, you lost!\n` +
+            `â ${displayName}, you lost!\n` +
             `You guessed *${choice}* but got *${result}*`,
             { parse_mode: 'Markdown' }
         );
@@ -887,14 +892,14 @@ async function handlePayoutJob(job) {
 
         if (sendResult.success) {
             await bot.sendMessage(chatId,
-                `💰 Payout successful!\n` +
+                `ð° Payout successful!\n` +
                 `TX: \`${sendResult.signature}\``,
                 { parse_mode: 'Markdown' }
             );
             await recordPayout(betId, 'completed_win_paid', sendResult.signature);
         } else {
             await bot.sendMessage(chatId,
-                `⚠️ Payout failed: ${sendResult.error}\n` +
+                `â ï¸ Payout failed: ${sendResult.error}\n` +
                 `Please contact support with Bet ID: ${betId}`,
                 { parse_mode: 'Markdown' }
             );
@@ -913,17 +918,17 @@ async function handleRaceGame(bet) {
 
     // Race horses data with probabilities
     const horses = [
-        { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 },
-        { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 },
-        { name: 'Blue', emoji: '🔵', odds: 3.0, winProbability: 0.15 },
-        { name: 'Cyan', emoji: '🔷', odds: 4.0, winProbability: 0.12 },
-        { name: 'White', emoji: '⚪', odds: 5.0, winProbability: 0.09 },
-        { name: 'Red', emoji: '🔴', odds: 6.0, winProbability: 0.07 },
-        { name: 'Black', emoji: '⚫', odds: 7.0, winProbability: 0.05 },
-        { name: 'Pink', emoji: '🌸', odds: 8.0, winProbability: 0.03 },
-        { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 },
-        { name: 'Green', emoji: '🟢', odds: 10.0, winProbability: 0.01 },
-        { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 }
+        { name: 'Yellow', emoji: 'ð¡', odds: 1.1, winProbability: 0.25 },
+        { name: 'Orange', emoji: 'ð ', odds: 2.0, winProbability: 0.20 },
+        { name: 'Blue', emoji: 'ðµ', odds: 3.0, winProbability: 0.15 },
+        { name: 'Cyan', emoji: 'ð·', odds: 4.0, winProbability: 0.12 },
+        { name: 'White', emoji: 'âª', odds: 5.0, winProbability: 0.09 },
+        { name: 'Red', emoji: 'ð´', odds: 6.0, winProbability: 0.07 },
+        { name: 'Black', emoji: 'â«', odds: 7.0, winProbability: 0.05 },
+        { name: 'Pink', emoji: 'ð¸', odds: 8.0, winProbability: 0.03 },
+        { name: 'Purple', emoji: 'ð£', odds: 9.0, winProbability: 0.02 },
+        { name: 'Green', emoji: 'ð¢', odds: 10.0, winProbability: 0.01 },
+        { name: 'Silver', emoji: 'ð', odds: 15.0, winProbability: 0.01 }
     ];
 
     // Determine winner
@@ -942,13 +947,13 @@ async function handleRaceGame(bet) {
 
     // Race commentary
     try {
-        await bot.sendMessage(chat_id, `🏇 Race ${betId} starting! You bet on ${horseName}!`, 
+        await bot.sendMessage(chat_id, `ð Race ${betId} starting! You bet on ${horseName}!`, 
             { parse_mode: 'Markdown' });
         await new Promise(resolve => setTimeout(resolve, 2000));
         await bot.sendMessage(chat_id, "And they're off!");
         await new Promise(resolve => setTimeout(resolve, 3000));
         await bot.sendMessage(chat_id,
-            `🏁 Winner: ${winningHorse.emoji} *${winningHorse.name}*! 🏁`,
+            `ð Winner: ${winningHorse.emoji} *${winningHorse.name}*! ð`,
             { parse_mode: 'Markdown' }
         );
     } catch (e) {
@@ -978,7 +983,7 @@ async function handleRaceGame(bet) {
         const winnerAddress = await getLinkedWallet(user_id);
         if (!winnerAddress) {
             await bot.sendMessage(chat_id,
-                `🎉 ${displayName}, your horse won but no wallet linked!\n` +
+                `ð ${displayName}, your horse won but no wallet linked!\n` +
                 `Payout: ${payoutSOL.toFixed(6)} SOL\n` +
                 `Please place another bet to link your wallet.`,
                 { parse_mode: 'Markdown' }
@@ -990,9 +995,9 @@ async function handleRaceGame(bet) {
         try {
             // Notify user first
             await bot.sendMessage(chat_id,
-                `🎉 ${displayName}, your horse *${horseName}* won!\n` +
+                `ð ${displayName}, your horse *${horseName}* won!\n` +
                 `Payout: ${payoutSOL.toFixed(6)} SOL\n\n` +
-                `💸 Processing payout...`,
+                `ð¸ Processing payout...`,
                 { parse_mode: 'Markdown' }
             );
 
@@ -1013,7 +1018,7 @@ async function handleRaceGame(bet) {
         } catch (e) {
             console.error(`Payout error for bet ${betId}:`, e);
             await bot.sendMessage(chat_id,
-                `⚠️ Payout failed due to technical error\n` +
+                `â ï¸ Payout failed due to technical error\n` +
                 `Please contact support with Bet ID: ${betId}`,
                 { parse_mode: 'Markdown' }
             );
@@ -1021,7 +1026,7 @@ async function handleRaceGame(bet) {
         }
     } else {
         await bot.sendMessage(chat_id,
-            `❌ ${displayName}, your horse *${horseName}* lost!\n` +
+            `â ${displayName}, your horse *${horseName}* lost!\n` +
             `Winner: ${winningHorse.emoji} *${winningHorse.name}*`,
             { parse_mode: 'Markdown' }
         );
@@ -1052,7 +1057,7 @@ async function handleMessage(msg) {
         if (confirmCooldown.has(msg.from.id)) {
             const lastTime = confirmCooldown.get(msg.from.id);
             if (Date.now() - lastTime < cooldownInterval) {
-                await bot.sendMessage(msg.chat.id, "⚠️ Please wait a few seconds...");
+                await bot.sendMessage(msg.chat.id, "â ï¸ Please wait a few seconds...");
                 return;
             }
         }
@@ -1085,7 +1090,7 @@ async function handleMessage(msg) {
         
         if (msg?.chat?.id) {
             await bot.sendMessage(msg.chat.id, 
-                "⚠️ An error occurred. Please try again later.");
+                "â ï¸ An error occurred. Please try again later.");
         }
     }
 }
@@ -1093,7 +1098,7 @@ async function handleMessage(msg) {
 async function handleStartCommand(msg) {
     try {
         await bot.sendAnimation(msg.chat.id, 'https://i.ibb.co/9vDo58q/banner.gif', {
-            caption: `🎰 *Solana Gambles*\n\n` +
+            caption: `ð° *Solana Gambles*\n\n` +
                      `Use /coinflip or /race to start\n` +
                      `/wallet - View linked wallet\n` +
                      `/help - Show help`,
@@ -1108,7 +1113,7 @@ async function handleStartCommand(msg) {
 async function handleCoinflipCommand(msg) {
     const config = GAME_CONFIG.coinflip;
     await bot.sendMessage(msg.chat.id,
-        `🪙 *Coinflip Game*\n\n` +
+        `ðª *Coinflip Game*\n\n` +
         `\`/bet amount heads\` - Bet on heads\n` +
         `\`/bet amount tails\` - Bet on tails\n\n` +
         `Min: ${config.minBet} SOL | Max: ${config.maxBet} SOL\n` +
@@ -1123,12 +1128,12 @@ async function handleWalletCommand(msg) {
     
     if (walletAddress) {
         await bot.sendMessage(msg.chat.id,
-            `💰 Your linked wallet:\n\`${walletAddress}\``,
+            `ð° Your linked wallet:\n\`${walletAddress}\``,
             { parse_mode: 'Markdown' }
         );
     } else {
         await bot.sendMessage(msg.chat.id,
-            `⚠️ No wallet linked yet.\n` +
+            `â ï¸ No wallet linked yet.\n` +
             `Place a bet to automatically link your wallet.`
         );
     }
@@ -1144,7 +1149,7 @@ async function handleBetCommand(msg) {
     const betAmount = parseFloat(match[1]);
     if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
         await bot.sendMessage(chatId,
-            `⚠️ Bet must be between ${config.minBet}-${config.maxBet} SOL`
+            `â ï¸ Bet must be between ${config.minBet}-${config.maxBet} SOL`
         );
         return;
     }
@@ -1167,8 +1172,8 @@ async function handleBetCommand(msg) {
 
     // Send payment instructions
     await bot.sendMessage(chatId,
-        `✅ Coinflip bet registered!\n\n` +
-        `💸 Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
+        `â Coinflip bet registered!\n\n` +
+        `ð¸ Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
         `\`${process.env.MAIN_WALLET_ADDRESS}\`\n\n` +
         `*MEMO:* \`${memoId}\`\n\n` +
         `Expires in ${config.expiryMinutes} minutes.`,
@@ -1178,20 +1183,20 @@ async function handleBetCommand(msg) {
 
 async function handleRaceCommand(msg) {
     const horses = [
-        { name: 'Yellow', emoji: '🟡', odds: 1.1 },
-        { name: 'Orange', emoji: '🟠', odds: 2.0 },
-        { name: 'Blue', emoji: '🔵', odds: 3.0 },
-        { name: 'Cyan', emoji: '🔷', odds: 4.0 },
-        { name: 'White', emoji: '⚪', odds: 5.0 },
-        { name: 'Red', emoji: '🔴', odds: 6.0 },
-        { name: 'Black', emoji: '⚫', odds: 7.0 },
-        { name: 'Pink', emoji: '🌸', odds: 8.0 },
-        { name: 'Purple', emoji: '🟣', odds: 9.0 },
-        { name: 'Green', emoji: '🟢', odds: 10.0 },
-        { name: 'Silver', emoji: '💎', odds: 15.0 }
+        { name: 'Yellow', emoji: 'ð¡', odds: 1.1 },
+        { name: 'Orange', emoji: 'ð ', odds: 2.0 },
+        { name: 'Blue', emoji: 'ðµ', odds: 3.0 },
+        { name: 'Cyan', emoji: 'ð·', odds: 4.0 },
+        { name: 'White', emoji: 'âª', odds: 5.0 },
+        { name: 'Red', emoji: 'ð´', odds: 6.0 },
+        { name: 'Black', emoji: 'â«', odds: 7.0 },
+        { name: 'Pink', emoji: 'ð¸', odds: 8.0 },
+        { name: 'Purple', emoji: 'ð£', odds: 9.0 },
+        { name: 'Green', emoji: 'ð¢', odds: 10.0 },
+        { name: 'Silver', emoji: 'ð', odds: 15.0 }
     ];
 
-    let raceMessage = `🏇 *Race Game* 🏇\n\n`;
+    let raceMessage = `ð *Race Game* ð\n\n`;
     horses.forEach(horse => {
         raceMessage += `${horse.emoji} *${horse.name}* (${horse.odds.toFixed(1)}x)\n`;
     });
@@ -1214,7 +1219,7 @@ async function handleBetRaceCommand(msg) {
     const betAmount = parseFloat(match[1]);
     if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
         await bot.sendMessage(chatId,
-            `⚠️ Bet must be ${config.minBet}-${config.maxBet} SOL`
+            `â ï¸ Bet must be ${config.minBet}-${config.maxBet} SOL`
         );
         return;
     }
@@ -1222,21 +1227,21 @@ async function handleBetRaceCommand(msg) {
     // Validate horse selection
     const chosenHorse = match[2].toLowerCase();
     const horse = [
-        { name: 'Yellow', emoji: '🟡', odds: 1.1 },
-        { name: 'Orange', emoji: '🟠', odds: 2.0 },
-        { name: 'Blue', emoji: '🔵', odds: 3.0 },
-        { name: 'Cyan', emoji: '🔷', odds: 4.0 },
-        { name: 'White', emoji: '⚪', odds: 5.0 },
-        { name: 'Red', emoji: '🔴', odds: 6.0 },
-        { name: 'Black', emoji: '⚫', odds: 7.0 },
-        { name: 'Pink', emoji: '🌸', odds: 8.0 },
-        { name: 'Purple', emoji: '🟣', odds: 9.0 },
-        { name: 'Green', emoji: '🟢', odds: 10.0 },
-        { name: 'Silver', emoji: '💎', odds: 15.0 }
+        { name: 'Yellow', emoji: 'ð¡', odds: 1.1 },
+        { name: 'Orange', emoji: 'ð ', odds: 2.0 },
+        { name: 'Blue', emoji: 'ðµ', odds: 3.0 },
+        { name: 'Cyan', emoji: 'ð·', odds: 4.0 },
+        { name: 'White', emoji: 'âª', odds: 5.0 },
+        { name: 'Red', emoji: 'ð´', odds: 6.0 },
+        { name: 'Black', emoji: 'â«', odds: 7.0 },
+        { name: 'Pink', emoji: 'ð¸', odds: 8.0 },
+        { name: 'Purple', emoji: 'ð£', odds: 9.0 },
+        { name: 'Green', emoji: 'ð¢', odds: 10.0 },
+        { name: 'Silver', emoji: 'ð', odds: 15.0 }
     ].find(h => h.name.toLowerCase() === chosenHorse);
 
     if (!horse) {
-        await bot.sendMessage(chatId, "⚠️ Invalid horse name");
+        await bot.sendMessage(chatId, "â ï¸ Invalid horse name");
         return;
     }
 
@@ -1257,8 +1262,8 @@ async function handleBetRaceCommand(msg) {
 
     // Send payment instructions
     await bot.sendMessage(chatId,
-        `✅ Bet on ${horse.emoji} *${horse.name}* registered!\n\n` +
-        `💸 Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
+        `â Bet on ${horse.emoji} *${horse.name}* registered!\n\n` +
+        `ð¸ Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
         `\`${process.env.RACE_WALLET_ADDRESS}\`\n\n` +
         `*MEMO:* \`${memoId}\`\n\n` +
         `Expires in ${config.expiryMinutes} minutes.`,
@@ -1279,7 +1284,7 @@ async function startServer() {
             while (attempts < 3) {
                 try {
                     await bot.setWebHook(webhookUrl);
-                    console.log(`✅ Webhook set to: ${webhookUrl}`);
+                    console.log(`â Webhook set to: ${webhookUrl}`);
                     break;
                 } catch (webhookError) {
                     attempts++;
@@ -1292,7 +1297,7 @@ async function startServer() {
 
         // Start server
         const server = app.listen(PORT, "0.0.0.0", () => {
-            console.log(`✅ Server running on port ${PORT}`);
+            console.log(`â Server running on port ${PORT}`);
             
             // Start payment monitor
             monitorInterval = setInterval(() => {
@@ -1310,7 +1315,7 @@ async function startServer() {
             // Start polling if not in production
             if (!process.env.RAILWAY_ENVIRONMENT) {
                 bot.startPolling().then(() => {
-                    console.log("🔵 Bot polling started");
+                    console.log("ðµ Bot polling started");
                 }).catch(console.error);
             }
         });
@@ -1324,7 +1329,7 @@ async function startServer() {
         });
 
     } catch (error) {
-        console.error("💥 Failed to start:", error);
+        console.error("ð¥ Failed to start:", error);
         process.exit(1);
     }
 }
@@ -1336,18 +1341,18 @@ const shutdown = (signal) => {
     // 1. Stop monitoring first
     if (monitorInterval) {
         clearInterval(monitorInterval);
-        console.log("🛑 Stopped payment monitor");
+        console.log("ð Stopped payment monitor");
     }
     
     // 2. Close Telegram bot
     try {
         if (bot.isPolling()) {
             bot.stopPolling();
-            console.log("🛑 Stopped bot polling");
+            console.log("ð Stopped bot polling");
         }
         if (process.env.RAILWAY_ENVIRONMENT) {
             bot.deleteWebHook();
-            console.log("🛑 Removed webhook");
+            console.log("ð Removed webhook");
         }
     } catch (e) {
         console.error("Error stopping bot:", e);
@@ -1357,20 +1362,20 @@ const shutdown = (signal) => {
     messageQueue.pause();
     paymentProcessor.highPriorityQueue.pause();
     paymentProcessor.normalQueue.pause();
-    console.log("🛑 Paused all processing queues");
+    console.log("ð Paused all processing queues");
 
     // 4. Close database pool with timeout
     const dbTimeout = setTimeout(() => {
-        console.warn("⚠️ Forcing database pool closure");
+        console.warn("â ï¸ Forcing database pool closure");
         process.exit(1);
     }, 5000);
     
     pool.end().then(() => {
         clearTimeout(dbTimeout);
-        console.log("✅ Database pool closed");
+        console.log("â Database pool closed");
         process.exit(0);
     }).catch(err => {
-        console.error("❌ Pool close error:", err);
+        console.error("â Pool close error:", err);
         process.exit(1);
     });
 };
@@ -1391,9 +1396,9 @@ process.on('unhandledRejection', (reason) => {
 
 // Start the server
 startServer().then(() => {
-    console.log("🚀 Bot initialization complete");
+    console.log("ð Bot initialization complete");
 }).catch(err => {
-    console.error("🔥 Failed to initialize:", err);
+    console.error("ð¥ Failed to initialize:", err);
 });
 
 // --- Helper Functions ---
