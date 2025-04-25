@@ -68,7 +68,7 @@ const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
     commitment: 'confirmed',  // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
-        'solana-client': `SolanaGamblesBot/2.0 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info
+        'solana-client': `SolanaGamblesBot/2.1 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client version bump
     },
     rateLimitCooloff: 10000,   // Pause duration after hitting rate limits (ms)
     disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
@@ -217,7 +217,7 @@ app.get('/', (req, res) => {
     res.status(200).json({
         status: 'ok',
         timestamp: new Date().toISOString(),
-        version: '2.0.2', // Bot version (incremented for logging change)
+        version: '2.1.0', // Bot version (incremented for memo fix)
         queueStats: { // Report queue status
             pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
             active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
@@ -309,75 +309,56 @@ function generateMemoId(prefix = 'BET') {
 function validateOriginalMemoFormat(memo) {
     if (!memo || typeof memo !== 'string') return false;
     const parts = memo.split('-');
+    // Allow prefix only (for potential future use?) or prefix-hex12
+    // Stricter: require ID part for game memos
+    // return (parts.length === 1 && ['BET','CF','RA'].includes(parts[0])) ||
+    //        (parts.length === 2 && ['BET', 'CF', 'RA'].includes(parts[0]) && /^[A-F0-9]{12}$/.test(parts[1]));
     return parts.length === 2 &&
            ['BET', 'CF', 'RA'].includes(parts[0]) &&
            /^[A-F0-9]{12}$/.test(parts[1]); // Original: Exactly 12 hex chars
 }
 
-// --- NEW: DeepSeek's normalizeMemo function ---
-// Attempts to normalize potentially non-standard memo formats
-// WARNING: This logic is speculative and might incorrectly alter valid memos.
-// It also uses a less strict hex validation. Use with caution.
+// --- REVISED: normalizeMemo function (simplified, less risky) ---
+// Attempts basic cleaning and validation. Avoids risky transformations.
 function normalizeMemo(rawMemo) {
-    if (!rawMemo || typeof rawMemo !== 'string') return null;
-
-    // 1. Remove common prefixes/suffixes wallets might add & trim whitespace
-    let memo = rawMemo.trim()
-        .replace(/^memo:/i, '')
-        .replace(/^text:/i, '')
-        .trim();
-
-    // 2. Handle specific JSON/array formats (like Phantom's [1,2,3]) - Highly speculative
-    try {
-        // Only attempt parse if it looks like JSON array/object
-        if (memo.startsWith('[') || memo.startsWith('{')) {
-            const parsed = JSON.parse(memo);
-            if (Array.isArray(parsed)) {
-                // If it's an array, join with hyphens. This likely breaks expected format.
-                 console.warn(`Normalized potentially JSON array memo: ${rawMemo} -> ${parsed.join('-')}`);
-                memo = parsed.join('-');
-            }
-            // Ignore parsed objects or other JSON types
-        }
-    } catch {
-        // Ignore parsing errors, proceed with memo as string
+    if (!rawMemo || typeof rawMemo !== 'string') {
+        // console.log('[NormalizeMemo] Input is not a non-empty string:', rawMemo);
+        return null;
     }
 
-    // 3. Standardize separators (allow space, comma, underscore as separator) - Risky
-    // This might corrupt valid hex strings if they contain these characters unexpectedly.
-    memo = memo.replace(/[\s,_]+/g, '-');
+    // 1. Trim whitespace
+    let memo = rawMemo.trim();
 
-    // 4. Final validation (Less strict than original)
+    // 2. Remove common prefixes ONLY if they are clearly separated (e.g., by space or colon)
+    // This is safer than blind replacement.
+    memo = memo.replace(/^(memo|text):\s*/i, ''); // Remove "memo: " or "text: "
+
+    // 3. Check if it NOW matches the strict format directly
+    if (validateOriginalMemoFormat(memo)) {
+        // console.log(`[NormalizeMemo] Raw memo "${rawMemo}" normalized to strictly valid "${memo}"`);
+        return memo;
+    }
+
+    // 4. If not strictly valid, attempt basic split/check (less strict)
+    // Use hyphen as the primary separator
     const parts = memo.split('-');
-    if (parts.length >= 1) { // Allow just prefix or prefix-id
-        const prefix = parts[0].toUpperCase(); // Standardize prefix case
-        const idPart = parts.slice(1).join(''); // Combine remaining parts (allows multiple hyphens)
+    if (parts.length === 2) {
+        const prefix = parts[0].toUpperCase();
+        const idPart = parts[1].toUpperCase(); // Standardize case
 
-        // Check if prefix is valid and if the ID part (if exists) contains only hex chars
-        if (['BET','CF','RA'].includes(prefix)) {
-            // Check if ID part exists and is valid hex OR if only prefix exists
-            if ((idPart.length > 0 && /^[A-F0-9]+$/.test(idPart)) || idPart.length === 0) {
-                 // Return standardized format (e.g., CF-ABCDEF) or just prefix if no ID part
-                 const normalized = idPart.length > 0 ? `${prefix}-${idPart}` : prefix;
-
-                 // *** ADDED CHECK: Compare against original expected format before returning ***
-                 // We still want the EXACT format CF-HEX12 preferably.
-                 // If the normalized one happens to match the original strict format, return it.
-                 // Otherwise, maybe log a warning and return null, or return the less strict format?
-                 // Let's return the normalized one for now as requested, but log if it's weird.
-                 if (!validateOriginalMemoFormat(normalized)) {
-                     console.warn(`Normalized memo "${normalized}" from raw "${rawMemo}" does not match strict format (PREFIX-HEX12). Accepting potentially invalid format.`);
-                 }
-                 return normalized;
-            }
+        // Check prefix and if ID part *looks* like hex (but allow length variations)
+        if (['BET', 'CF', 'RA'].includes(prefix) && /^[A-F0-9]+$/.test(idPart)) {
+            const normalized = `${prefix}-${idPart}`;
+            // Only return if it didn't match strictly before but looks okay now
+             console.warn(`[NormalizeMemo] Memo "${normalized}" from raw "${rawMemo}" does not match strict format (PREFIX-HEX12) but has valid prefix and hex ID. Accepting leniently.`);
+             return normalized;
         }
     }
 
-    // Original raw memo didn't normalize to a valid format
-    // console.log(`Memo "${rawMemo}" could not be normalized to a valid format.`);
-    return null;
+    // console.log(`[NormalizeMemo] Memo "${rawMemo}" could not be normalized to a valid/acceptable format.`);
+    return null; // Could not normalize to a usable format
 }
-// --- END NEW ---
+// --- END REVISED ---
 
 
 // --- Database Operations ---
@@ -597,45 +578,94 @@ async function recordPayout(betId, status, signature) {
 
 // --- Solana Transaction Analysis ---
 
-// --- UPDATED: findMemoInTx using normalizeMemo ---
-// Finds and potentially normalizes SPL Memo instruction data in a transaction
+// --- REVISED: findMemoInTx with detailed logging & robust parsing ---
 function findMemoInTx(tx) {
+    const logPrefix = `[FindMemo:${tx?.transaction?.signatures[0]?.substring(0, 8) || 'SIG N/A'}]`; // Use TX sig prefix
+
     if (!tx?.transaction?.message?.instructions) {
+        console.log(`${logPrefix} No instructions found in transaction message.`);
         return null;
     }
 
-    try {
-        const MEMO_PROGRAM_ID = 'Memo1UhkJRfHyvLMcVuc6beZNRYqUP2VZwW'; // v1
-        const MEMO_PROGRAM_ID_V2 = 'MemoSq4gqABAXKb96qnH8TysNcVtrp5GktfD'; // v2
+    const MEMO_PROGRAM_ID_V1 = 'Memo1UhkJRfHyvLMcVuc6beZNRYqUP2VZwW'; // v1
+    const MEMO_PROGRAM_ID_V2 = 'MemoSq4gqABAXKb96qnH8TysNcVtrp5GktfD'; // v2
+    const accountKeys = tx.transaction.message.accountKeys; // Array of account keys
 
-        for (const instruction of tx.transaction.message.instructions) {
-            let programId = '';
+    // Function to safely resolve program ID using index
+    const getProgramId = (index) => {
+        if (index === undefined || !accountKeys || index >= accountKeys.length) {
+            return null;
+        }
+        const keyInfo = accountKeys[index];
+        // Handle both PublicKey objects and string representations
+        if (keyInfo?.pubkey) return keyInfo.pubkey.toBase58();
+        if (typeof keyInfo === 'string') return new PublicKey(keyInfo).toBase58(); // Convert string to PublicKey
+        // Handle legacy ParsedAccount format if necessary (might contain PublicKey directly)
+        if (keyInfo instanceof PublicKey) return keyInfo.toBase58();
+        return null; // Cannot resolve
+    };
 
-            if (instruction.programIdIndex !== undefined && tx.transaction.message.accountKeys) {
-                const keyInfo = tx.transaction.message.accountKeys[instruction.programIdIndex];
-                programId = keyInfo?.pubkey ? keyInfo.pubkey.toBase58() :
-                            (typeof keyInfo === 'string' ? new PublicKey(keyInfo).toBase58() : '');
-            } else if (instruction.programId) {
-                programId = instruction.programId.toBase58 ?
-                            instruction.programId.toBase58() :
-                            instruction.programId.toString();
+    console.log(`${logPrefix} Searching ${tx.transaction.message.instructions.length} top-level instructions...`);
+
+    for (let i = 0; i < tx.transaction.message.instructions.length; i++) {
+        const instruction = tx.transaction.message.instructions[i];
+        let programId = null;
+
+        // Attempt to resolve programId - handles different TX versions / formats
+        if (instruction.programIdIndex !== undefined) {
+            programId = getProgramId(instruction.programIdIndex);
+        } else if (instruction.programId) {
+            // Handle cases where programId might be a PublicKey object or string
+             programId = instruction.programId.toBase58 ?
+                         instruction.programId.toBase58() :
+                         String(instruction.programId); // Fallback to string if needed
+        }
+
+        console.log(`${logPrefix} Inst #${i}: Prog ID Index=${instruction.programIdIndex}, Resolved Prog ID="${programId}", Data=${instruction.data ? '"'+instruction.data+'"' : 'N/A'}`);
+
+        // Check if it's a known Memo program
+        if (programId === MEMO_PROGRAM_ID_V1 || programId === MEMO_PROGRAM_ID_V2) {
+            console.log(`${logPrefix} Found potential Memo instruction (#${i}) with Program ID ${programId}.`);
+
+            if (!instruction.data || typeof instruction.data !== 'string') {
+                 console.warn(`${logPrefix} Memo instruction has missing or invalid data field.`);
+                 continue; // Skip this instruction
             }
 
-            if ((programId === MEMO_PROGRAM_ID || programId === MEMO_PROGRAM_ID_V2) && instruction.data) {
-                const rawMemo = bs58.decode(instruction.data).toString('utf-8');
-                // Attempt to normalize the raw memo
-                const normalizedMemo = normalizeMemo(rawMemo);
-                // Return the normalized memo (which could be null if normalization failed)
-                // console.log(`Found raw memo "${rawMemo}", normalized to "${normalizedMemo}"`); // Debugging
-                return normalizedMemo;
+            let decodedMemo = null;
+            try {
+                // Decode base58 data to UTF-8 string
+                const buffer = bs58.decode(instruction.data);
+                decodedMemo = buffer.toString('utf-8');
+                console.log(`${logPrefix} Decoded bs58 data to UTF-8: "${decodedMemo}"`);
+            } catch (decodeError) {
+                console.error(`${logPrefix} Error decoding bs58 data for Memo instruction:`, decodeError.message);
+                console.error(`${logPrefix} Raw base58 data was: ${instruction.data}`);
+                continue; // Skip if decoding fails
+            }
+
+            // Attempt to normalize the decoded memo
+            console.log(`${logPrefix} Normalizing decoded memo: "${decodedMemo}"`);
+            const normalizedMemo = normalizeMemo(decodedMemo); // Use revised normalizeMemo
+            console.log(`${logPrefix} Normalization result: "${normalizedMemo}"`);
+
+            if (normalizedMemo) {
+                 // We found a valid memo, return it
+                 console.log(`${logPrefix} Successfully found and normalized memo: "${normalizedMemo}"`);
+                 return normalizedMemo;
+            } else {
+                 console.warn(`${logPrefix} Decoded memo "${decodedMemo}" could not be normalized to a valid format.`);
+                 // Don't return null yet, maybe another instruction is the correct memo
             }
         }
-    } catch (e) {
-        console.error("Error parsing memo instruction:", e.message);
-    }
-    return null; // No memo instruction found or parsing failed
+    } // End loop through instructions
+
+    // TODO (Optional Enhancement): Add similar loop here for tx.meta.innerInstructions if needed later
+
+    console.log(`${logPrefix} No valid memo instruction found after checking all instructions.`);
+    return null; // No valid memo found in any instruction
 }
-// --- END UPDATE ---
+// --- END REVISED ---
 
 // Analyzes a transaction to find SOL transfers to the target bot wallet
 function analyzeTransactionAmounts(tx, walletType) {
@@ -657,27 +687,35 @@ function analyzeTransactionAmounts(tx, walletType) {
 
     if (tx?.meta && tx?.transaction?.message?.instructions) {
         // Combine top-level and inner instructions for comprehensive analysis
-        const instructions = [
-            ...(tx.transaction.message.instructions || []),
-            ...(tx.meta.innerInstructions || []).flatMap(i => i.instructions)
+        // Flatten inner instructions: [{ index: parentIndex, instructions: [...] }, ...] -> [...]
+        const allInstructions = [
+            ...(tx.transaction.message.instructions || []).map((inst, index) => ({ ...inst, parentIndex: index, isInner: false })), // Add parent index
+            ...(tx.meta.innerInstructions || []).flatMap(inner =>
+                 inner.instructions.map(inst => ({ ...inst, parentIndex: inner.index, isInner: true })) // Add parent index
+            )
         ];
 
         const SYSTEM_PROGRAM_ID = SystemProgram.programId.toBase58();
+        const accountKeys = tx.transaction.message.accountKeys; // Cache for faster access
 
-        for (const inst of instructions) {
-             let programId = '';
-             // Similar programId resolution as in findMemoInTx
-            if (inst.programIdIndex !== undefined && tx.transaction.message.accountKeys) {
-                const keyInfo = tx.transaction.message.accountKeys[inst.programIdIndex];
-                programId = keyInfo?.pubkey ? keyInfo.pubkey.toBase58() :
-                            (typeof keyInfo === 'string' ? new PublicKey(keyInfo).toBase58() : '');
-            } else if (inst.programId) {
-                programId = inst.programId.toBase58 ?
-                            inst.programId.toBase58() :
-                            inst.programId.toString();
-            }
+        // Helper to get program ID (similar to findMemoInTx)
+        const getProgramId = (instruction) => {
+             if (instruction.programIdIndex !== undefined && accountKeys) {
+                 const keyInfo = accountKeys[instruction.programIdIndex];
+                 if (keyInfo?.pubkey) return keyInfo.pubkey.toBase58();
+                 if (typeof keyInfo === 'string') return new PublicKey(keyInfo).toBase58();
+                 if (keyInfo instanceof PublicKey) return keyInfo.toBase58();
+             } else if (instruction.programId) {
+                 return instruction.programId.toBase58 ? instruction.programId.toBase58() : String(instruction.programId);
+             }
+             return null;
+        };
 
-            // Check for SystemProgram SOL transfers
+        for (const inst of allInstructions) {
+             const programId = getProgramId(inst);
+
+            // Check for SystemProgram SOL transfers (works for parsed instructions)
+            // Need to ensure 'parsed' field exists
             if (programId === SYSTEM_PROGRAM_ID && inst.parsed?.type === 'transfer') {
                 const transferInfo = inst.parsed.info;
                 // Check if the destination is the bot's target wallet
@@ -685,9 +723,24 @@ function analyzeTransactionAmounts(tx, walletType) {
                     // Add the amount (handle potential variations in field names)
                     transferAmount += BigInt(transferInfo.lamports || transferInfo.amount || 0);
                     // Capture the source address (likely the user's wallet)
-                    if (!payerAddress) payerAddress = transferInfo.source;
+                    // Prioritize source from the transfer directly
+                    if (!payerAddress && transferInfo.source) {
+                         payerAddress = transferInfo.source;
+                    }
                 }
             }
+             // TODO: Add handling for raw instructions if 'parsed' is not available?
+             // This would require decoding instruction data based on SystemProgram layout.
+             // For now, rely on getParsedTransaction providing the parsed transfer info.
+        }
+
+        // If payerAddress wasn't found via transfer source, fall back to fee payer heuristic
+        if (!payerAddress) {
+             const feePayer = getPayerFromTransaction(tx);
+             if (feePayer) {
+                 payerAddress = feePayer.toBase58();
+                 // console.log(`[AnalyzeTx] Using fee payer ${payerAddress} as payer address.`);
+             }
         }
     }
 
@@ -703,39 +756,27 @@ function getPayerFromTransaction(tx) {
      // Fee payer is always the first account listed
      if (message.accountKeys.length > 0) {
          const feePayerKeyInfo = message.accountKeys[0];
-         const feePayerAddress = feePayerKeyInfo?.pubkey ? feePayerKeyInfo.pubkey.toBase58() :
-                                  (typeof feePayerKeyInfo === 'string' ? new PublicKey(feePayerKeyInfo).toBase58() : null);
-         // console.log(`Identified fee payer as ${feePayerAddress}`); // Optional log
-         return feePayerAddress ? new PublicKey(feePayerAddress) : null; // Return PublicKey or null
-     }
+         // Handle different possible structures for accountKeys elements
+         let feePayerAddressStr = null;
+         if (feePayerKeyInfo?.pubkey) {
+             feePayerAddressStr = feePayerKeyInfo.pubkey.toBase58 ? feePayerKeyInfo.pubkey.toBase58() : String(feePayerKeyInfo.pubkey);
+         } else if (typeof feePayerKeyInfo === 'string') {
+             feePayerAddressStr = feePayerKeyInfo;
+         } else if (feePayerKeyInfo instanceof PublicKey) {
+             feePayerAddressStr = feePayerKeyInfo.toBase58();
+         }
 
-     // Fallback: Check signers and balance changes (less reliable)
-     const preBalances = tx.meta.preBalances;
-     const postBalances = tx.meta.postBalances;
-     if (!preBalances || !postBalances) return null;
-
-     for (let i = 0; i < message.accountKeys.length; i++) {
-         if (i >= preBalances.length || i >= postBalances.length) continue;
-
-         // Check if the account is a signer in the transaction message
-         if (message.accountKeys[i]?.signer || message.header?.numRequiredSignatures > 0 && i < message.header.numRequiredSignatures) {
-              let key;
-               if (message.accountKeys[i].pubkey) {
-                   key = message.accountKeys[i].pubkey;
-               } else if (typeof message.accountKeys[i] === 'string') {
-                   key = new PublicKey(message.accountKeys[i]);
-               } else {
-                   continue;
-               }
-
-               // Check if balance decreased (paid fees or sent funds)
-               const balanceDiff = BigInt(preBalances[i] || 0) - BigInt(postBalances[i] || 0);
-               if (balanceDiff > 0) {
-                   // console.log(`Identified potential payer by balance change: ${key.toBase58()}`); // Optional log
-                   return key; // Return the PublicKey object
-               }
+         // console.log(`Identified fee payer as ${feePayerAddressStr}`); // Optional log
+         try {
+             return feePayerAddressStr ? new PublicKey(feePayerAddressStr) : null; // Return PublicKey or null
+         } catch (e) {
+             console.error(`[GetPayer] Error creating PublicKey from fee payer address: ${feePayerAddressStr}`, e.message);
+             return null;
          }
      }
+    // Note: Fallback logic using balance changes was removed as it's unreliable and
+    // the primary use case (linking wallet) is better served by the source of the transfer
+    // or the fee payer if source isn't found.
 
      // console.warn("Could not definitively identify payer.");
      return null; // Could not determine payer
@@ -814,7 +855,13 @@ class PaymentProcessor {
 
         } catch (error) {
             performanceMonitor.logRequest(false); // Log failed processing attempt
-            console.error(`Error processing job type ${job.type} for signature ${job.signature || 'N/A'} (Bet ID: ${job.betId || 'N/A'}):`, error.message);
+            const jobIdentifier = job.signature || `BetID ${job.betId}` || 'Unknown Job';
+            console.error(`Error processing job type ${job.type} for ${jobIdentifier}:`, error.message);
+            // Log stack trace for unexpected errors
+            if (!isRetryableError(error)) {
+                 console.error(error.stack);
+            }
+
 
             // Retry logic for retryable errors (only for initial payment check for now)
             if (job.type === 'monitor_payment' && (job.retries || 0) < 3 && isRetryableError(error)) {
@@ -823,11 +870,14 @@ class PaymentProcessor {
                 await new Promise(resolve => setTimeout(resolve, 1000 * job.retries)); // Exponential backoff
                 // Release active lock before requeueing for retry
                 if (job.signature) this.activeProcesses.delete(job.signature);
-                await this.addPaymentJob(job); // Re-add the job for retry
+                // DO NOT await here, let the requeue happen in the background
+                 this.addPaymentJob(job).catch(requeueError => { // Catch errors during requeueing itself
+                    console.error(`Failed to requeue job for signature ${job.signature} after error:`, requeueError);
+                 });
                 return; // Prevent falling through to finally block immediately after requeueing
             } else {
                 // Log final failure or non-retryable error
-                 console.error(`Job failed permanently or exceeded retries: ${job.signature || job.betId}`, error);
+                 console.error(`Job failed permanently or exceeded retries: ${jobIdentifier}`, error);
                  // Potentially update bet status to an error state if applicable
                  if(job.betId && job.type !== 'monitor_payment') {
                      // Check if status is still one that makes sense to mark as error
@@ -835,8 +885,9 @@ class PaymentProcessor {
                          const currentStatusRes = await pool.query('SELECT status FROM bets WHERE id = $1', [job.betId]);
                          const currentStatus = currentStatusRes.rows[0]?.status;
                          // Only mark as error if it's in a state where this makes sense (not already completed/errored differently)
+                         const errorStatus = `error_${job.type}_failed`.substring(0, 50); // Ensure status isn't too long
                          if (currentStatus && !currentStatus.startsWith('completed_') && !currentStatus.startsWith('error_')) {
-                            await updateBetStatus(job.betId, `error_${job.type}_failed`);
+                            await updateBetStatus(job.betId, errorStatus);
                          }
                      } catch (dbErr) {
                         console.error(`Failed to check status before marking error for Bet ID ${job.betId}:`, dbErr.message);
@@ -892,19 +943,16 @@ class PaymentProcessor {
                 console.error(`${logPrefix} Error fetching transaction details:`, fetchError.message);
                 if (isRetryableError(fetchError)) throw fetchError; // Rethrow retryable fetch errors
                 // Treat non-retryable fetch error as TX not found/invalid for this process run
-                tx = null; // Ensure tx is null if non-retryable error
+                 throw new Error(`Non-retryable error fetching TX ${signature}: ${fetchError.message}`); // Throw to prevent processing null tx
             }
 
             // 4. Validate transaction
             if (!tx) {
-                console.warn(`${logPrefix} Transaction not found or failed to fetch.`);
-                // Don't add to processedSignatures here, could be temporary RPC issue unless error was non-retryable
-                // If error was non-retryable, it's already logged above. If retryable, it will be retried by processJob.
-                // If simply not found, maybe it will appear later? Throw error to allow potential retry?
-                 throw new Error(`Transaction ${signature} null or fetch failed`); // Let processJob handle retry
-                // return { processed: false, reason: 'tx_fetch_failed' };
+                // This case should ideally be caught by the error handling above now
+                console.warn(`${logPrefix} Transaction object is null after fetch attempt.`);
+                throw new Error(`Transaction ${signature} null after fetch attempt`); // Let processJob handle retry if applicable
             }
-            console.log(`${logPrefix} Transaction details fetched.`);
+            console.log(`${logPrefix} Transaction details fetched successfully.`);
 
             if (tx.meta?.err) {
                 console.log(`${logPrefix} Skipped: Transaction failed on-chain: ${JSON.stringify(tx.meta.err)}`);
@@ -913,11 +961,11 @@ class PaymentProcessor {
             }
             console.log(`${logPrefix} Passed on-chain success check.`);
 
-            // 5. Find and validate the memo using the updated findMemoInTx
-            const memo = findMemoInTx(tx); // Uses normalizeMemo internally
-            console.log(`${logPrefix} Memo found/normalized: "${memo}"`);
+            // 5. Find and validate the memo using the REVISED findMemoInTx
+            const memo = findMemoInTx(tx); // Uses revised findMemoInTx with internal logging
+            console.log(`${logPrefix} Result from findMemoInTx: "${memo}"`); // Log result explicitly here
             if (!memo) {
-                console.log(`${logPrefix} Skipped: No valid game memo found after normalization.`);
+                console.log(`${logPrefix} Skipped: No valid game memo returned by findMemoInTx.`);
                 // Don't add to cache, could be unrelated transaction
                 return { processed: false, reason: 'no_valid_memo' };
             }
@@ -943,9 +991,10 @@ class PaymentProcessor {
             const { transferAmount, payerAddress } = analyzeTransactionAmounts(tx, walletType);
             console.log(`${logPrefix} Amount analysis: Found ${transferAmount} lamports transfer to target wallet from ${payerAddress || 'Unknown'}.`);
             if (transferAmount <= 0n) {
-                console.warn(`${logPrefix} Skipped: No SOL transfer to target wallet found.`);
-                // Don't add to cache, unrelated transaction
-                return { processed: false, reason: 'no_transfer_found' };
+                // This might happen if the transaction had the memo but the transfer was to the wrong address
+                console.warn(`${logPrefix} Skipped: No SOL transfer found TO THE CORRECT target wallet (${walletType} address).`);
+                // Don't add to cache, payment wasn't for us (or wrong wallet type)
+                return { processed: false, reason: 'no_transfer_found_to_target' };
             }
 
             // 8. Validate amount sent vs expected (with tolerance)
@@ -985,6 +1034,11 @@ class PaymentProcessor {
             if (!markResult.success) {
                 console.error(`${logPrefix} Failed DB update: ${markResult.error}`);
                  processedSignaturesThisSession.add(signature); // Add sig here to prevent retries if DB fails persistently
+                // Determine if the DB error is potentially temporary or permanent
+                 if (isRetryableError(new Error(markResult.error || 'DB mark paid failed'))) { // Simulate error object
+                     throw new Error(markResult.error || 'Retryable DB mark paid failed'); // Throw to allow retry
+                 }
+                 // If not retryable (e.g., constraint violation), return failure
                 return { processed: false, reason: 'db_mark_paid_failed' };
             }
             console.log(`${logPrefix} Successfully marked bet ${bet.id} as 'payment_verified'.`);
@@ -993,8 +1047,13 @@ class PaymentProcessor {
             let actualPayer = payerAddress || getPayerFromTransaction(tx)?.toBase58();
              console.log(`${logPrefix} Attempting to link wallet ${actualPayer || 'Unknown'} to user ${bet.user_id}...`);
             if (actualPayer) {
-                await linkUserWallet(bet.user_id, actualPayer);
-                console.log(`${logPrefix} Wallet link attempt finished.`);
+                // Use try-catch for linking as it's non-critical for bet processing
+                try {
+                    await linkUserWallet(bet.user_id, actualPayer);
+                    console.log(`${logPrefix} Wallet link attempt finished.`);
+                } catch (linkErr) {
+                     console.error(`${logPrefix} Non-critical error linking wallet:`, linkErr.message);
+                }
             } else {
                  console.warn(`${logPrefix} Could not identify payer address to link wallet.`);
             }
@@ -1021,8 +1080,7 @@ class PaymentProcessor {
 
         } catch (error) { // Catch any unexpected errors during the process
             console.error(`${logPrefix} UNEXPECTED ERROR during processing:`, error);
-            // Don't update bet status here, let the job processor handle retries/final error status
-            // Re-throw the error so the job processor knows it failed
+            // Re-throw the error so the job processor knows it failed and can handle retries/final status
             throw error;
         }
     }
@@ -1113,31 +1171,36 @@ async function monitorPayments() {
                         continue;
                     }
                     // Queue the job
-                    await paymentProcessor.addPaymentJob({
+                     paymentProcessor.addPaymentJob({ // Don't await here, let them queue in background
                         type: 'monitor_payment',
                         signature: sigInfo.signature,
                         walletType: wallet.type,
                         priority: wallet.priority, // 0 for monitoring jobs
                         retries: 0
+                    }).catch(queueError => {
+                        console.error(`[Monitor] Failed to queue job for signature ${sigInfo.signature}:`, queueError);
                     });
                 }
             } catch (error) {
                 console.error(`[Monitor] Error fetching/processing signatures for wallet ${wallet.address}:`, error.message);
+                 // Log stack trace for unexpected errors during fetch/processing
+                 console.error(error.stack);
                 performanceMonitor.logRequest(false);
                  // Maybe reset lastProcessedSignature for this wallet on error? Or rely on retry?
-                 // For now, let's rely on the next successful run.
+                 // Consider adding exponential backoff for monitoring this specific wallet if errors persist
             }
         } // End loop through wallets
         // --- Original Monitor Logic End ---
 
     } catch (error) {
         console.error("[Monitor] Unexpected error in main monitor loop:", error);
+        console.error(error.stack); // Log stack trace
         performanceMonitor.logRequest(false);
     } finally {
         isMonitorRunning = false; // Release the lock
         const duration = Date.now() - startTime;
-        if (signaturesFound > 0) { // Only log duration if something happened
-             console.log(`[Monitor] Cycle finished in ${duration}ms. Found ${signaturesFound} new signatures.`);
+        if (signaturesFound > 0 || duration > 1000) { // Log if something found or took > 1s
+             // console.log(`[Monitor] Cycle finished in ${duration}ms. Found ${signaturesFound} new signatures.`);
         }
 
         // Adjust monitoring interval based on activity
@@ -1166,10 +1229,12 @@ function adjustMonitorInterval(processedCount) {
              try {
                  monitorPayments().catch(err => {
                      console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
+                      console.error(err.stack); // Log stack trace
                      performanceMonitor.logRequest(false);
                  });
              } catch (syncErr) {
                  console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
+                  console.error(syncErr.stack); // Log stack trace
                  performanceMonitor.logRequest(false);
              }
              // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Callback End ====`);
@@ -1191,9 +1256,19 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
          return { success: false, error: `Missing private key for ${gameType}` };
     }
 
-    const recipientPubKey = (typeof recipientPublicKey === 'string')
-        ? new PublicKey(recipientPublicKey)
-        : recipientPublicKey;
+    let recipientPubKey;
+    try {
+        recipientPubKey = (typeof recipientPublicKey === 'string')
+            ? new PublicKey(recipientPublicKey)
+            : recipientPublicKey;
+         if (!(recipientPubKey instanceof PublicKey)) {
+             throw new Error('Invalid recipient public key type');
+         }
+    } catch (e) {
+         console.error(`❌ Cannot send SOL: Invalid recipient address format "${recipientPublicKey}": ${e.message}`);
+         return { success: false, error: `Invalid recipient address format` };
+    }
+
 
     const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL;
     console.log(`💸 Attempting to send ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()} for ${gameType}`);
@@ -1278,14 +1353,16 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
 
         } catch (error) {
             console.error(`❌ Payout TX failed (Attempt ${attempt}/3):`, error.message);
+             // Log stack trace for send errors
+             console.error(error.stack);
 
             // Check for specific errors that shouldn't be retried
             if (error.message.includes('Invalid param') ||
                 error.message.includes('Insufficient funds') || // Bot might be out of SOL
                 error.message.includes('blockhash not found') ||
                 error.message.includes('custom program error')) { // Catch on-chain program errors early
-                 console.error("❌ Non-retryable error encountered. Aborting payout.");
-                 return { success: false, error: `Non-retryable error: ${error.message}` }; // Exit retry loop
+                 console.error("❌ Non-retryable error encountered during send. Aborting payout.");
+                 return { success: false, error: `Non-retryable send error: ${error.message}` }; // Exit retry loop
             }
 
             // If retryable error and not last attempt, wait before retrying
@@ -1342,6 +1419,7 @@ async function processPaidBet(bet) {
          }
     } catch (error) {
         console.error(`❌ Error during game processing setup for bet ${bet.id}:`, error.message);
+         console.error(error.stack); // Log stack trace
         if (client) {
             try { await client.query('ROLLBACK'); } catch (rbErr) { console.error('Rollback failed:', rbErr); }
         }
@@ -1419,6 +1497,7 @@ async function handleCoinflipGame(bet) {
 
         } catch (e) {
             console.error(`❌ Error queuing payout for coinflip bet ${betId}:`, e);
+             console.error(e.stack); // Log stack trace
             await bot.sendMessage(chat_id,
                 `⚠️ Error occurred while processing your coinflip win for bet ID ${betId}.\n` +
                 `Please contact support.`,
@@ -1547,6 +1626,7 @@ async function handleRaceGame(bet) {
             });
         } catch (e) {
             console.error(`❌ Error queuing payout for race bet ${betId}:`, e);
+             console.error(e.stack); // Log stack trace
              await bot.sendMessage(chat_id,
                  `⚠️ Error occurred while processing your race win for bet ID ${betId}.\n` +
                  `Please contact support.`,
@@ -1617,6 +1697,7 @@ async function handlePayoutJob(job) {
     } catch (error) {
         // Catch unexpected errors during payout processing
         console.error(`❌ Unexpected error processing payout job for bet ${betId}:`, error);
+         console.error(error.stack); // Log stack trace
         // Update status to reflect exception during payout attempt
         await updateBetStatus(betId, 'error_payout_exception');
         // Notify user of technical error
@@ -1667,8 +1748,8 @@ async function getUserDisplayName(chat_id, user_id) {
      } catch (e) {
          // Log error but return default name if fetching fails
          // Avoid logging common "user not found" errors if expected in some contexts
-         if (e.message?.includes('user not found')) {
-            // Optionally handle differently or just return default
+         if (e.message?.includes('user not found') || e.message?.includes('chat not found') || e.message?.includes('member list is inaccessible')) {
+            // Optionally handle differently or just return default - expected in some scenarios
          } else {
             console.warn(`Couldn't get username for user ${user_id} in chat ${chat_id}:`, e.message);
          }
@@ -1681,6 +1762,7 @@ async function getUserDisplayName(chat_id, user_id) {
 // Handles polling errors (e.g., conflicts if multiple instances run)
 bot.on('polling_error', (error) => {
     console.error(`❌ Polling error: ${error.code} - ${error.message}`);
+     console.error(error.stack); // Log stack trace
     // Specific check for conflict error code
     if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
         console.error("❌❌❌ FATAL: Conflict detected! Another bot instance might be running with the same token. Exiting.");
@@ -1692,6 +1774,7 @@ bot.on('polling_error', (error) => {
 // Handles general bot errors
 bot.on('error', (error) => {
     console.error('❌ General Bot Error:', error);
+     console.error(error.stack); // Log stack trace
     performanceMonitor.logRequest(false); // Log as failed request
 });
 
@@ -1752,6 +1835,7 @@ async function handleMessage(msg) {
 
     } catch (error) {
         console.error(`❌ Error processing message from user ${userId} in chat ${chatId}: "${messageText}"`, error);
+         console.error(error.stack); // Log stack trace
         performanceMonitor.logRequest(false); // Log error
 
         // Send generic error message to user
@@ -1798,6 +1882,7 @@ async function handleStartCommand(msg) {
         });
     } catch (error) {
          console.error("Start command error:", error);
+          console.error(error.stack); // Log stack trace
          // Ensure some message is sent even if all else fails
          await bot.sendMessage(msg.chat.id, `Welcome, ${firstName}! Use /help to see available commands.`).catch(e=>console.error("TG Send Error:", e.message));
     }
@@ -1892,6 +1977,13 @@ async function handleBetCommand(msg) {
         return;
     }
 
+    // Ensure target wallet address is configured
+    if (!process.env.MAIN_WALLET_ADDRESS) {
+        console.error("❌ Coinflip bet failed: MAIN_WALLET_ADDRESS is not configured.");
+        await bot.sendMessage(chatId, `⚠️ Betting is temporarily unavailable. Please try again later. (Error: CFG_MW_MISSING)`).catch(e => console.error("TG Send Error:", e.message));
+        return;
+    }
+
     const userChoice = match[2].toLowerCase();
     const memoId = generateMemoId('CF');
     const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
@@ -1944,6 +2036,14 @@ async function handleBetRaceCommand(msg) {
         ).catch(e => console.error("TG Send Error:", e.message));
         return;
     }
+
+    // Ensure target wallet address is configured
+    if (!process.env.RACE_WALLET_ADDRESS) {
+        console.error("❌ Race bet failed: RACE_WALLET_ADDRESS is not configured.");
+        await bot.sendMessage(chatId, `⚠️ Betting is temporarily unavailable. Please try again later. (Error: CFG_RW_MISSING)`).catch(e => console.error("TG Send Error:", e.message));
+        return;
+    }
+
 
     // Validate horse selection
     const chosenHorseNameInput = match[2];
@@ -2065,10 +2165,12 @@ async function startServer() {
                  try {
                       monitorPayments().catch(err => { // Catch async errors from monitorPayments
                           console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
+                           console.error(err.stack); // Log stack trace
                           performanceMonitor.logRequest(false);
                       });
                  } catch (syncErr) { // Catch sync errors immediately within the callback
                       console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
+                       console.error(syncErr.stack); // Log stack trace
                       performanceMonitor.logRequest(false);
                  }
                  // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Callback End ====`); // Optional: Log end
@@ -2083,10 +2185,12 @@ async function startServer() {
                  try {
                       monitorPayments().catch(err => {
                           console.error('[FATAL MONITOR ERROR in initial run catch]:', err);
+                           console.error(err.stack); // Log stack trace
                           performanceMonitor.logRequest(false);
                       });
                  } catch (syncErr) {
                       console.error('[FATAL MONITOR SYNC ERROR in initial run try/catch]:', syncErr);
+                       console.error(syncErr.stack); // Log stack trace
                       performanceMonitor.logRequest(false);
                  }
             }, 5000); // Delay initial run slightly
@@ -2096,10 +2200,13 @@ async function startServer() {
                 console.log("ℹ️ Starting bot polling for local development...");
                 // Delete any existing webhook first to avoid conflicts
                 bot.deleteWebHook({ drop_pending_updates: true })
-                    .then(() => bot.startPolling())
+                    .then(() => bot.startPolling({ // Add polling options
+                         interval: 300 // Fetch updates every 300ms (default)
+                    }))
                     .then(() => console.log("✅ Bot polling started successfully"))
                     .catch(err => {
                          console.error("❌ Error starting polling:", err.message);
+                          console.error(err.stack); // Log stack trace
                          // Handle specific polling errors if needed
                          if (err.message.includes('409 Conflict')) {
                              console.error("❌❌❌ Conflict detected! Another instance might be polling.");
@@ -2112,6 +2219,7 @@ async function startServer() {
         // Handle server errors (e.g., port already in use)
         server.on('error', (err) => {
             console.error('❌ Server error:', err);
+             console.error(err.stack); // Log stack trace
             if (err.code === 'EADDRINUSE') {
                 console.error(`❌❌❌ Port ${PORT} is already in use. Is another instance running? Exiting.`);
                 process.exit(1);
@@ -2122,6 +2230,7 @@ async function startServer() {
     } catch (error) {
         // Catch errors during the overall startup process (DB init, webhook setup)
         console.error("🔥🔥🔥 Failed to start application:", error);
+         console.error(error.stack); // Log stack trace
         process.exit(1); // Exit if critical startup steps fail
     }
 }
@@ -2150,8 +2259,12 @@ const shutdown = async (signal) => {
          }
          // Only stop polling if webhook wasn't set/deleted OR if polling was explicitly started
          if (!webhookDeleted && bot.isPolling()) {
-              await bot.stopPolling({ cancel: true }); // Cancel polling
-              console.log("- Stopped Telegram polling.");
+              try {
+                  await bot.stopPolling({ cancel: true }); // Cancel polling
+                  console.log("- Stopped Telegram polling.");
+              } catch (pollErr) {
+                  console.error("⚠️ Error stopping polling:", pollErr.message);
+              }
          }
          // Close Express server? (Usually handled by Railway/Docker itself)
          // server.close(() => console.log("- Express server closed."));
@@ -2201,6 +2314,7 @@ process.on('SIGTERM', () => shutdown('SIGTERM')); // Termination signal (e.g., f
 // Handle uncaught exceptions (log and attempt graceful shutdown)
 process.on('uncaughtException', (err, origin) => {
     console.error(`🔥🔥🔥 Uncaught Exception at: ${origin}`, err);
+    console.error(err.stack); // Log stack trace
     // Attempt graceful shutdown, but exit quickly if it fails
     shutdown('UNCAUGHT_EXCEPTION').catch(() => process.exit(1));
     setTimeout(() => process.exit(1), 10000).unref(); // Force exit after 10s if shutdown hangs
@@ -2209,6 +2323,10 @@ process.on('uncaughtException', (err, origin) => {
 // Handle unhandled promise rejections (log them)
 process.on('unhandledRejection', (reason, promise) => {
     console.error('🔥🔥🔥 Unhandled Rejection at:', promise, 'reason:', reason);
+     // Log the stack trace of the reason if it's an error
+     if (reason instanceof Error) {
+         console.error(reason.stack);
+     }
     // Consider shutting down on unhandled rejections too? Maybe optional.
     // shutdown('UNHANDLED_REJECTION').catch(() => process.exit(1));
     // setTimeout(() => process.exit(1), 10000).unref();
@@ -2220,5 +2338,6 @@ startServer().then(() => {
 }).catch(err => {
     // This catch is for errors thrown *during* the async startServer call itself
     console.error("🔥🔥🔥 Application failed to initialize:", err);
+     console.error(err.stack); // Log stack trace
     process.exit(1);
 });
