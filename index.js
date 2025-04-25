@@ -1,7 +1,8 @@
+import 'dotenv/config';
+
 // [PATCHED: ESM-COMPATIBLE MAIN FUNCTION]
 const main = async () => {
   try {
-  import 'dotenv/config';
   import { Pool } from 'pg';
   import express from 'express';
   import TelegramBot from 'node-telegram-bot-api';
@@ -2215,4 +2216,8 @@ const main = async () => {
   });
   } catch (err) {
     console.error("❌ Fatal startup error:", err);
-    process.exit(1)
+    process.exit(1);
+  }
+};
+
+main(); // Call the main function
