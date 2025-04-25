@@ -1199,7 +1199,6 @@ async function recordPayout(betId, status, signature) {
     );
 }
 // ==================== [9] Express Server Setup ====================
-const webhookPath = `/bot${process.env.BOT_TOKEN}`;
 app.use(express.json({ limit: '10kb' }));
 
 // Health endpoint with system diagnostics
