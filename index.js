@@ -998,7 +998,7 @@ async function monitorPayments() {
 
         // Calculate delay: 50ms per pending item, max 5000ms (5 seconds)
         // Adjusted delay calculation to be less aggressive (50ms per item)
-        const throttleDelay = Math.min(5000, currentLoad * 50);
+        const throttleDelay = Math.min(5000, currentLoad * 500);
 
         if (throttleDelay > 0) {
             console.log(`[Monitor] Queues have ${currentLoad} pending items. Throttling monitor check for ${throttleDelay}ms.`);
