@@ -1243,8 +1243,6 @@ app.post(webhookPath, (req, res) => {
 });
 
 // ==================== [10] Monitoring System ====================
-let monitorIntervalSeconds = 30;
-let monitorInterval = null;
 
 async function monitorPayments() {
     if (isMonitorRunning || isShuttingDown) {
