@@ -1242,55 +1242,6 @@ app.post(webhookPath, (req, res) => {
     });
 });
 
-// ==================== [11] Graceful Shutdown ====================
-const shutdown = async (signal) => {
-    if (isShuttingDown) return;
-    isShuttingDown = true;
-
-    console.log(`\n${signal} received, initiating graceful shutdown...`);
-    
-    // 1. Stop monitoring first
-    if (monitorInterval) {
-        clearInterval(monitorInterval);
-        console.log("🛑 Stopped payment monitor");
-    }
-
-    // 2. Stop Telegram bot
-    try {
-        if (bot.isPolling()) {
-            bot.stopPolling();
-            console.log("🛑 Stopped bot polling");
-        }
-        if (process.env.RAILWAY_ENVIRONMENT) {
-            await bot.deleteWebHook();
-            console.log("🛑 Removed webhook");
-        }
-    } catch (e) {
-        console.error("Bot shutdown error:", e);
-    }
-
-    // 3. Pause all processing queues
-    messageQueue.pause();
-    paymentProcessor.highPriorityQueue.pause();
-    paymentProcessor.normalQueue.pause();
-    console.log("🛑 Paused all processing queues");
-
-    // 4. Close database with timeout
-    const dbTimeout = setTimeout(() => {
-        console.error("⏰ Database shutdown timeout - forcing exit");
-        process.exit(1);
-    }, 10000).unref();
-
-    try {
-        await pool.end();
-        clearTimeout(dbTimeout);
-        console.log("✅ Database pool closed");
-        process.exit(0);
-    } catch (err) {
-        console.error("❌ Database shutdown failed:", err);
-        process.exit(1);
-    }
-};
 
 // ==================== [12] Process Handlers ====================
 process.on('SIGTERM', () => shutdown('SIGTERM')); // Kubernetes/Docker
