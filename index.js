@@ -250,7 +250,6 @@ const walletCache = new Map();
 const CACHE_TTL = 300000;
 
 const processedSignaturesThisSession = new Set();
-const lastProcessedSignature = {};
 const MAX_PROCESSED_SIGNATURES = 1000;
 
 // --- Constants with Scalability in Mind ---
@@ -559,11 +558,7 @@ const signatures = await solanaConnection.getSignaturesForAddress(
                 if (!signatures || signatures.length === 0) continue;
 
                 // Process signatures with priority queuing
-                if (signatures.length > 0) {
-    lastProcessedSignature[wallet.address] = signatures[signatures.length - 1].signature;
-}
-
-for (const sig of signatures) {
+                for (const sig of signatures) {
                     await paymentProcessor.addPaymentJob({
                         type: 'monitor_payment',
                         signature: sig.signature,
