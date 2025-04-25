@@ -976,6 +976,10 @@ const paymentProcessor = new PaymentProcessor();
 
 // --- Payment Monitoring Loop ---
 let isMonitorRunning = false; // Flag to prevent concurrent monitor runs
+
+// [PATCHED: TRACK BOT START TIME]
+const botStartupTime = Math.floor(Date.now() / 1000); // Timestamp in seconds
+
 let monitorIntervalSeconds = 30; // Initial interval
 let monitorInterval = null; // Holds the setInterval ID
 
@@ -1046,6 +1050,12 @@ async function monitorPayments() {
 
                 // Queue each found signature for processing by the PaymentProcessor
                 for (const sigInfo of signatures) {
+
+        if (sigInfo.blockTime && sigInfo.blockTime < botStartupTime - 10) {
+            console.log(`🕒 Skipping old TX: ${sigInfo.signature}`);
+            continue;
+        }
+
                     // Double check session cache before queuing
                     if (processedSignaturesThisSession.has(sigInfo.signature)) {
                         continue;
