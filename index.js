@@ -123,13 +123,16 @@ const performanceMonitor = {
 };
 
 // --- Database Initialization (Updated) ---
+// --- Database Initialization (Updated with Detailed Logging) ---
 async function initializeDatabase() {
     console.log("⚙️ Initializing Database schema...");
     let client;
     try {
+        console.log("Attempting pool.connect()..."); // ADD LOG
         client = await pool.connect();
+        console.log("✅ pool.connect() successful."); // ADD LOG
 
-        // Bets Table: Tracks individual game bets
+        console.log("Attempting CREATE TABLE bets..."); // ADD LOG
         await client.query(`
             CREATE TABLE IF NOT EXISTS bets (
                 id SERIAL PRIMARY KEY,                      -- Unique bet identifier
@@ -149,8 +152,9 @@ async function initializeDatabase() {
                 priority INT DEFAULT 0                      -- Priority for processing (higher first)
             );
         `);
+        console.log("✅ CREATE TABLE bets successful."); // ADD LOG
 
-        // Wallets Table: Links Telegram User ID to their Solana wallet address
+        console.log("Attempting CREATE TABLE wallets..."); // ADD LOG
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
                 user_id TEXT PRIMARY KEY,                   -- Telegram User ID
@@ -159,37 +163,59 @@ async function initializeDatabase() {
                 last_used_at TIMESTAMPTZ                    -- When the wallet was last used for a bet/payout
             );
         `);
+        console.log("✅ CREATE TABLE wallets successful."); // ADD LOG
 
-        // Add columns using ALTER TABLE IF NOT EXISTS for backward compatibility
+        console.log("Attempting ALTER TABLE bets (priority)..."); // ADD LOG
         await client.query(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS priority INT DEFAULT 0;`);
+        console.log("✅ ALTER TABLE bets (priority) successful."); // ADD LOG
+
+        console.log("Attempting ALTER TABLE bets (fees_paid)..."); // ADD LOG
         await client.query(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS fees_paid BIGINT;`);
+        console.log("✅ ALTER TABLE bets (fees_paid) successful."); // ADD LOG
 
-
-        // Add indexes for performance on frequently queried columns
+        console.log("Attempting CREATE INDEX idx_bets_status..."); // ADD LOG
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_status ON bets(status);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_user_id ON bets(user_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_expires_at ON bets(expires_at);`);
-        // --- Removed old memo index creation here, replaced below ---
-        // await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_memo_id ON bets(memo_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_priority ON bets(priority);`);
+        console.log("✅ CREATE INDEX idx_bets_status successful."); // ADD LOG
 
-        // --- NEW: Add improved unique index for memo_id ---
+        console.log("Attempting CREATE INDEX idx_bets_user_id..."); // ADD LOG
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_user_id ON bets(user_id);`);
+        console.log("✅ CREATE INDEX idx_bets_user_id successful."); // ADD LOG
+
+        console.log("Attempting CREATE INDEX idx_bets_expires_at..."); // ADD LOG
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_expires_at ON bets(expires_at);`);
+        console.log("✅ CREATE INDEX idx_bets_expires_at successful."); // ADD LOG
+
+        console.log("Attempting CREATE INDEX idx_bets_priority..."); // ADD LOG
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_priority ON bets(priority);`);
+        console.log("✅ CREATE INDEX idx_bets_priority successful."); // ADD LOG
+
+        console.log("Attempting CREATE UNIQUE INDEX idx_bets_memo_id..."); // ADD LOG
         await client.query(`
             CREATE UNIQUE INDEX IF NOT EXISTS idx_bets_memo_id
             ON bets (memo_id)
             INCLUDE (status, expected_lamports, expires_at);
         `);
-        // --- END NEW ---
+        console.log("✅ CREATE UNIQUE INDEX idx_bets_memo_id successful.");// ADD LOG
 
-        console.log("✅ Database schema initialized/verified");
+
+        console.log("✅ Database schema initialized/verified"); // Original success log
     } catch (err) {
-        console.error("❌ Database initialization error:", err);
+        // --- ENHANCED ERROR LOGGING ---
+        console.error("❌ Database initialization error occurred!");
+        console.error("Error Code:", err.code);
+        console.error("Error Message:", err.message);
+        console.error("Error Stack:", err.stack); // Log the full stack trace
+        // --- END ENHANCED LOGGING ---
         throw err; // Re-throw to prevent startup if DB fails
     } finally {
-        if (client) client.release(); // Release client back to the pool
+        if (client) {
+            console.log("Releasing DB client."); // ADD LOG
+            client.release();
+        } else {
+            console.log("No DB client acquired to release."); // Changed log message slightly
+        }
     }
 }
-
 // --- Telegram Bot Initialization with Queue ---
 console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
