@@ -1243,7 +1243,6 @@ app.post(webhookPath, (req, res) => {
 });
 
 // ==================== [10] Monitoring System ====================
-let isMonitorRunning = false;
 let monitorIntervalSeconds = 30;
 let monitorInterval = null;
 
