@@ -17,6 +17,8 @@ import PQueue from 'p-queue';
 // Assuming RateLimitedConnection is correctly implemented in this path
 import RateLimitedConnection from './lib/solana-connection.js';
 
+
+console.log("⏳ Starting Solana Gambles Bot... Checking environment variables...");
 // --- Enhanced Environment Variable Checks ---
 const REQUIRED_ENV_VARS = [
     'BOT_TOKEN',
@@ -41,27 +43,27 @@ REQUIRED_ENV_VARS.forEach((key) => {
     if (key === 'RAILWAY_PUBLIC_DOMAIN' && !process.env.RAILWAY_ENVIRONMENT) return;
 
     if (!process.env[key]) {
-        console.error(`â Environment variable ${key} is missing.`);
+        console.error(`❌ Environment variable ${key} is missing.`);
         missingVars = true;
     }
 });
 
 if (missingVars) {
-    console.error("â ï¸ Please set all required environment variables. Exiting.");
-    process.exit(1);
+    console.error("⚠️ Please set all required environment variables. Exiting.");
+    console.error("❌ Exiting due to missing environment variables."); process.exit(1);
 }
 
 // Set default fee margin if not specified (e.g., 0.00005 SOL)
 if (!process.env.FEE_MARGIN) {
     process.env.FEE_MARGIN = '5000'; // Default to 5000 lamports
 }
-console.log(`â¹ï¸ Using FEE_MARGIN: ${process.env.FEE_MARGIN} lamports`);
+console.log(`ℹ️ Using FEE_MARGIN: ${process.env.FEE_MARGIN} lamports`);
 
 // --- Initialize Scalable Components ---
 const app = express();
 
 // 1. Enhanced Solana Connection with Rate Limiting
-console.log("âï¸ Initializing scalable Solana connection...");
+console.log("⚙️ Initializing scalable Solana connection...");
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
     maxConcurrent: 3,       // Max parallel requests
     retryBaseDelay: 600,     // Initial delay for retries (ms)
@@ -73,17 +75,17 @@ const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
     rateLimitCooloff: 10000,   // Pause duration after hitting rate limits (ms)
     disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
 });
-console.log("â Scalable Solana connection initialized");
+console.log("✅ Scalable Solana connection initialized");
 
 // 2. Message Processing Queue (for handling Telegram messages)
 const messageQueue = new PQueue({
     concurrency: 5,   // Max concurrent messages processed
     timeout: 10000    // Max time per message task (ms)
 });
-console.log("â Message processing queue initialized");
+console.log("✅ Message processing queue initialized");
 
 // 3. Enhanced PostgreSQL Pool
-console.log("âï¸ Setting up optimized PostgreSQL Pool...");
+console.log("⚙️ Setting up optimized PostgreSQL Pool...");
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     max: 15,                    // Max connections in pool
@@ -94,7 +96,7 @@ const pool = new Pool({
         rejectUnauthorized: false // Necessary for some cloud providers like Heroku/Railway
     } : false
 });
-console.log("â PostgreSQL Pool created with optimized settings");
+console.log("✅ PostgreSQL Pool created with optimized settings");
 
 // 4. Simple Performance Monitor
 const performanceMonitor = {
@@ -110,7 +112,7 @@ const performanceMonitor = {
             const uptime = (Date.now() - this.startTime) / 1000;
             const errorRate = this.requests > 0 ? (this.errors / this.requests * 100).toFixed(1) : 0;
             console.log(`
-ð Performance Metrics:
+📊 Performance Metrics:
     - Uptime: ${uptime.toFixed(0)}s
     - Total Requests Handled: ${this.requests}
     - Error Rate: ${errorRate}%
@@ -121,7 +123,7 @@ const performanceMonitor = {
 
 // --- Database Initialization (Updated) ---
 async function initializeDatabase() {
-    console.log("âï¸ Initializing Database schema...");
+    console.log("⚙️ Initializing Database schema...");
     let client;
     try {
         client = await pool.connect();
@@ -170,9 +172,9 @@ async function initializeDatabase() {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_memo_id ON bets(memo_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_priority ON bets(priority);`);
 
-        console.log("â Database schema initialized/verified");
+        console.log("✅ Database schema initialized/verified");
     } catch (err) {
-        console.error("â Database initialization error:", err);
+        console.error("❌ Database initialization error:", err);
         throw err; // Re-throw to prevent startup if DB fails
     } finally {
         if (client) client.release(); // Release client back to the pool
@@ -180,7 +182,7 @@ async function initializeDatabase() {
 }
 
 // --- Telegram Bot Initialization with Queue ---
-console.log("âï¸ Initializing Telegram Bot...");
+console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
     polling: false, // Use webhooks in production (set later)
     request: {      // Adjust request options for stability
@@ -196,12 +198,12 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 bot.on('message', (msg) => {
     messageQueue.add(() => handleMessage(msg))
         .catch(err => {
-            console.error("â ï¸ Message processing queue error:", err);
+            console.error("⚠️ Message processing queue error:", err);
             performanceMonitor.logRequest(false); // Log error
         });
 });
 
-console.log("â Telegram Bot initialized");
+console.log("✅ Telegram Bot initialized");
 
 // --- Express Setup for Webhook and Health Check ---
 app.use(express.json({
@@ -232,7 +234,7 @@ app.post(webhookPath, (req, res) => {
     messageQueue.add(() => {
         try {
             if (!req.body || typeof req.body !== 'object') {
-                console.warn("â ï¸ Received invalid webhook request body");
+                console.warn("⚠️ Received invalid webhook request body");
                 performanceMonitor.logRequest(false);
                 return res.status(400).send('Invalid request body');
             }
@@ -242,7 +244,7 @@ app.post(webhookPath, (req, res) => {
             performanceMonitor.logRequest(true);
             res.sendStatus(200); // Acknowledge receipt to Telegram
         } catch (error) {
-            console.error("â Webhook processing error:", error);
+            console.error("❌ Webhook processing error:", error);
             performanceMonitor.logRequest(false);
             res.status(500).json({ // Send error response
                 error: 'Internal server error processing webhook',
@@ -917,7 +919,7 @@ class PaymentProcessor {
             console.warn(`Amount mismatch for bet ${bet.id} (memo ${memo}). Expected ~${expectedAmount}, got ${transferAmount}.`);
             await updateBetStatus(bet.id, 'error_payment_mismatch');
             processedSignaturesThisSession.add(signature);
-            await bot.sendMessage(bet.chat_id, `â ï¸ Payment amount mismatch for bet ${memo}. Expected ${Number(expectedAmount)/LAMPORTS_PER_SOL} SOL, received ${Number(transferAmount)/LAMPORTS_PER_SOL} SOL. Bet cancelled.`).catch(e => console.error("TG Send Error:", e.message));
+            await bot.sendMessage(bet.chat_id, `⚠️ Payment amount mismatch for bet ${memo}. Expected ${Number(expectedAmount)/LAMPORTS_PER_SOL} SOL, received ${Number(transferAmount)/LAMPORTS_PER_SOL} SOL. Bet cancelled.`).catch(e => console.error("TG Send Error:", e.message));
             return { processed: false, reason: 'amount_mismatch' };
         }
 
@@ -929,7 +931,7 @@ class PaymentProcessor {
             console.warn(`Payment for bet ${bet.id} (memo ${memo}) received after expiry.`);
             await updateBetStatus(bet.id, 'error_payment_expired');
             processedSignaturesThisSession.add(signature);
-            await bot.sendMessage(bet.chat_id, `â ï¸ Payment for bet ${memo} received after expiry time. Bet cancelled.`).catch(e => console.error("TG Send Error:", e.message));
+            await bot.sendMessage(bet.chat_id, `⚠️ Payment for bet ${memo} received after expiry time. Bet cancelled.`).catch(e => console.error("TG Send Error:", e.message));
             return { processed: false, reason: 'expired' };
         }
 
@@ -1110,7 +1112,7 @@ function adjustMonitorInterval(processedCount) {
              }
              // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Callback End ====`);
          }, monitorIntervalSeconds * 1000);
-        console.log(`â¹ï¸ Adjusted monitor interval to ${monitorIntervalSeconds}s`);
+        console.log(`ℹ️ Adjusted monitor interval to ${monitorIntervalSeconds}s`);
     }
 }
 
@@ -1123,7 +1125,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
         : process.env.RACE_BOT_PRIVATE_KEY;
 
     if (!privateKey) {
-         console.error(`â Cannot send SOL: Missing private key for game type ${gameType}`);
+         console.error(`❌ Cannot send SOL: Missing private key for game type ${gameType}`);
          return { success: false, error: `Missing private key for ${gameType}` };
     }
 
@@ -1132,7 +1134,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
         : recipientPublicKey;
 
     const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL;
-    console.log(`ð¸ Attempting to send ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()} for ${gameType}`);
+    console.log(`💸 Attempting to send ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()} for ${gameType}`);
 
     // Calculate dynamic priority fee based on payout amount (adjust rate as needed)
     const priorityFeeMicroLamports = Math.min(
@@ -1144,7 +1146,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
     // Ensure gross amount is positive before deducting buffer
     const grossAmountToSend = BigInt(amountLamports);
     if (grossAmountToSend <= 0n) {
-         console.error(`â Payout amount ${amountLamports} is zero or negative. Cannot send.`);
+         console.error(`❌ Payout amount ${amountLamports} is zero or negative. Cannot send.`);
          return { success: false, error: 'Payout amount must be positive' };
     }
     const netAmountToSend = grossAmountToSend - FEE_BUFFER; // Note: We are sending the GROSS amount now, adjusted calculation
@@ -1159,7 +1161,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
     // passed in, assuming it was calculated correctly by `calculatePayoutWithFees`.
 
     if (amountToSend <= 0n) {
-         console.error(`â Calculated payout amount ${amountLamports} is zero or negative. Cannot send.`);
+         console.error(`❌ Calculated payout amount ${amountLamports} is zero or negative. Cannot send.`);
          return { success: false, error: 'Calculated payout amount is zero or negative' };
     }
 
@@ -1224,18 +1226,18 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
                 })
             ]);
 
-            console.log(`â Payout successful! Sent ${Number(amountToSend)/LAMPORTS_PER_SOL} SOL to ${recipientPubKey.toBase58()}. TX: ${signature}`);
+            console.log(`✅ Payout successful! Sent ${Number(amountToSend)/LAMPORTS_PER_SOL} SOL to ${recipientPubKey.toBase58()}. TX: ${signature}`);
             return { success: true, signature };
 
         } catch (error) {
-            console.error(`â Payout TX failed (Attempt ${attempt}/3):`, error.message);
+            console.error(`❌ Payout TX failed (Attempt ${attempt}/3):`, error.message);
 
             // Check for specific errors that shouldn't be retried
             if (error.message.includes('Invalid param') ||
                 error.message.includes('Insufficient funds') || // Bot might be out of SOL
                 error.message.includes('blockhash not found') ||
                 error.message.includes('custom program error')) { // Catch on-chain program errors early
-                 console.error("â Non-retryable error encountered. Aborting payout.");
+                 console.error("❌ Non-retryable error encountered. Aborting payout.");
                  return { success: false, error: `Non-retryable error: ${error.message}` }; // Exit retry loop
             }
 
@@ -1247,7 +1249,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
     } // End retry loop
 
     // If all attempts failed
-    console.error(`â Payout failed after 3 attempts for ${recipientPubKey.toBase58()}`);
+    console.error(`❌ Payout failed after 3 attempts for ${recipientPubKey.toBase58()}`);
     return { success: false, error: `Payout failed after 3 attempts` };
 }
 
@@ -1256,7 +1258,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
 
 // Routes a paid bet to the correct game handler
 async function processPaidBet(bet) {
-    console.log(`âï¸ Processing game for bet ${bet.id} (${bet.game_type})`);
+    console.log(`⚙️ Processing game for bet ${bet.id} (${bet.game_type})`);
     let client;
 
     try {
@@ -1288,11 +1290,11 @@ async function processPaidBet(bet) {
          } else if (bet.game_type === 'race') {
              await handleRaceGame(bet);
          } else {
-             console.error(`â Unknown game type '${bet.game_type}' for bet ${bet.id}`);
+             console.error(`❌ Unknown game type '${bet.game_type}' for bet ${bet.id}`);
              await updateBetStatus(bet.id, 'error_unknown_game');
          }
     } catch (error) {
-        console.error(`â Error during game processing setup for bet ${bet.id}:`, error.message);
+        console.error(`❌ Error during game processing setup for bet ${bet.id}:`, error.message);
         if (client) await client.query('ROLLBACK'); // Ensure rollback on error
         await updateBetStatus(bet.id, 'error_processing_setup'); // Mark bet with error
     } finally {
@@ -1332,14 +1334,14 @@ async function handleCoinflipGame(bet) {
 
     if (win) {
         const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
-        console.log(`ðª Coinflip Bet ${betId}: ${displayName} WON ${payoutSOL.toFixed(6)} SOL! Choice: ${choice}, Result: ${result}`);
+        console.log(`🪙 Coinflip Bet ${betId}: ${displayName} WON ${payoutSOL.toFixed(6)} SOL! Choice: ${choice}, Result: ${result}`);
 
         // Check if user has a linked wallet
         const winnerAddress = await getLinkedWallet(user_id);
         if (!winnerAddress) {
              console.warn(`Coinflip Bet ${betId}: Winner ${displayName} has no linked wallet.`);
              await bot.sendMessage(chat_id,
-                 `ð ${displayName}, you won the coinflip (Result: *${result}*) but have no wallet linked!\n` +
+                 `🎉 ${displayName}, you won the coinflip (Result: *${result}*) but have no wallet linked!\n` +
                  `Your payout of ${payoutSOL.toFixed(6)} SOL is waiting. Place another bet (any amount) to link your wallet and receive pending payouts.`,
                  { parse_mode: 'Markdown' }
              ).catch(e => console.error("TG Send Error:", e.message));
@@ -1350,9 +1352,9 @@ async function handleCoinflipGame(bet) {
         // Send "processing payout" message and queue the actual payout
         try {
             await bot.sendMessage(chat_id,
-                `ð ${displayName}, you won ${payoutSOL.toFixed(6)} SOL!\n` +
+                `🎉 ${displayName}, you won ${payoutSOL.toFixed(6)} SOL!\n` +
                 `Result: *${result}*\n\n` +
-                `ð¸ Processing payout to your linked wallet...`,
+                `💸 Processing payout to your linked wallet...`,
                 { parse_mode: 'Markdown' }
             ).catch(e => console.error("TG Send Error:", e.message));
 
@@ -1373,9 +1375,9 @@ async function handleCoinflipGame(bet) {
             });
 
         } catch (e) {
-            console.error(`â Error queuing payout for coinflip bet ${betId}:`, e);
+            console.error(`❌ Error queuing payout for coinflip bet ${betId}:`, e);
             await bot.sendMessage(chat_id,
-                `â ï¸ Error occurred while processing your coinflip win for bet ID ${betId}.\n` +
+                `⚠️ Error occurred while processing your coinflip win for bet ID ${betId}.\n` +
                 `Please contact support.`,
                 { parse_mode: 'Markdown' }
             ).catch(e => console.error("TG Send Error:", e.message));
@@ -1383,9 +1385,9 @@ async function handleCoinflipGame(bet) {
         }
 
     } else { // Loss
-        console.log(`ðª Coinflip Bet ${betId}: ${displayName} LOST. Choice: ${choice}, Result: ${result}`);
+        console.log(`🪙 Coinflip Bet ${betId}: ${displayName} LOST. Choice: ${choice}, Result: ${result}`);
         await bot.sendMessage(chat_id,
-            `â ${displayName}, you lost the coinflip!\n` +
+            `❌ ${displayName}, you lost the coinflip!\n` +
             `You guessed *${choice}* but the result was *${result}*. Better luck next time!`,
             { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
@@ -1401,17 +1403,17 @@ async function handleRaceGame(bet) {
 
     // Ensure probabilities sum close to 1 (adjust if needed)
     const horses = [
-        { name: 'Yellow', emoji: 'ð¡', odds: 1.1, winProbability: 0.25 },
-        { name: 'Orange', emoji: 'ð ', odds: 2.0, winProbability: 0.20 },
-        { name: 'Blue',   emoji: 'ðµ', odds: 3.0, winProbability: 0.15 },
-        { name: 'Cyan',   emoji: 'ð§', odds: 4.0, winProbability: 0.12 },
-        { name: 'White',  emoji: 'âªï¸', odds: 5.0, winProbability: 0.09 },
-        { name: 'Red',    emoji: 'ð´', odds: 6.0, winProbability: 0.07 },
-        { name: 'Black',  emoji: 'â«ï¸', odds: 7.0, winProbability: 0.05 },
-        { name: 'Pink',   emoji: 'ð¸', odds: 8.0, winProbability: 0.03 },
-        { name: 'Purple', emoji: 'ð£', odds: 9.0, winProbability: 0.02 },
-        { name: 'Green',  emoji: 'ð¢', odds: 10.0, winProbability: 0.01 },
-        { name: 'Silver', emoji: 'ð', odds: 15.0, winProbability: 0.01 } // Total: 0.99 - adjust if needed
+        { name: 'Yellow', emoji: '🟡', odds: 1.1, winProbability: 0.25 },
+        { name: 'Orange', emoji: '🟠', odds: 2.0, winProbability: 0.20 },
+        { name: 'Blue',   emoji: '🔵', odds: 3.0, winProbability: 0.15 },
+        { name: 'Cyan',   emoji: '💧', odds: 4.0, winProbability: 0.12 },
+        { name: 'White',  emoji: '⚪️', odds: 5.0, winProbability: 0.09 },
+        { name: 'Red',    emoji: '🔴', odds: 6.0, winProbability: 0.07 },
+        { name: 'Black',  emoji: '⚫️', odds: 7.0, winProbability: 0.05 },
+        { name: 'Pink',   emoji: '🌸', odds: 8.0, winProbability: 0.03 },
+        { name: 'Purple', emoji: '🟣', odds: 9.0, winProbability: 0.02 },
+        { name: 'Green',  emoji: '🟢', odds: 10.0, winProbability: 0.01 },
+        { name: 'Silver', emoji: '💎', odds: 15.0, winProbability: 0.01 } // Total: 0.99 - adjust if needed
     ];
     // Add a small adjustment to the last horse probability if needed to reach 1.0
     const totalProb = horses.reduce((sum, h) => sum + h.winProbability, 0);
@@ -1437,12 +1439,12 @@ async function handleRaceGame(bet) {
     // Send race commentary messages
     let displayName = await getUserDisplayName(chat_id, user_id);
     try {
-        await bot.sendMessage(chat_id, `ð Race ${betId} starting! ${displayName} bet on ${chosenHorseName}!`).catch(e => console.error("TG Send Error:", e.message));
+        await bot.sendMessage(chat_id, `🐎 Race ${betId} starting! ${displayName} bet on ${chosenHorseName}!`).catch(e => console.error("TG Send Error:", e.message));
         await new Promise(resolve => setTimeout(resolve, 2000)); // Pause
-        await bot.sendMessage(chat_id, "ð¦ And they're off!").catch(e => console.error("TG Send Error:", e.message));
+        await bot.sendMessage(chat_id, "🚦 And they're off!").catch(e => console.error("TG Send Error:", e.message));
         await new Promise(resolve => setTimeout(resolve, 3000)); // Pause
         await bot.sendMessage(chat_id,
-            `ð The winner is... ${winningHorse.emoji} *${winningHorse.name}*! ð`,
+            `🏆 The winner is... ${winningHorse.emoji} *${winningHorse.name}*! 🏆`,
             { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
     } catch (e) {
@@ -1457,14 +1459,14 @@ async function handleRaceGame(bet) {
 
     if (win) {
         const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
-        console.log(`ð Race Bet ${betId}: ${displayName} WON ${payoutSOL.toFixed(6)} SOL! Horse: ${chosenHorseName}, Winner: ${winningHorse.name}`);
+        console.log(`🐎 Race Bet ${betId}: ${displayName} WON ${payoutSOL.toFixed(6)} SOL! Horse: ${chosenHorseName}, Winner: ${winningHorse.name}`);
 
         // Check for linked wallet
         const winnerAddress = await getLinkedWallet(user_id);
         if (!winnerAddress) {
             console.warn(`Race Bet ${betId}: Winner ${displayName} has no linked wallet.`);
             await bot.sendMessage(chat_id,
-                `ð ${displayName}, your horse *${chosenHorseName}* won the race!\n` +
+                `🎉 ${displayName}, your horse *${chosenHorseName}* won the race!\n` +
                 `Your payout of ${payoutSOL.toFixed(6)} SOL is waiting. Place another bet (any amount) to link your wallet and receive pending payouts.`,
                 { parse_mode: 'Markdown' }
             ).catch(e => console.error("TG Send Error:", e.message));
@@ -1475,9 +1477,9 @@ async function handleRaceGame(bet) {
         // Send "processing payout" message and queue the actual payout
         try {
             await bot.sendMessage(chat_id,
-                `ð ${displayName}, your horse *${chosenHorseName}* won!\n` +
+                `🎉 ${displayName}, your horse *${chosenHorseName}* won!\n` +
                 `Payout: ${payoutSOL.toFixed(6)} SOL\n\n` +
-                `ð¸ Processing payout to your linked wallet...`,
+                `💸 Processing payout to your linked wallet...`,
                 { parse_mode: 'Markdown' }
             ).catch(e => console.error("TG Send Error:", e.message));
 
@@ -1498,9 +1500,9 @@ async function handleRaceGame(bet) {
                 winningHorse
             });
         } catch (e) {
-            console.error(`â Error queuing payout for race bet ${betId}:`, e);
+            console.error(`❌ Error queuing payout for race bet ${betId}:`, e);
              await bot.sendMessage(chat_id,
-                 `â ï¸ Error occurred while processing your race win for bet ID ${betId}.\n` +
+                 `⚠️ Error occurred while processing your race win for bet ID ${betId}.\n` +
                  `Please contact support.`,
                  { parse_mode: 'Markdown' }
              ).catch(e => console.error("TG Send Error:", e.message));
@@ -1508,9 +1510,9 @@ async function handleRaceGame(bet) {
         }
 
     } else { // Loss
-        console.log(`ð Race Bet ${betId}: ${displayName} LOST. Horse: ${chosenHorseName}, Winner: ${winningHorse.name}`);
+        console.log(`🐎 Race Bet ${betId}: ${displayName} LOST. Horse: ${chosenHorseName}, Winner: ${winningHorse.name}`);
         await bot.sendMessage(chat_id,
-            `â ${displayName}, your horse *${chosenHorseName}* lost the race!\n` +
+            `❌ ${displayName}, your horse *${chosenHorseName}* lost the race!\n` +
             `Winner: ${winningHorse.emoji} *${winningHorse.name}*. Better luck next time!`,
             { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
@@ -1526,26 +1528,26 @@ async function handlePayoutJob(job) {
 
     // Ensure payout amount is positive before attempting to send
     if (payoutAmountLamports <= 0n) {
-        console.error(`â Payout job for bet ${betId} has zero or negative amount (${payoutAmountLamports}). Skipping send.`);
+        console.error(`❌ Payout job for bet ${betId} has zero or negative amount (${payoutAmountLamports}). Skipping send.`);
         await updateBetStatus(betId, 'error_payout_zero_amount');
         await bot.sendMessage(chatId,
-            `â ï¸ There was an issue calculating the payout for bet ID ${betId} (amount was zero). Please contact support.`,
+            `⚠️ There was an issue calculating the payout for bet ID ${betId} (amount was zero). Please contact support.`,
             { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
         return; // Don't proceed with sending 0
     }
 
-    console.log(`ð¸ Processing payout job for Bet ID: ${betId}, Amount: ${payoutAmountLamports} lamports`);
+    console.log(`💸 Processing payout job for Bet ID: ${betId}, Amount: ${payoutAmountLamports} lamports`);
 
     try {
         // Attempt to send the SOL payout
         const sendResult = await sendSol(recipient, payoutAmountLamports, gameType);
 
         if (sendResult.success) {
-            console.log(`ð¸ Payout successful for bet ${betId}, TX: ${sendResult.signature}`);
+            console.log(`💸 Payout successful for bet ${betId}, TX: ${sendResult.signature}`);
             // Send success message to user
             await bot.sendMessage(chatId,
-                `â Payout successful for bet ${betId}!\n` +
+                `✅ Payout successful for bet ${betId}!\n` +
                 `${(Number(payoutAmountLamports)/LAMPORTS_PER_SOL).toFixed(6)} SOL sent.\n` +
                 `TX: \`https://solscan.io/tx/${sendResult.signature}\``, // Add link
                 { parse_mode: 'Markdown', disable_web_page_preview: true } // Don't preview Solscan etc.
@@ -1555,9 +1557,9 @@ async function handlePayoutJob(job) {
 
         } else {
             // Payout failed after retries
-            console.error(`â Payout failed permanently for bet ${betId}: ${sendResult.error}`);
+            console.error(`❌ Payout failed permanently for bet ${betId}: ${sendResult.error}`);
             await bot.sendMessage(chatId,
-                `â ï¸ Payout failed for bet ID ${betId}: ${sendResult.error}\n` +
+                `⚠️ Payout failed for bet ID ${betId}: ${sendResult.error}\n` +
                 `The team has been notified. Please contact support if needed.`,
                 { parse_mode: 'Markdown' }
             ).catch(e => console.error("TG Send Error:", e.message));
@@ -1567,12 +1569,12 @@ async function handlePayoutJob(job) {
         }
     } catch (error) {
         // Catch unexpected errors during payout processing
-        console.error(`â Unexpected error processing payout job for bet ${betId}:`, error);
+        console.error(`❌ Unexpected error processing payout job for bet ${betId}:`, error);
         // Update status to reflect exception during payout attempt
         await updateBetStatus(betId, 'error_payout_exception');
         // Notify user of technical error
          await bot.sendMessage(chatId,
-             `â ï¸ A technical error occurred during payout for bet ID ${betId}.\n` +
+             `⚠️ A technical error occurred during payout for bet ID ${betId}.\n` +
              `Please contact support.`,
              { parse_mode: 'Markdown' }
          ).catch(e => console.error("TG Send Error:", e.message));
@@ -1624,18 +1626,18 @@ async function getUserDisplayName(chat_id, user_id) {
 
 // Handles polling errors (e.g., conflicts if multiple instances run)
 bot.on('polling_error', (error) => {
-    console.error(`â Polling error: ${error.code} - ${error.message}`);
+    console.error(`❌ Polling error: ${error.code} - ${error.message}`);
     // Specific check for conflict error code
     if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
-        console.error("âââ FATAL: Conflict detected! Another bot instance might be running with the same token. Exiting.");
-        process.exit(1); // Exit immediately to prevent issues
+        console.error("❌❌❌ FATAL: Conflict detected! Another bot instance might be running with the same token. Exiting.");
+        console.error("❌ Exiting due to missing environment variables."); process.exit(1); // Exit immediately to prevent issues
     }
     // Handle other polling errors if needed
 });
 
 // Handles general bot errors
 bot.on('error', (error) => {
-    console.error('â General Bot Error:', error);
+    console.error('❌ General Bot Error:', error);
     performanceMonitor.logRequest(false); // Log as failed request
 });
 
@@ -1656,7 +1658,7 @@ async function handleMessage(msg) {
             const lastTime = confirmCooldown.get(userId);
             if (now - lastTime < cooldownInterval) {
                 // Optionally send a cooldown message, or just ignore
-                // await bot.sendMessage(chatId, "â±ï¸ Please wait a moment before sending another command.");
+                // await bot.sendMessage(chatId, "⏱️ Please wait a moment before sending another command.");
                 return; // Ignore command if user is on cooldown
             }
         }
@@ -1695,14 +1697,14 @@ async function handleMessage(msg) {
         performanceMonitor.logRequest(true); // Log successful command handling
 
     } catch (error) {
-        console.error(`â Error processing message from user ${userId} in chat ${chatId}: "${messageText}"`, error);
+        console.error(`❌ Error processing message from user ${userId} in chat ${chatId}: "${messageText}"`, error);
         performanceMonitor.logRequest(false); // Log error
 
         // Send generic error message to user
         try {
-             await bot.sendMessage(chatId, "â ï¸ An unexpected error occurred while processing your request. Please try again later or contact support if the issue persists.");
+             await bot.sendMessage(chatId, "⚠️ An unexpected error occurred while processing your request. Please try again later or contact support if the issue persists.");
         } catch (tgError) {
-             console.error("â Failed to send error message to chat:", tgError.message);
+             console.error("❌ Failed to send error message to chat:", tgError.message);
         }
     } finally {
          // Clean up cooldown map periodically (optional)
@@ -1722,18 +1724,18 @@ async function handleStartCommand(msg) {
     try {
         // Try sending with animation/banner first
         await bot.sendAnimation(msg.chat.id, 'https://i.ibb.co/9vDo58q/banner.gif', {
-            caption: `ð Welcome, ${firstName}!\n\n` +
-                     `ð° *Solana Gambles Bot*\n\n` +
+            caption: `👋 Welcome, ${firstName}!\n\n` +
+                     `🎰 *Solana Gambles Bot*\n\n` +
                      `Use /coinflip or /race to see game options.\n` +
                      `Use /wallet to view your linked Solana wallet.\n` +
                      `Use /help to see all commands.`,
             parse_mode: 'Markdown'
         }).catch(async (err) => {
              // Fallback if animation fails (e.g., invalid URL, Telegram issue)
-             console.warn("â ï¸ Failed to send start animation, sending text fallback:", err.message); // Use warn level
+             console.warn("⚠️ Failed to send start animation, sending text fallback:", err.message); // Use warn level
              await bot.sendMessage(msg.chat.id,
-                 `ð Welcome, ${firstName}!\n\n` +
-                 `ð° *Solana Gambles Bot*\n\n` +
+                 `👋 Welcome, ${firstName}!\n\n` +
+                 `🎰 *Solana Gambles Bot*\n\n` +
                  `Use /coinflip or /race to see game options.\n` +
                  `Use /wallet to view your linked Solana wallet.\n` +
                  `Use /help to see all commands.`,
@@ -1751,7 +1753,7 @@ async function handleStartCommand(msg) {
 async function handleCoinflipCommand(msg) {
     const config = GAME_CONFIG.coinflip;
     await bot.sendMessage(msg.chat.id,
-        `ðª *Coinflip Game* ðª\n\n` +
+        `🪙 *Coinflip Game* 🪙\n\n` +
         `Bet on Heads or Tails!\n\n` +
         `*How to play:*\n` +
         `1. Type \`/bet amount heads\` (e.g., \`/bet 0.1 heads\`)\n` +
@@ -1769,15 +1771,15 @@ async function handleCoinflipCommand(msg) {
 // Handles the /race command (shows instructions)
 async function handleRaceCommand(msg) {
     const horses = [
-         { name: 'Yellow', emoji: 'ð¡', odds: 1.1 }, { name: 'Orange', emoji: 'ð ', odds: 2.0 },
-         { name: 'Blue',   emoji: 'ðµ', odds: 3.0 }, { name: 'Cyan',   emoji: 'ð§', odds: 4.0 },
-         { name: 'White',  emoji: 'âªï¸', odds: 5.0 }, { name: 'Red',    emoji: 'ð´', odds: 6.0 },
-         { name: 'Black',  emoji: 'â«ï¸', odds: 7.0 }, { name: 'Pink',   emoji: 'ð¸', odds: 8.0 },
-         { name: 'Purple', emoji: 'ð£', odds: 9.0 }, { name: 'Green',  emoji: 'ð¢', odds: 10.0 },
-         { name: 'Silver', emoji: 'ð', odds: 15.0 }
+         { name: 'Yellow', emoji: '🟡', odds: 1.1 }, { name: 'Orange', emoji: '🟠', odds: 2.0 },
+         { name: 'Blue',   emoji: '🔵', odds: 3.0 }, { name: 'Cyan',   emoji: '💧', odds: 4.0 },
+         { name: 'White',  emoji: '⚪️', odds: 5.0 }, { name: 'Red',    emoji: '🔴', odds: 6.0 },
+         { name: 'Black',  emoji: '⚫️', odds: 7.0 }, { name: 'Pink',   emoji: '🌸', odds: 8.0 },
+         { name: 'Purple', emoji: '🟣', odds: 9.0 }, { name: 'Green',  emoji: '🟢', odds: 10.0 },
+         { name: 'Silver', emoji: '💎', odds: 15.0 }
     ];
 
-    let raceMessage = `ð *Horse Race Game* ð\n\nBet on the winning horse!\n\n*Available Horses & Odds:*\n`;
+    let raceMessage = `🐎 *Horse Race Game* 🐎\n\nBet on the winning horse!\n\n*Available Horses & Odds:*\n`;
     horses.forEach(horse => {
         // Calculate payout after house edge for display
         const effectiveOdds = (horse.odds * (1.0 - GAME_CONFIG.race.houseEdge)).toFixed(2)
@@ -1804,13 +1806,13 @@ async function handleWalletCommand(msg) {
 
     if (walletAddress) {
         await bot.sendMessage(msg.chat.id,
-            `ð Your linked Solana wallet:\n\`${walletAddress}\`\n\n`+
+            `🔗 Your linked Solana wallet:\n\`${walletAddress}\`\n\n`+
             `Payouts will be sent here. It's linked automatically when you make your first paid bet.`,
             { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
     } else {
         await bot.sendMessage(msg.chat.id,
-            `ð No wallet linked yet.\n` +
+            `🔗 No wallet linked yet.\n` +
             `Place a bet and send the required SOL. Your sending wallet will be automatically linked for future payouts.`
         ).catch(e => console.error("TG Send Error:", e.message));
     }
@@ -1829,7 +1831,7 @@ async function handleBetCommand(msg) {
     const betAmount = parseFloat(match[1]);
     if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
         await bot.sendMessage(chatId,
-            `â ï¸ Invalid bet amount. Please bet between ${config.minBet} and ${config.maxBet} SOL.\n` +
+            `⚠️ Invalid bet amount. Please bet between ${config.minBet} and ${config.maxBet} SOL.\n` +
             `Example: \`/bet 0.1 heads\``,
              { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
@@ -1849,20 +1851,20 @@ async function handleBetCommand(msg) {
     );
 
     if (!saveResult.success) {
-         await bot.sendMessage(chatId, `â ï¸ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
+         await bot.sendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
          // Don't throw, just return after notifying user
          return;
     }
 
     // Send payment instructions
     await bot.sendMessage(chatId,
-        `â Coinflip bet registered! (ID: ${memoId})\n\n` +
+        `✅ Coinflip bet registered! (ID: ${memoId})\n\n` +
         `You chose: *${userChoice}*\n` +
         `Amount: *${betAmount.toFixed(6)} SOL*\n\n` +
-        `â¡ï¸ Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
+        `➡️ Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
         `\`${process.env.MAIN_WALLET_ADDRESS}\`\n\n` +
-        `ð *Include MEMO:* \`${memoId}\`\n\n` +
-        `â±ï¸ This request expires in ${config.expiryMinutes} minutes.\n\n` +
+        `📎 *Include MEMO:* \`${memoId}\`\n\n` +
+        `⏱️ This request expires in ${config.expiryMinutes} minutes.\n\n` +
         `*IMPORTANT:* Send from your own wallet. Do not send from an exchange. Ensure you include the memo correctly.`,
         { parse_mode: 'Markdown', disable_web_page_preview: true }
     ).catch(e => console.error("TG Send Error:", e.message));
@@ -1882,7 +1884,7 @@ async function handleBetRaceCommand(msg) {
     const betAmount = parseFloat(match[1]);
     if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
         await bot.sendMessage(chatId,
-            `â ï¸ Invalid bet amount. Please bet between ${config.minBet} and ${config.maxBet} SOL.\n`+
+            `⚠️ Invalid bet amount. Please bet between ${config.minBet} and ${config.maxBet} SOL.\n`+
             `Example: \`/betrace 0.1 Yellow\``,
             { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
@@ -1892,18 +1894,18 @@ async function handleBetRaceCommand(msg) {
     // Validate horse selection
     const chosenHorseNameInput = match[2];
     const horses = [
-         { name: 'Yellow', emoji: 'ð¡', odds: 1.1 }, { name: 'Orange', emoji: 'ð ', odds: 2.0 },
-         { name: 'Blue',   emoji: 'ðµ', odds: 3.0 }, { name: 'Cyan',   emoji: 'ð§', odds: 4.0 },
-         { name: 'White',  emoji: 'âªï¸', odds: 5.0 }, { name: 'Red',    emoji: 'ð´', odds: 6.0 },
-         { name: 'Black',  emoji: 'â«ï¸', odds: 7.0 }, { name: 'Pink',   emoji: 'ð¸', odds: 8.0 },
-         { name: 'Purple', emoji: 'ð£', odds: 9.0 }, { name: 'Green',  emoji: 'ð¢', odds: 10.0 },
-         { name: 'Silver', emoji: 'ð', odds: 15.0 }
+         { name: 'Yellow', emoji: '🟡', odds: 1.1 }, { name: 'Orange', emoji: '🟠', odds: 2.0 },
+         { name: 'Blue',   emoji: '🔵', odds: 3.0 }, { name: 'Cyan',   emoji: '💧', odds: 4.0 },
+         { name: 'White',  emoji: '⚪️', odds: 5.0 }, { name: 'Red',    emoji: '🔴', odds: 6.0 },
+         { name: 'Black',  emoji: '⚫️', odds: 7.0 }, { name: 'Pink',   emoji: '🌸', odds: 8.0 },
+         { name: 'Purple', emoji: '🟣', odds: 9.0 }, { name: 'Green',  emoji: '🟢', odds: 10.0 },
+         { name: 'Silver', emoji: '💎', odds: 15.0 }
     ];
     const chosenHorse = horses.find(h => h.name.toLowerCase() === chosenHorseNameInput.toLowerCase());
 
     if (!chosenHorse) {
         await bot.sendMessage(chatId,
-             `â ï¸ Invalid horse name: "${chosenHorseNameInput}". Please choose from the list in /race.`
+             `⚠️ Invalid horse name: "${chosenHorseNameInput}". Please choose from the list in /race.`
         ).catch(e => console.error("TG Send Error:", e.message));
         return;
     }
@@ -1920,7 +1922,7 @@ async function handleBetRaceCommand(msg) {
     );
 
       if (!saveResult.success) {
-         await bot.sendMessage(chatId, `â ï¸ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
+         await bot.sendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
          // Don't throw, just return
          return;
       }
@@ -1931,14 +1933,14 @@ async function handleBetRaceCommand(msg) {
 
     // Send payment instructions
     await bot.sendMessage(chatId,
-        `â Race bet registered! (ID: ${memoId})\n\n` +
+        `✅ Race bet registered! (ID: ${memoId})\n\n` +
         `You chose: ${chosenHorse.emoji} *${chosenHorse.name}*\n` +
         `Amount: *${betAmount.toFixed(6)} SOL*\n` +
         `Potential Payout: ~${potentialPayoutSOL} SOL\n\n`+ // Show potential payout
-        `â¡ï¸ Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
+        `➡️ Send *exactly ${betAmount.toFixed(6)} SOL* to:\n` +
         `\`${process.env.RACE_WALLET_ADDRESS}\`\n\n` +
-        `ð *Include MEMO:* \`${memoId}\`\n\n` +
-        `â±ï¸ This request expires in ${config.expiryMinutes} minutes.\n\n` +
+        `📎 *Include MEMO:* \`${memoId}\`\n\n` +
+        `⏱️ This request expires in ${config.expiryMinutes} minutes.\n\n` +
         `*IMPORTANT:* Send from your own wallet. Do not send from an exchange. Ensure you include the memo correctly.`,
         { parse_mode: 'Markdown', disable_web_page_preview: true }
     ).catch(e => console.error("TG Send Error:", e.message));
@@ -1946,7 +1948,7 @@ async function handleBetRaceCommand(msg) {
 
 // Handles /help command
 async function handleHelpCommand(msg) {
-     const helpText = `*Solana Gambles Bot Commands* ð°\n\n` +
+     const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
                       `/start - Show welcome message\n` +
                       `/help - Show this help message\n\n` +
                       `*Games:*\n` +
@@ -1980,13 +1982,13 @@ async function startServer() {
             while (attempts < 3) { // Retry webhook setup
                 try {
                     await bot.setWebHook(webhookUrl);
-                    console.log(`â Webhook successfully set to: ${webhookUrl}`);
+                    console.log(`✅ Webhook successfully set to: ${webhookUrl}`);
                     break; // Exit loop on success
                 } catch (webhookError) {
                     attempts++;
-                    console.error(`â Webhook setup attempt ${attempts} failed:`, webhookError.message);
+                    console.error(`❌ Webhook setup attempt ${attempts} failed:`, webhookError.message);
                     if (attempts >= 3) {
-                         console.error("â Max webhook setup attempts reached. Exiting.");
+                         console.error("❌ Max webhook setup attempts reached. Exiting.");
                          throw webhookError; // Throw error to stop startup
                     }
                     // Wait before retrying
@@ -1994,15 +1996,15 @@ async function startServer() {
                 }
             }
         } else {
-             console.log("â¹ï¸ Not in Railway environment or domain not set, webhook not configured.");
+             console.log("ℹ️ Not in Railway environment or domain not set, webhook not configured.");
         }
 
         // Start the Express server
         const server = app.listen(PORT, "0.0.0.0", () => { // Listen on all interfaces
-            console.log(`ð Server running on port ${PORT}`);
+            console.log(`🚀 Server running on port ${PORT}`);
 
             // Start the payment monitor loop AFTER server starts listening
-            console.log(`âï¸ Starting payment monitor (Interval: ${monitorIntervalSeconds}s)`);
+            console.log(`⚙️ Starting payment monitor (Interval: ${monitorIntervalSeconds}s)`);
             // --- Logging Added Around Interval ---
             monitorInterval = setInterval(() => {
                  // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Fired (${monitorIntervalSeconds}s) ====`); // Reduce log noise
@@ -2022,7 +2024,7 @@ async function startServer() {
 
             // Run monitor once shortly after startup
             setTimeout(() => {
-                 console.log("âï¸ Performing initial payment monitor run...");
+                 console.log("⚙️ Performing initial payment monitor run...");
                  // Also wrap this initial call
                  try {
                       monitorPayments().catch(err => {
@@ -2037,17 +2039,17 @@ async function startServer() {
 
             // Start polling if webhook is NOT used (e.g., local development)
             if (!process.env.RAILWAY_ENVIRONMENT && !process.env.RAILWAY_PUBLIC_DOMAIN) { // Check domain too
-                console.log("â¹ï¸ Starting bot polling for local development...");
+                console.log("ℹ️ Starting bot polling for local development...");
                 // Delete any existing webhook first to avoid conflicts
                 bot.deleteWebHook({ drop_pending_updates: true })
                     .then(() => bot.startPolling())
-                    .then(() => console.log("â Bot polling started successfully"))
+                    .then(() => console.log("✅ Bot polling started successfully"))
                     .catch(err => {
-                         console.error("â Error starting polling:", err.message);
+                         console.error("❌ Error starting polling:", err.message);
                          // Handle specific polling errors if needed
                          if (err.message.includes('409 Conflict')) {
-                             console.error("âââ Conflict detected! Another instance might be polling.");
-                             process.exit(1);
+                             console.error("❌❌❌ Conflict detected! Another instance might be polling.");
+                             console.error("❌ Exiting due to missing environment variables."); process.exit(1);
                          }
                     });
             }
@@ -2055,24 +2057,24 @@ async function startServer() {
 
         // Handle server errors (e.g., port already in use)
         server.on('error', (err) => {
-            console.error('â Server error:', err);
+            console.error('❌ Server error:', err);
             if (err.code === 'EADDRINUSE') {
-                console.error(`âââ Port ${PORT} is already in use. Is another instance running? Exiting.`);
-                process.exit(1);
+                console.error(`❌❌❌ Port ${PORT} is already in use. Is another instance running? Exiting.`);
+                console.error("❌ Exiting due to missing environment variables."); process.exit(1);
             }
             // Handle other server errors if necessary
         });
 
     } catch (error) {
         // Catch errors during the overall startup process (DB init, webhook setup)
-        console.error("ð¥ð¥ð¥ Failed to start application:", error);
-        process.exit(1); // Exit if critical startup steps fail
+        console.error("🔥🔥🔥 Failed to start application:", error);
+        console.error("❌ Exiting due to missing environment variables."); process.exit(1); // Exit if critical startup steps fail
     }
 }
 
 // Graceful shutdown handler
 const shutdown = async (signal) => {
-    console.log(`\nð ${signal} received, shutting down gracefully...`);
+    console.log(`\n🛑 ${signal} received, shutting down gracefully...`);
     isMonitorRunning = true; // Prevent monitor from starting new cycle during shutdown
 
     // 1. Stop receiving new events/requests
@@ -2089,7 +2091,7 @@ const shutdown = async (signal) => {
                  console.log("- Removed Telegram webhook.");
                  webhookDeleted = true;
              } catch (whErr) {
-                 console.error("â ï¸ Error removing webhook:", whErr.message);
+                 console.error("⚠️ Error removing webhook:", whErr.message);
              }
          }
          // Only stop polling if webhook wasn't set/deleted OR if polling was explicitly started
@@ -2100,7 +2102,7 @@ const shutdown = async (signal) => {
          // Close Express server? (Usually handled by Railway/Docker itself)
          // server.close(() => console.log("- Express server closed."));
     } catch (e) {
-        console.error("â ï¸ Error stopping bot listeners:", e.message);
+        console.error("⚠️ Error stopping bot listeners:", e.message);
     }
 
     // 2. Wait for ongoing queue processing to finish (with timeout)
@@ -2117,7 +2119,7 @@ const shutdown = async (signal) => {
          ]);
          console.log("- All processing queues are idle.");
     } catch (queueError) {
-         console.warn("â ï¸ Timed out waiting for queues or queue error during shutdown:", queueError.message);
+         console.warn("⚠️ Timed out waiting for queues or queue error during shutdown:", queueError.message);
          // Clear queues to prevent processing during shutdown
          messageQueue.clear();
          paymentProcessor.highPriorityQueue.clear();
@@ -2129,11 +2131,11 @@ const shutdown = async (signal) => {
     console.log("Closing database pool...");
     try {
         await pool.end(); // Close all connections in the pool
-        console.log("â Database pool closed.");
+        console.log("✅ Database pool closed.");
     } catch (dbErr) {
-        console.error("â Error closing database pool:", dbErr);
+        console.error("❌ Error closing database pool:", dbErr);
     } finally {
-        console.log("ð Shutdown complete.");
+        console.log("🛑 Shutdown complete.");
         process.exit(0); // Exit cleanly
     }
 };
@@ -2144,25 +2146,8 @@ process.on('SIGTERM', () => shutdown('SIGTERM')); // Termination signal (e.g., f
 
 // Handle uncaught exceptions (log and attempt graceful shutdown)
 process.on('uncaughtException', (err, origin) => {
-    console.error(`ð¥ð¥ð¥ Uncaught Exception at: ${origin}`, err);
+    console.error(`🔥🔥🔥 Uncaught Exception at: ${origin}`, err);
     // Attempt graceful shutdown, but exit quickly if it fails
     shutdown('UNCAUGHT_EXCEPTION').catch(() => process.exit(1));
     setTimeout(() => process.exit(1), 10000).unref(); // Force exit after 10s if shutdown hangs
-});
-
-// Handle unhandled promise rejections (log them)
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('ð¥ð¥ð¥ Unhandled Rejection at:', promise, 'reason:', reason);
-    // Consider shutting down on unhandled rejections too? Maybe optional.
-    // shutdown('UNHANDLED_REJECTION').catch(() => process.exit(1));
-    // setTimeout(() => process.exit(1), 10000).unref();
-});
-
-// --- Start the Application ---
-startServer().then(() => {
-    console.log("ððð Solana Gambles Bot is up and running! ððð");
-}).catch(err => {
-    // This catch is for errors thrown *during* the async startServer call itself
-    console.error("ð¥ð¥ð¥ Application failed to initialize:", err);
-    process.exit(1);
 });
