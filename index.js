@@ -119,7 +119,7 @@ const performanceMonitor = {
     }
 };
 
-// --- Database Initialization ---
+// --- Database Initialization (Updated) ---
 async function initializeDatabase() {
     console.log("⚙️ Initializing Database schema...");
     let client;
@@ -142,7 +142,7 @@ async function initializeDatabase() {
                 paid_tx_signature TEXT UNIQUE,              -- Signature of the user's payment transaction
                 payout_tx_signature TEXT UNIQUE,            -- Signature of the bot's payout transaction (if win)
                 processed_at TIMESTAMPTZ,                   -- When the bet was fully resolved
-                fees_paid BIGINT,                           -- Estimated fees buffer associated with this bet
+                fees_paid BIGINT,                           -- <<< ADDED: Estimated fees buffer associated with this bet
                 priority INT DEFAULT 0                      -- Priority for processing (higher first)
             );
         `);
@@ -157,18 +157,23 @@ async function initializeDatabase() {
             );
         `);
 
-        // Add priority column if it doesn't exist (for backward compatibility)
-        await client.query(`
-            ALTER TABLE bets
-            ADD COLUMN IF NOT EXISTS priority INT DEFAULT 0;
-        `);
+        // --- MODIFICATION START ---
+        // Add columns using ALTER TABLE IF NOT EXISTS for backward compatibility
+        // This ensures columns are added even if the table was created previously without them.
+        await client.query(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS priority INT DEFAULT 0;`);
+        await client.query(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS fees_paid BIGINT;`); // <<< ADDED THIS LINE
+        // --- MODIFICATION END ---
+
 
         // Add indexes for performance on frequently queried columns
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_status ON bets(status);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_user_id ON bets(user_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_expires_at ON bets(expires_at);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_memo_id ON bets(memo_id);`); // Added index on memo_id
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_memo_id ON bets(memo_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_priority ON bets(priority);`);
+        // Optionally add index for fees_paid if needed later
+        // await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_fees_paid ON bets(fees_paid);`);
+
 
         console.log("✅ Database schema initialized/verified");
     } catch (err) {
@@ -178,7 +183,6 @@ async function initializeDatabase() {
         if (client) client.release(); // Release client back to the pool
     }
 }
-
 // --- Telegram Bot Initialization with Queue ---
 console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
