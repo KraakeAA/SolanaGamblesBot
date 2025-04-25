@@ -2151,3 +2151,20 @@ process.on('uncaughtException', (err, origin) => {
     shutdown('UNCAUGHT_EXCEPTION').catch(() => process.exit(1));
     setTimeout(() => process.exit(1), 10000).unref(); // Force exit after 10s if shutdown hangs
 });
+
+// Handle unhandled promise rejections (log them)
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('🔥🔥🔥 Unhandled Rejection at:', promise, 'reason:', reason);
+    // Consider shutting down on unhandled rejections too? Maybe optional.
+    // shutdown('UNHANDLED_REJECTION').catch(() => process.exit(1));
+    // setTimeout(() => process.exit(1), 10000).unref();
+});
+
+// --- Start the Application ---
+startServer().then(() => {
+    console.log("🚀🚀🚀 Solana Gambles Bot is up and running! 🚀🚀🚀");
+}).catch(err => {
+    // This catch is for errors thrown *during* the async startServer call itself
+    console.error("🔥🔥🔥 Application failed to initialize:", err);
+    console.error("❌ Exiting due to missing environment variables."); process.exit(1);
+});
