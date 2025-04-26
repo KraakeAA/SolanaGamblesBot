@@ -99,14 +99,14 @@ console.log("⚙️ Initializing scalable Solana connection...");
 // TODO: Consider implementing request prioritization (e.g., payouts > monitoring) within RateLimitedConnection.
 // TODO: Consider implementing exponential backoff within RateLimitedConnection for RPC errors.
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 2,           // Initial max parallel requests (can be boosted later)
-    retryBaseDelay: 600,        // Initial delay for retries (ms)
-    commitment: 'confirmed',    // Default commitment level
+    maxConcurrent: 2,          // Initial max parallel requests (can be boosted later)
+    retryBaseDelay: 600,       // Initial delay for retries (ms)
+    commitment: 'confirmed',   // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
         'solana-client': `SolanaGamblesBot/2.0.4 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info
     },
-    rateLimitCooloff: 10000,    // Pause duration after hitting rate limits (ms) - Changed back to 10000ms as per original structure.
+    rateLimitCooloff: 10000,     // Pause duration after hitting rate limits (ms) - Changed back to 10000ms as per original structure.
     disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
 });
 console.log("✅ Scalable Solana connection initialized");
@@ -123,9 +123,9 @@ console.log("✅ Message processing queue initialized");
 console.log("⚙️ Setting up optimized PostgreSQL Pool...");
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    max: 15,                    // Max connections in pool
-    min: 5,                     // Min connections maintained
-    idleTimeoutMillis: 30000,   // Close idle connections after 30s
+    max: 15,                       // Max connections in pool
+    min: 5,                        // Min connections maintained
+    idleTimeoutMillis: 30000,      // Close idle connections after 30s
     connectionTimeoutMillis: 5000, // Timeout for acquiring connection
     ssl: process.env.NODE_ENV === 'production' ? {
         rejectUnauthorized: false // Necessary for some cloud providers like Heroku/Railway
@@ -1076,6 +1076,9 @@ class PaymentProcessor {
                 signature,
                 { maxSupportedTransactionVersion: 0 }
             );
+            // --- PATCH START: Add Payment Debugging Logs ---
+            console.log(`[PAYMENT DEBUG] Fetched transaction for signature: ${signature}`);
+            // --- PATCH END ---
         } catch (fetchError) {
             console.error(`Failed to fetch TX ${signature}: ${fetchError.message}`);
             if (isRetryableError(fetchError) && attempt < 3) throw fetchError;
@@ -1100,6 +1103,9 @@ class PaymentProcessor {
 
         // 5. Find and validate the memo
         const memo = findMemoInTx(tx);
+        // --- PATCH START: Add Payment Debugging Logs ---
+        console.log(`[PAYMENT DEBUG] Found memo in TX: ${memo}`);
+        // --- PATCH END ---
         if (!memo) {
             // console.log(`Transaction ${signature} does not contain a valid game memo.`);
             processedSignaturesThisSession.add(signature); // Mark as processed
@@ -1108,6 +1114,9 @@ class PaymentProcessor {
 
         // 6. Find the corresponding bet in the database
         const bet = await findBetByMemo(memo);
+        // --- PATCH START: Add Payment Debugging Logs ---
+        console.log(`[PAYMENT DEBUG] Found pending bet ID: ${bet?.id} for memo: ${memo}`);
+        // --- PATCH END ---
         if (!bet) {
             console.warn(`No matching pending bet found for memo "${memo}" from TX ${signature}.`);
             processedSignaturesThisSession.add(signature); // Mark as processed
@@ -1156,11 +1165,16 @@ class PaymentProcessor {
 
         // 11. Mark bet as paid in DB
         const markResult = await markBetPaid(bet.id, signature);
+        // --- PATCH START: Add Payment Debugging Logs ---
+        if (markResult.success) {
+            console.log(`[PAYMENT DEBUG] Successfully marked bet ${bet.id} as paid with TX: ${signature}`);
+        }
+        // --- PATCH END ---
         if (!markResult.success) {
             console.error(`Failed to mark bet ${bet.id} as paid: ${markResult.error}`);
              if (markResult.error === 'Transaction signature already recorded' || markResult.error === 'Bet not found or already processed') {
-                  processedSignaturesThisSession.add(signature); // Add to cache on collision
-                  return { processed: false, reason: 'db_mark_paid_collision' };
+                 processedSignaturesThisSession.add(signature); // Add to cache on collision
+                 return { processed: false, reason: 'db_mark_paid_collision' };
              }
              // Don't add to cache on other DB errors, allow retry
             return { processed: false, reason: 'db_mark_paid_failed' };
@@ -1168,8 +1182,8 @@ class PaymentProcessor {
         // Add signature to session cache AFTER successful DB update
         processedSignaturesThisSession.add(signature);
          if (processedSignaturesThisSession.size > MAX_PROCESSED_SIGNATURES) {
-              console.log('Clearing processed signatures cache (reached max size)');
-              processedSignaturesThisSession.clear();
+             console.log('Clearing processed signatures cache (reached max size)');
+             processedSignaturesThisSession.clear();
          }
 
         // 12. Link wallet address to user ID
@@ -1285,8 +1299,8 @@ async function monitorPayments() {
                  // Filter out old transactions
                  const recentSignatures = signaturesForWallet.filter(sigInfo => {
                      if (sigInfo.blockTime && sigInfo.blockTime < botStartupTime - 60) {
-                          // console.log(`🕒 Skipping old TX for ${walletAddress}: ${sigInfo.signature}`);
-                          return false;
+                         // console.log(`🕒 Skipping old TX for ${walletAddress}: ${sigInfo.signature}`);
+                         return false;
                      }
                      return true;
                  });
@@ -2261,17 +2275,17 @@ async function handleBetRaceCommand(msg, args) {
 // Handles /help command
 async function handleHelpCommand(msg) {
     const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
-                           `/start - Show welcome message\n` +
-                           `/help - Show this help message\n\n` +
-                           `*Games:*\n` +
-                           `/coinflip - Show Coinflip game info & how to bet\n` +
-                           `/race - Show Horse Race game info & how to bet\n\n` +
-                           `*Betting:*\n` +
-                           `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
-                           `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
-                           `*Wallet:*\n` +
-                           `/wallet - View your linked Solana wallet for payouts\n\n` +
-                           `*Support:* If you encounter issues, please contact support.`; // Replace placeholder
+                             `/start - Show welcome message\n` +
+                             `/help - Show this help message\n\n` +
+                             `*Games:*\n` +
+                             `/coinflip - Show Coinflip game info & how to bet\n` +
+                             `/race - Show Horse Race game info & how to bet\n\n` +
+                             `*Betting:*\n` +
+                             `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
+                             `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
+                             `*Wallet:*\n` +
+                             `/wallet - View your linked Solana wallet for payouts\n\n` +
+                             `*Support:* If you encounter issues, please contact support.`; // Replace placeholder
 
     await safeSendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2315,8 +2329,8 @@ async function startPollingIfNeeded() {
         if (!info || !info.url) { // Start polling only if webhook is not set
              // Added check to prevent polling start if already polling
              if (bot.isPolling()) {
-                  console.log("ℹ️ Bot is already polling.");
-                  return;
+                 console.log("ℹ️ Bot is already polling.");
+                 return;
              }
             console.log("ℹ️ Webhook not set, starting bot polling...");
             await bot.deleteWebHook({ drop_pending_updates: true }); // Ensure no residual webhook
@@ -2326,8 +2340,8 @@ async function startPollingIfNeeded() {
             console.log(`ℹ️ Webhook is set (${info.url}), polling will not be started.`);
              // Ensure polling is stopped if webhook is somehow set later
              if (bot.isPolling()) {
-                  console.log("ℹ️ Stopping polling because webhook is set.");
-                  await bot.stopPolling({ cancel: true });
+                 console.log("ℹ️ Stopping polling because webhook is set.");
+                 await bot.stopPolling({ cancel: true });
              }
         }
     } catch (err) {
@@ -2349,13 +2363,13 @@ function startPaymentMonitor() {
     console.log(`⚙️ Starting payment monitor (Initial Interval: ${monitorIntervalSeconds}s)`);
     monitorInterval = setInterval(() => {
          try {
-              monitorPayments().catch(err => {
-                  console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
-                  performanceMonitor.logRequest(false);
-              });
+             monitorPayments().catch(err => {
+                 console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
+                 performanceMonitor.logRequest(false);
+             });
          } catch (syncErr) {
-              console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
-              performanceMonitor.logRequest(false);
+             console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
+             performanceMonitor.logRequest(false);
          }
     }, monitorIntervalSeconds * 1000);
 
@@ -2409,16 +2423,16 @@ const shutdown = async (signal, isRailwayRotation = false) => { // Added isRailw
         // Stop server from accepting new connections (wait for close)
         if (server) {
              await new Promise((resolve, reject) => {
-                  server.close((err) => {
-                       if (err) {
-                            console.error("⚠️ Error closing Express server:", err.message);
-                            return reject(err);
-                       }
-                       console.log("- Express server closed.");
-                       resolve();
-                  });
-                  // Add a timeout for server close
-                  setTimeout(() => reject(new Error('Server close timeout')), 5000).unref();
+                 server.close((err) => {
+                     if (err) {
+                         console.error("⚠️ Error closing Express server:", err.message);
+                         return reject(err);
+                     }
+                     console.log("- Express server closed.");
+                     resolve();
+                 });
+                 // Add a timeout for server close
+                 setTimeout(() => reject(new Error('Server close timeout')), 5000).unref();
              });
         }
 
@@ -2538,11 +2552,11 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
 
              // --- BONUS: Solana Connection Boost after 20s (Moved here from removed startServer) ---
              setTimeout(() => {
-                  if (solanaConnection && solanaConnection.options) {
-                       console.log("⚡ Boosting Solana connection concurrency...");
-                       solanaConnection.options.maxConcurrent = 5; // Increase max parallel requests
-                       console.log("✅ Solana maxConcurrent increased to 5");
-                  }
+                 if (solanaConnection && solanaConnection.options) {
+                     console.log("⚡ Boosting Solana connection concurrency...");
+                     solanaConnection.options.maxConcurrent = 5; // Increase max parallel requests
+                     console.log("✅ Solana maxConcurrent increased to 5");
+                 }
              }, 20000); // Boost after 20 seconds of being fully ready
 
             isFullyInitialized = true; // Mark as fully initialized *after* setup completes
@@ -2557,8 +2571,8 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
             await shutdown('INITIALIZATION_FAILURE', false).catch(() => process.exit(1)); // Attempt full shutdown
             // Ensure exit if shutdown hangs
              setTimeout(() => {
-                  console.error("Shutdown timed out after initialization failure. Forcing exit.");
-                  process.exit(1);
+                 console.error("Shutdown timed out after initialization failure. Forcing exit.");
+                 process.exit(1);
              }, 10000).unref();
         }
     }, 1000); // 1-second delay before starting heavy init
