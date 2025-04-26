@@ -356,42 +356,35 @@ const PRIORITY_FEE_RATE = 0.0001;
 
 // --- Helper Functions ---
 
-// --- START: Enhanced Memo Handling System ---
+// --- START: Updated Memo Handling System ---
 
-// Define Memo Program IDs (Note: User-provided function below only uses V2 ID string)
+// Define Memo Program IDs
 const MEMO_V1_PROGRAM_ID = new PublicKey("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo");
 const MEMO_V2_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 
-
 // 1. Revised Memo Generation with Checksum (Used for *generating* our memos)
 function generateMemoId(prefix = 'BET') {
+    // ... (Function remains the same as before)
     const validPrefixes = ['BET', 'CF', 'RA'];
     if (!validPrefixes.includes(prefix)) {
         prefix = 'BET';
     }
-
-    // Generate 8-byte random buffer (64-bit) instead of 6-byte
-    const randomBytes = crypto.randomBytes(8); // Use crypto directly
+    const randomBytes = crypto.randomBytes(8);
     const hexString = randomBytes.toString('hex').toUpperCase();
-
-    // Add simple checksum (last 2 chars of SHA256 hash)
-    const checksum = crypto.createHash('sha256') // Use crypto directly
+    const checksum = crypto.createHash('sha256')
         .update(hexString)
         .digest('hex')
         .slice(-2)
         .toUpperCase();
-
     return `${prefix}-${hexString}-${checksum}`;
 }
 
 // 2. Strict Memo Validation with Checksum Verification (Used only for validating OUR generated V1 format)
 function validateOriginalMemoFormat(memo) {
+    // ... (Function remains the same as before)
     if (typeof memo !== 'string') return false;
-
-    // Expected format: PREFIX-HEX16-CHECKSUM (e.g., CF-A1B2C3D4E5F6A7B8-9F)
     const parts = memo.split('-');
     if (parts.length !== 3) return false;
-
     const [prefix, hex, checksum] = parts;
     return (
         ['BET', 'CF', 'RA'].includes(prefix) &&
@@ -399,13 +392,14 @@ function validateOriginalMemoFormat(memo) {
         /^[A-F0-9]{16}$/.test(hex) &&
         checksum.length === 2 &&
         /^[A-F0-9]{2}$/.test(checksum) &&
-        validateMemoChecksum(hex, checksum) // Use checksum validator
+        validateMemoChecksum(hex, checksum)
     );
 }
 
-// New helper function to validate the checksum part
+// Helper function to validate the checksum part
 function validateMemoChecksum(hex, checksum) {
-    const expectedChecksum = crypto.createHash('sha256') // Use crypto directly
+    // ... (Function remains the same as before)
+     const expectedChecksum = crypto.createHash('sha256')
         .update(hex)
         .digest('hex')
         .slice(-2)
@@ -414,127 +408,169 @@ function validateMemoChecksum(hex, checksum) {
 }
 
 
-// 3. Robust Memo Normalization with Fallbacks (Not used by the user-provided findMemoInTx below)
+// 3. Robust Memo Normalization with Fallbacks (Primarily for handling potential V1 memos)
 function normalizeMemo(rawMemo) {
+    // ... (Function remains the same as before - handles V1 specifics)
     if (typeof rawMemo !== 'string') return null;
-
-    // Cleanup steps
     let memo = rawMemo
         .trim()
-        .replace(/^memo[:=\s]*/i, '') // More flexible prefix removal
-        .replace(/^text[:=\s]*/i, '') // Handle text prefix
-        .replace(/[\u200B-\u200D\uFEFF]/g, '') // Remove zero-width chars often added by wallets
-        .replace(/\s+/g, '-') // Replace multiple whitespace chars with a single hyphen
-        .replace(/[^a-zA-Z0-9\-]/g, '') // Remove remaining invalid characters aggressively
-        .toUpperCase(); // Standardize case early
-
-    // --- Start: Logic specific to V1 memo recovery/validation ---
-    // Attempt to parse based on expected format (PREFIX-HEX16-CHECKSUM)
-    const parts = memo.split('-').filter(p => p.length > 0); // Split and remove empty segments
-
-    // Checksum Correction/Validation for potential V1 formats
+        .replace(/^memo[:=\s]*/i, '')
+        .replace(/^text[:=\s]*/i, '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/[^a-zA-Z0-9\-]/g, '')
+        .toUpperCase();
+    const parts = memo.split('-').filter(p => p.length > 0);
     if (parts.length === 3) {
         const [prefix, hex, checksum] = parts;
-        if (['BET', 'CF', 'RA'].includes(prefix) &&
-            hex.length === 16 && /^[A-F0-9]{16}$/.test(hex) &&
-            checksum.length === 2 && /^[A-F0-9]{2}$/.test(checksum)) {
-
-            if (validateMemoChecksum(hex, checksum)) {
-                return `${prefix}-${hex}-${checksum}`; // Perfect V1 format, pass
-            } else {
-                // Try correcting checksum - only relevant if we assume it *should* be V1 format
+        if (['BET', 'CF', 'RA'].includes(prefix) && hex.length === 16 && /^[A-F0-9]{16}$/.test(hex) && checksum.length === 2 && /^[A-F0-9]{2}$/.test(checksum)) {
+            if (validateMemoChecksum(hex, checksum)) return `${prefix}-${hex}-${checksum}`;
+            else {
                 const correctedChecksum = crypto.createHash('sha256').update(hex).digest('hex').slice(-2).toUpperCase();
                 const recoveredMemo = `${prefix}-${hex}-${correctedChecksum}`;
-                 console.warn(`⚠️ Memo checksum mismatch for potential V1 format "${memo}". Corrected: ${recoveredMemo}`);
-                return recoveredMemo; // Return corrected V1 format
+                console.warn(`⚠️ Memo checksum mismatch for potential V1 format "${memo}". Corrected: ${recoveredMemo}`);
+                return recoveredMemo;
             }
         }
     }
-    // Recovery Case 1: Missing checksum (assume V1 intention)
-     if (parts.length === 2) {
-         const [prefix, hex] = parts;
-         if (['BET', 'CF', 'RA'].includes(prefix) && hex.length === 16 && /^[A-F0-9]{16}$/.test(hex)) {
-             console.warn(`Attempting to recover V1 memo "${memo}": Missing checksum. Calculating...`);
-             const expectedChecksum = crypto.createHash('sha256').update(hex).digest('hex').slice(-2).toUpperCase();
-             const recoveredMemo = `${prefix}-${hex}-${expectedChecksum}`;
-             console.warn(`Recovered V1 memo as: ${recoveredMemo}`);
-             return recoveredMemo;
-         }
-     }
-     // Recovery Case 2: Extra segments (assume V1 intention)
-     if (parts.length > 3) {
-       const prefix = parts[0];
-       if (['BET', 'CF', 'RA'].includes(prefix)) {
-           const potentialHex = parts.slice(1, -1).join('');
-           const potentialChecksum = parts.slice(-1)[0];
-           if (potentialHex.length === 16 && /^[A-F0-9]{16}$/.test(potentialHex) &&
-               potentialChecksum.length === 2 && /^[A-F0-9]{2}$/.test(potentialChecksum)) {
-               if (validateMemoChecksum(potentialHex, potentialChecksum)) {
-                   const recoveredMemo = `${prefix}-${potentialHex}-${potentialChecksum}`;
+    if (parts.length === 2) {
+        const [prefix, hex] = parts;
+        if (['BET', 'CF', 'RA'].includes(prefix) && hex.length === 16 && /^[A-F0-9]{16}$/.test(hex)) {
+            console.warn(`Attempting to recover V1 memo "${memo}": Missing checksum. Calculating...`);
+            const expectedChecksum = crypto.createHash('sha256').update(hex).digest('hex').slice(-2).toUpperCase();
+            const recoveredMemo = `${prefix}-${hex}-${expectedChecksum}`;
+            console.warn(`Recovered V1 memo as: ${recoveredMemo}`);
+            return recoveredMemo;
+        }
+    }
+    if (parts.length > 3) {
+        const prefix = parts[0];
+        if (['BET', 'CF', 'RA'].includes(prefix)) {
+            const potentialHex = parts.slice(1, -1).join('');
+            const potentialChecksum = parts.slice(-1)[0];
+            if (potentialHex.length === 16 && /^[A-F0-9]{16}$/.test(potentialHex) && potentialChecksum.length === 2 && /^[A-F0-9]{2}$/.test(potentialChecksum)) {
+                if (validateMemoChecksum(potentialHex, potentialChecksum)) {
+                    const recoveredMemo = `${prefix}-${potentialHex}-${potentialChecksum}`;
                     console.warn(`Recovered V1 memo from extra segments "${memo}" to: ${recoveredMemo}`);
-                   return recoveredMemo;
-               }
-           }
-       }
-     }
-    // --- End: Logic specific to V1 memo recovery/validation ---
-
-    // If it didn't match V1 recovery/validation patterns, return the cleaned-up memo as is.
-    // console.log(`Memo "${rawMemo}" normalized to: ${memo}`);
-    return memo && memo.length > 0 ? memo : null; // Return cleaned memo if not empty, else null
+                    return recoveredMemo;
+                }
+            }
+        }
+    }
+    return memo && memo.length > 0 ? memo : null;
 }
 
 
-// 4. Transaction Memo Search (USER-PROVIDED VERSION)
-async function findMemoInTx(tx) {
+// 4. DEBUGGED Transaction Memo Search (Handles V1 & V2 correctly)
+async function findMemoInTx(tx) { // Changed back to async just in case, though not strictly needed here
     if (!tx || !tx.transaction || !tx.transaction.message || !tx.transaction.message.instructions) {
+        console.log("[MEMO DEBUG] Transaction structure invalid or missing instructions.");
         return null;
     }
 
-    // --- NOTE: This line might be problematic if tx.transaction.message.instructions
-    // ---       is not directly available or populated in the parsed transaction format.
-    // ---       The previous version accessed it differently.
-    const instructions = tx.transaction.message.instructions;
-
-    for (const inst of instructions) {
+    // Helper to robustly get PublicKey object from accountKeys array using index
+    const getProgramIdFromIndex = (index, message) => {
+        if (!message || !message.accountKeys || index === undefined || index < 0 || index >= message.accountKeys.length) return null;
         try {
-            // Check if this is a Memo V1 or Memo V2 Program instruction
-            // --- NOTE: This assumes `inst.programId` exists and has a `toString()` method.
-            // ---       It also assumes `inst.programId` will be populated directly,
-            // ---       which might not be true for parsed transactions (might use programIdIndex).
-            // ---       It also *only* checks for the V2 Program ID string.
-            const programId = inst.programId.toString();
+             const keyInfo = message.accountKeys[index];
+             // Handle different possible structures returned by getParsedTransaction
+             if (keyInfo instanceof PublicKey) return keyInfo;
+             if (keyInfo?.pubkey instanceof PublicKey) return keyInfo.pubkey;
+             // Fallback for base58 strings (less common in getParsedTransaction v0)
+             if (typeof keyInfo === 'string') return new PublicKey(keyInfo);
+             if (typeof keyInfo?.pubkey === 'string') return new PublicKey(keyInfo.pubkey);
+        } catch (e) {
+            console.error(`[MEMO DEBUG] Error creating PublicKey from accountKeys[${index}]:`, e?.message);
+        }
+        return null;
+    };
 
-            if (
-                programId === 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr' // Memo V2 string ID
-            ) {
-                let memoData = '';
+    // Iterate through instructions
+    // Note: getParsedTransaction returns CompiledInstruction[] which might use programIdIndex
+    for (const inst of tx.transaction.message.instructions) {
+        let programId = null;
+        let instructionDataB64 = null; // Store potential data
 
-                // --- NOTE: Assumes `inst.data` contains the base64 encoded memo.
-                if (inst.data) {
-                    // Memo V2: data is expected to be base64, decode it
-                    const decoded = Buffer.from(inst.data, 'base64').toString('utf-8').trim();
-                    memoData = decoded;
-                }
+        try {
+            // Attempt to get the program ID PublicKey robustly
+            programId = getProgramIdFromIndex(inst.programIdIndex, tx.transaction.message);
 
-                if (memoData) {
-                    console.log(`[MEMO DEBUG UserProvided] Found V2 memo: ${memoData}`); // Added log
-                    return memoData; // Return the decoded memo directly
-                }
+            // If programId couldn't be found via index, skip this instruction
+            if (!programId) {
+                 // console.log("[MEMO DEBUG] Could not determine program ID for instruction:", inst);
+                continue;
             }
-            // --- NOTE: No handling for Memo V1 Program ID ---
+
+            // Store data if it exists (might be base64 string or array)
+            instructionDataB64 = inst.data; // Usually base64 string in getParsedTransaction
+
+            // --- V2 Check ---
+            if (programId.equals(MEMO_V2_PROGRAM_ID)) {
+                if (instructionDataB64 && typeof instructionDataB64 === 'string') {
+                    try {
+                        const memoString = Buffer.from(instructionDataB64, 'base64').toString('utf8').trim();
+                        if (memoString) {
+                            console.log(`[MEMO DEBUG] Found V2 memo: "${memoString}"`);
+                            return memoString; // ✅ Accept trimmed V2 memo directly
+                        } else {
+                            console.log("[MEMO DEBUG] V2 Memo instruction found but decoded data is empty.");
+                        }
+                    } catch (decodeError) {
+                        console.error("[MEMO DEBUG] Error decoding V2 Memo data:", decodeError);
+                        // Log raw data on decoding error, as requested
+                        console.error("[MEMO DEBUG] Raw V2 instruction data on error:", instructionDataB64);
+                        // Continue to next instruction instead of throwing
+                    }
+                } else {
+                    console.log("[MEMO DEBUG] V2 Memo instruction found but missing data field or data is not a string:", instructionDataB64);
+                }
+                continue; // Move to next instruction after handling V2 possibility
+            }
+
+            // --- V1 Check ---
+            if (programId.equals(MEMO_V1_PROGRAM_ID)) {
+                if (instructionDataB64 && typeof instructionDataB64 === 'string') {
+                    try {
+                        const rawDecodedMemo = Buffer.from(instructionDataB64, 'base64').toString('utf8');
+                        const normalized = normalizeMemo(rawDecodedMemo); // Apply V1 recovery/validation
+                        if (normalized) {
+                            console.log(`[MEMO DEBUG] Found and normalized V1 memo: "${normalized}" (Raw: "${rawDecodedMemo}")`);
+                            return normalized; // ✅ Return normalized V1 memo
+                        } else {
+                             console.log(`[MEMO DEBUG] V1 Memo instruction found but normalization resulted in empty memo (Raw: "${rawDecodedMemo}")`);
+                        }
+                    } catch (decodeError) {
+                        console.error("[MEMO DEBUG] Error decoding/normalizing V1 Memo data:", decodeError);
+                         // Log raw data on decoding error, as requested
+                        console.error("[MEMO DEBUG] Raw V1 instruction data on error:", instructionDataB64);
+                         // Continue to next instruction
+                    }
+                } else {
+                     console.log("[MEMO DEBUG] V1 Memo instruction found but missing data field or data is not a string:", instructionDataB64);
+                }
+                continue; // Move to next instruction after handling V1 possibility
+            }
+
+            // If program ID is neither V1 nor V2, ignore this instruction
+            // console.log(`[MEMO DEBUG] Instruction with programId ${programId.toBase58()} is not Memo V1 or V2.`);
+
         } catch (err) {
-            // --- NOTE: Changed error log source identifier ---
-            console.error('[MEMO DEBUG UserProvided] Failed to process memo instruction', err);
-            continue; // Original code had `continue;` here implicitly if error happens before check
+            // Catch errors during the processing of a single instruction (e.g., getting programId)
+            console.error("[MEMO DEBUG] General error processing instruction:", err);
+            // Log raw data if available
+            if (instructionDataB64) {
+                 console.error("[MEMO DEBUG] Raw instruction data on general error:", instructionDataB64);
+            } else {
+                 console.error("[MEMO DEBUG] Instruction details on general error:", inst);
+            }
+            // Continue to the next instruction
         }
     }
 
-    console.log("[MEMO DEBUG UserProvided] No V2 memo found in transaction instructions."); // Changed log
-    return null; // No memo found
+    console.log("[MEMO DEBUG] No V1 or V2 memo found in any transaction instruction.");
+    return null; // Return null if no relevant memo instruction found after checking all
 }
-// --- END: Enhanced Memo Handling System ---
-
+// --- END: Updated Memo Handling System ---
 
 // --- Database Operations ---
 
