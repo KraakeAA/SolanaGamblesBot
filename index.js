@@ -1184,15 +1184,15 @@ let isMonitorRunning = false; // Flag to prevent concurrent monitor runs
 // [PATCHED: TRACK BOT START TIME]
 const botStartupTime = Math.floor(Date.now() / 1000); // Timestamp in seconds
 
-let monitorIntervalSeconds = 30; // Initial interval - Will be adjusted by new monitor logic
+let monitorIntervalSeconds = 60; // Start with the increased interval
 let monitorInterval = null; // Holds the setInterval ID
 
-// *** UPDATED FUNCTION with the LATEST logic from user (using per-wallet pagination) ***
+// *** UPDATED FUNCTION with NEW Retry/Cooldown Logic ***
 async function monitorPayments() {
-    // console.log(`[${new Date().toISOString()}] ---- monitorPayments function START ----`); // Reduce log noise
+    // console.log(`[${new Date().toISOString()}] ---- monitorPayments function START ----`);
 
     if (isMonitorRunning) {
-        // console.log('[Monitor] Cycle already running, skipping.'); // Reduce noise
+        // console.log('[Monitor] Cycle already running, skipping.');
         return;
     }
     if (!isFullyInitialized) {
@@ -1202,30 +1202,29 @@ async function monitorPayments() {
 
     isMonitorRunning = true;
     const startTime = Date.now();
-    let signaturesFoundThisCycle = 0; // Count total signatures found across wallets
+    let signaturesFoundThisCycle = 0;
 
     try {
         // --- START: Adaptive Rate Limiting Logic (Kept for stability) ---
         const currentLoad = paymentProcessor.highPriorityQueue.pending +
                             paymentProcessor.normalQueue.pending +
-                            paymentProcessor.highPriorityQueue.size + // Include active items too
+                            paymentProcessor.highPriorityQueue.size +
                             paymentProcessor.normalQueue.size;
-        const baseDelay = 500; // Minimum delay between cycles (ms)
-        const delayPerItem = 100; // Additional delay per queued/active item (ms)
-        const maxThrottleDelay = 10000; // Max delay (10 seconds)
+        const baseDelay = 500;
+        const delayPerItem = 100;
+        const maxThrottleDelay = 10000;
         const throttleDelay = Math.min(maxThrottleDelay, baseDelay + currentLoad * delayPerItem);
-        if (throttleDelay > baseDelay) { // Only log if throttling beyond base delay
+        if (throttleDelay > baseDelay) {
             console.log(`[Monitor] Queues have ${currentLoad} pending/active items. Throttling monitor check for ${throttleDelay}ms.`);
             await new Promise(resolve => setTimeout(resolve, throttleDelay));
         } else {
-            await new Promise(resolve => setTimeout(resolve, baseDelay)); // Always enforce base delay
+            await new Promise(resolve => setTimeout(resolve, baseDelay));
         }
         // --- END: Adaptive Rate Limiting Logic ---
 
-        // --- Core Logic from User Snippet (Adapted) ---
+        // --- Core Logic from New Snippet ---
         console.log("⚙️ Performing payment monitor run...");
 
-        // Define wallets inside the function
         const monitoredWallets = [
              { address: process.env.MAIN_WALLET_ADDRESS, type: 'coinflip', priority: 0 },
              { address: process.env.RACE_WALLET_ADDRESS, type: 'race', priority: 0 },
@@ -1233,15 +1232,15 @@ async function monitorPayments() {
 
         for (const wallet of monitoredWallets) {
             const walletAddress = wallet.address;
-            let signaturesForWallet = []; // Keep track for logging/counting
-            try {
-                let options = { limit: 50 }; // Fetch reasonable batch size
+            let signaturesForWallet = [];
+            try { // Added inner try/catch for individual wallet fetch robustness
+                let options = { limit: 50 }; // Fetch reasonable batch size (adjust from snippet's 100 if needed)
 
-                // Use the per-wallet 'before' signature for pagination
                 if (lastProcessedSignature[walletAddress]) {
                     options.before = lastProcessedSignature[walletAddress];
                 }
-                console.log(`[Monitor] Checking ${wallet.type} wallet (${walletAddress}) for signatures before: ${options.before || 'Start'}`); // Log pagination state
+                // Log is slightly different from snippet but conveys same info
+                console.log(`[Monitor] Checking ${wallet.type} wallet (${walletAddress}) for signatures before: ${options.before || 'Start'}`);
 
                 signaturesForWallet = await solanaConnection.getSignaturesForAddress(
                     new PublicKey(walletAddress),
@@ -1249,39 +1248,36 @@ async function monitorPayments() {
                 );
 
                 if (!signaturesForWallet || signaturesForWallet.length === 0) {
-                    // console.log(`ℹ️ No new signatures for ${walletAddress} before ${options.before || 'Start'}.`);
+                    // console.log(`ℹ️ No new signatures for ${walletAddress}.`); // Reduce noise
                     continue; // Skip to next wallet
                 }
 
-                 // Filter out old transactions
+                // Filter out old transactions (Kept from previous state)
                 const recentSignatures = signaturesForWallet.filter(sigInfo => {
                     if (sigInfo.blockTime && sigInfo.blockTime < botStartupTime - 60) {
-                         // console.log(`🕒 Skipping old TX for ${walletAddress}: ${sigInfo.signature}`);
-                         return false;
+                        return false;
                     }
                     return true;
                 });
 
                 if (recentSignatures.length === 0) {
-                     console.log(`ℹ️ No RECENT signatures for ${walletAddress} after filtering.`);
-                     // Update pagination marker even if all fetched were old
-                     lastProcessedSignature[walletAddress] = signaturesForWallet[0].signature;
-                     continue;
+                    console.log(`ℹ️ No RECENT signatures for ${walletAddress} after filtering.`);
+                    lastProcessedSignature[walletAddress] = signaturesForWallet[0].signature;
+                    continue;
                 }
 
                 console.log(`✅ Found ${recentSignatures.length} potentially new signatures for ${walletAddress}.`);
                 signaturesFoundThisCycle += recentSignatures.length;
 
-                // Process oldest first by reversing the array
+                // Process oldest first (Kept from previous state)
                 recentSignatures.reverse();
 
                 for (const sigInfo of recentSignatures) {
-                    // Double check session cache before queuing
+                    // Check session cache (Kept from previous state)
                     if (processedSignaturesThisSession.has(sigInfo.signature)) {
-                        // console.log(`Sig ${sigInfo.signature} already processed this session, skipping queue.`);
                         continue;
                     }
-                    // Adapt the call to match the expected job object format
+                    // Adapt paymentProcessor call (Necessary adaptation)
                     await paymentProcessor.addPaymentJob({
                         type: 'monitor_payment',
                         signature: sigInfo.signature,
@@ -1291,61 +1287,92 @@ async function monitorPayments() {
                     });
                 }
 
-                // Update last processed signature for this wallet to the newest one *received*
+                // Update last processed signature (Matches snippet)
                 lastProcessedSignature[walletAddress] = signaturesForWallet[0].signature;
                 console.log(`[Monitor] Updated last signature for ${walletAddress} to: ${lastProcessedSignature[walletAddress]}`);
 
-            } catch (error) {
-                // Catch errors during signature fetching for a specific wallet
-                if (error?.message?.includes('429') || error?.code === 429 || error?.statusCode === 429) {
-                    console.warn(`⚠️ Solana RPC 429 Too Many Requests detected fetching for ${walletAddress}. Backing off monitor...`);
-                    monitorIntervalSeconds = Math.min(monitorIntervalSeconds + 10, 60);
-                    console.log(`ℹ️ New monitor interval after backoff: ${monitorIntervalSeconds}s`);
-                    if (monitorInterval) clearInterval(monitorInterval);
-                    monitorInterval = setInterval(() => {
-                        monitorPayments().catch(err => console.error('❌ [FATAL MONITOR ERROR in setInterval catch]:', err));
-                    }, monitorIntervalSeconds * 1000);
-                    await new Promise(resolve => setTimeout(resolve, 15000));
-                    isMonitorRunning = false;
-                    return; // Exit monitor function for this cycle
-                } else {
-                    console.error(`[Monitor] Error fetching/processing signatures for wallet ${walletAddress}:`, error.message);
-                    performanceMonitor.logRequest(false);
-                    // Continue to the next wallet
-                }
+            } catch(walletError) {
+                // Catch errors for individual wallet fetch/process BEFORE the main catch block
+                 console.error(`[Monitor] Error processing wallet ${walletAddress}:`, walletError.message);
+                 performanceMonitor.logRequest(false);
+                 // Decide if we should re-throw or just continue to next wallet
+                 // Let's re-throw for now so the main catch block handles 429s globally
+                 throw walletError;
             }
-        } // End loop through wallets
+        } // End wallet loop
 
-        console.log(`[Monitor] Cycle finished.`);
+        console.log(`[Monitor] Cycle finished successfully.`);
 
-        if (monitorIntervalSeconds >= 50) {
-            console.warn(`⚠️ Warning: Monitor interval high (${monitorIntervalSeconds}s). RPC may be struggling.`);
+        // Reset retry counter after a fully successful cycle (Matches snippet)
+        if (retryCount > 0) {
+             console.log(`[Monitor] Resetting 429 retry count.`);
         }
-       // --- End Core Logic from User Snippet ---
+        retryCount = 0;
+
+        // Warning check from snippet
+        if (monitorIntervalSeconds >= 50) {
+            console.warn(`⚠️ Warning: Monitor interval very high (${monitorIntervalSeconds}s).`);
+        }
+       // --- End Core Logic ---
 
     } catch (err) {
-         // General error handling
-        console.error('❌ MonitorPayments Error in main block:', err);
-        performanceMonitor.logRequest(false);
+        // --- New Error Handling Logic ---
+        console.error('❌ MonitorPayments cycle error:', err?.message || err); // Log error message
+        performanceMonitor.logRequest(false); // Log failed cycle attempt
 
-         if (err?.message?.includes('429') || err?.code === 429 || err?.statusCode === 429) {
-            console.warn('⚠️ Solana RPC 429 Too Many Requests detected in main block. Backing off monitor...');
-            monitorIntervalSeconds = Math.min(monitorIntervalSeconds + 10, 60);
-            console.log(`ℹ️ New monitor interval after backoff: ${monitorIntervalSeconds}s`);
-             if (monitorInterval) clearInterval(monitorInterval);
-             monitorInterval = setInterval(() => {
-                 monitorPayments().catch(err => console.error('❌ [FATAL MONITOR ERROR in setInterval catch]:', err));
-             }, monitorIntervalSeconds * 1000);
-            await new Promise(resolve => setTimeout(resolve, 15000));
+        if (err?.message?.includes('429') || err?.code === 429 || err?.statusCode === 429) { // More robust 429 check
+            retryCount += 1;
+            console.warn(`⚠️ Solana RPC 429 detected. Retry count: ${retryCount}.`);
+
+            // Increase interval (Matches snippet)
+            const oldInterval = monitorIntervalSeconds;
+            monitorIntervalSeconds = Math.min(monitorIntervalSeconds + 10, 60); // Cap at 60s
+            console.log(`ℹ️ Increased monitor interval from ${oldInterval}s to ${monitorIntervalSeconds}s due to 429.`);
+
+            // Re-schedule the interval timer ONLY if it changed
+            if (oldInterval !== monitorIntervalSeconds && monitorInterval) {
+                 clearInterval(monitorInterval);
+                 monitorInterval = setInterval(() => {
+                     monitorPayments().catch(innerErr => console.error('❌ [FATAL MONITOR ERROR in setInterval catch]:', innerErr));
+                 }, monitorIntervalSeconds * 1000);
+                 console.log(`ℹ️ Monitor interval rescheduled to ${monitorIntervalSeconds}s.`);
+            }
+
+
+            if (retryCount >= 5) {
+                console.warn(`⏳ Persistent 429s (${retryCount} attempts). Sleeping monitor for 30 seconds to cool down...`);
+                await new Promise(resolve => setTimeout(resolve, 30000)); // Sleep 30 seconds
+                console.log(`[Monitor] Resuming monitor checks after 30s cooldown.`);
+                retryCount = 0; // Reset after sleep
+            } else {
+                // Normal cooldown after a 429 before next attempt (interval handles frequency)
+                console.log(`[Monitor] Cooling down for 15s after 429 before potentially retrying...`);
+                await new Promise(resolve => setTimeout(resolve, 15000));
+            }
+        } else {
+            // Handle non-429 errors caught by the outer block
+            console.error('❌ Non-429 error during monitor cycle:', err);
+            // Reset retry count for non-429 errors? Optional, but probably makes sense.
+            retryCount = 0;
+             // Consider adding a shorter delay even for non-429 errors before the next cycle
+             await new Promise(resolve => setTimeout(resolve, 5000)); // e.g., wait 5s
         }
+        // --- End New Error Handling Logic ---
     } finally {
         isMonitorRunning = false; // Release the lock
         const duration = Date.now() - startTime;
-        console.log(`[Monitor] Cycle completed in ${duration}ms. Found ${signaturesFoundThisCycle} total signatures across wallets.`);
+        // Log duration regardless of success/failure for this cycle attempt
+        console.log(`[Monitor] Cycle attempt completed in ${duration}ms. Found ${signaturesFoundThisCycle} total signatures.`);
     }
 }
 // *** END UPDATED FUNCTION ***
 
+// --- adjustMonitorInterval function remains commented out ---
+/*
+function adjustMonitorInterval(processedCount) {
+    // ...
+}
+*/
 
 // Adjusts the monitor interval based on how many new signatures were found
 /* <<<< COMMENTED OUT - Monitor logic now handles interval adjustment internally for 429 errors >>>>
