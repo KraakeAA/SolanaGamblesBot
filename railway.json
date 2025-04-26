@@ -1,16 +1,56 @@
 {
+  "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "env": {
-      "NODE_ENV": "production"
+    "builder": "nixpacks",
+    "buildCommand": "npm install",
+    "installCommand": "npm install",
+    "startCommand": "node index.js",
+    "nixpacks": {
+      "providers": ["node", "postgresql"]
     }
   },
   "deploy": {
-    "startCommand": "node index.js",
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 5,
-    "healthcheckPath": "/health",
-    "healthcheckTimeout": 15,
-    "healthcheckMaxRetries": 2,
-    "healthcheckDelay": 5
-  }
-}
+    "restartPolicyMaxRetries": 10
+  },
+  "environments": {
+    "production": {
+      "variables": {
+        "NODE_ENV": "production",
+        "PGSSLMODE": "require"
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "postgresql",
+      "enabled": true
+    }
+  ],
+  "checks": {
+    "healthcheck": {
+      "type": "http",
+      "path": "/health",
+      "interval": 5,
+      "timeout": 2,
+      "initialDelay": 5
+    }
+  },
+  "probes": {
+    "liveness": {
+      "type": "http",
+      "path": "/health",
+      "initialDelaySeconds": 5,
+      "periodSeconds": 10,
+      "timeoutSeconds": 2,
+      "successThreshold": 1,
+      "failureThreshold": 3
+    },
+    "readiness": {
+      "type": "http",
+      "path": "/health",
+      "initialDelaySeconds": 5,
+      "periodSeconds": 10,
+      "timeoutSeconds": 2,
+      "successThreshold": 1,
+      "
