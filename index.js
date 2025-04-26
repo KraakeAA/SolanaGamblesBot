@@ -2432,8 +2432,3 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
 // Handle server startup errors (like EADDRINUSE) which happen *before* the listen callback
 server.on('error', (err) => {
     console.error('❌ Server startup error:', err);
-    if (err.code === 'EADDRINUSE') {
-        console.error(`❌❌❌ Port ${PORT} is already in use. Exiting.`);
-    }
-    process.exit(1); // Exit on any server startup error
-});
