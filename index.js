@@ -99,14 +99,14 @@ console.log("⚙️ Initializing scalable Solana connection...");
 // TODO: Consider implementing request prioritization (e.g., payouts > monitoring) within RateLimitedConnection.
 // TODO: Consider implementing exponential backoff within RateLimitedConnection for RPC errors.
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 2,          // Initial max parallel requests (can be boosted later)
-    retryBaseDelay: 600,       // Initial delay for retries (ms)
-    commitment: 'confirmed',   // Default commitment level
+    maxConcurrent: 2,           // Initial max parallel requests (can be boosted later)
+    retryBaseDelay: 600,        // Initial delay for retries (ms)
+    commitment: 'confirmed',    // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
         'solana-client': `SolanaGamblesBot/2.0.4 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info
     },
-    rateLimitCooloff: 10000,   // Pause duration after hitting rate limits (ms) - Changed back to 10000ms as per original structure.
+    rateLimitCooloff: 10000,    // Pause duration after hitting rate limits (ms) - Changed back to 10000ms as per original structure.
     disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
 });
 console.log("✅ Scalable Solana connection initialized");
@@ -115,7 +115,7 @@ console.log("✅ Scalable Solana connection initialized");
 // 2. Message Processing Queue (for handling Telegram messages)
 const messageQueue = new PQueue({
     concurrency: 5,   // Max concurrent messages processed
-    timeout: 10000     // Max time per message task (ms)
+    timeout: 10000    // Max time per message task (ms)
 });
 console.log("✅ Message processing queue initialized");
 
@@ -123,9 +123,9 @@ console.log("✅ Message processing queue initialized");
 console.log("⚙️ Setting up optimized PostgreSQL Pool...");
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    max: 15,                   // Max connections in pool
-    min: 5,                    // Min connections maintained
-    idleTimeoutMillis: 30000,  // Close idle connections after 30s
+    max: 15,                    // Max connections in pool
+    min: 5,                     // Min connections maintained
+    idleTimeoutMillis: 30000,   // Close idle connections after 30s
     connectionTimeoutMillis: 5000, // Timeout for acquiring connection
     ssl: process.env.NODE_ENV === 'production' ? {
         rejectUnauthorized: false // Necessary for some cloud providers like Heroku/Railway
@@ -166,31 +166,31 @@ async function initializeDatabase() {
         // Bets Table: Tracks individual game bets
         await client.query(`
             CREATE TABLE IF NOT EXISTS bets (
-                id SERIAL PRIMARY KEY,                   -- Unique bet identifier
-                user_id TEXT NOT NULL,                   -- Telegram User ID
-                chat_id TEXT NOT NULL,                   -- Telegram Chat ID
-                game_type TEXT NOT NULL,                 -- 'coinflip' or 'race'
-                bet_details JSONB,                       -- Game-specific details (choice, horse, odds)
-                expected_lamports BIGINT NOT NULL,       -- Amount user should send (in lamports)
-                memo_id TEXT UNIQUE NOT NULL,            -- Unique memo for payment tracking
-                status TEXT NOT NULL,                    -- Bet status (e.g., 'awaiting_payment', 'completed_win_paid', 'error_...')
+                id SERIAL PRIMARY KEY,                      -- Unique bet identifier
+                user_id TEXT NOT NULL,                      -- Telegram User ID
+                chat_id TEXT NOT NULL,                      -- Telegram Chat ID
+                game_type TEXT NOT NULL,                    -- 'coinflip' or 'race'
+                bet_details JSONB,                          -- Game-specific details (choice, horse, odds)
+                expected_lamports BIGINT NOT NULL,          -- Amount user should send (in lamports)
+                memo_id TEXT UNIQUE NOT NULL,               -- Unique memo for payment tracking
+                status TEXT NOT NULL,                       -- Bet status (e.g., 'awaiting_payment', 'completed_win_paid', 'error_...')
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- When the bet was initiated
-                expires_at TIMESTAMPTZ NOT NULL,         -- When the payment window closes
-                paid_tx_signature TEXT UNIQUE,           -- Signature of the user's payment transaction
-                payout_tx_signature TEXT UNIQUE,         -- Signature of the bot's payout transaction (if win)
-                processed_at TIMESTAMPTZ,                -- When the bet was fully resolved
-                fees_paid BIGINT,                        -- Estimated fees buffer associated with this bet
-                priority INT DEFAULT 0                   -- Priority for processing (higher first)
+                expires_at TIMESTAMPTZ NOT NULL,            -- When the payment window closes
+                paid_tx_signature TEXT UNIQUE,              -- Signature of the user's payment transaction
+                payout_tx_signature TEXT UNIQUE,            -- Signature of the bot's payout transaction (if win)
+                processed_at TIMESTAMPTZ,                   -- When the bet was fully resolved
+                fees_paid BIGINT,                           -- Estimated fees buffer associated with this bet
+                priority INT DEFAULT 0                      -- Priority for processing (higher first)
             );
         `);
 
         // Wallets Table: Links Telegram User ID to their Solana wallet address
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
-                user_id TEXT PRIMARY KEY,                    -- Telegram User ID
-                wallet_address TEXT NOT NULL,                -- User's Solana wallet address
+                user_id TEXT PRIMARY KEY,                       -- Telegram User ID
+                wallet_address TEXT NOT NULL,                   -- User's Solana wallet address
                 linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),   -- When the wallet was first linked
-                last_used_at TIMESTAMPTZ                     -- When the wallet was last used for a bet/payout
+                last_used_at TIMESTAMPTZ                        -- When the wallet was last used for a bet/payout
             );
         `);
 
@@ -433,21 +433,35 @@ function normalizeMemo(rawMemo) {
     // Attempt to parse based on expected format (PREFIX-HEX16-CHECKSUM)
     const parts = memo.split('-').filter(p => p.length > 0); // Split and remove empty segments
 
-    // Ideal case: Exactly 3 parts matching format structure
+    // --- START: UPDATED BLOCK FOR CHECKSUM CORRECTION ---
     if (parts.length === 3) {
         const [prefix, hex, checksum] = parts;
-        // Validate structure and checksum
+        // Check if structure matches (prefix, hex length/chars, checksum length/chars)
         if (['BET', 'CF', 'RA'].includes(prefix) &&
             hex.length === 16 && /^[A-F0-9]{16}$/.test(hex) &&
             checksum.length === 2 && /^[A-F0-9]{2}$/.test(checksum)) {
+
+            // Validate the provided checksum
             if (validateMemoChecksum(hex, checksum)) {
-                return `${prefix}-${hex}-${checksum}`; // Return perfectly formatted memo
+                return `${prefix}-${hex}-${checksum}`; // Perfect, strict pass
             } else {
-                console.warn(`Normalized memo "${memo}" failed checksum validation.`);
-                return null; // Invalid checksum
+                console.warn(`⚠️ Memo checksum mismatch detected for "${prefix}-${hex}-${checksum}". Attempting auto-correct.`);
+
+                // Attempt to correct checksum automatically
+                const correctedChecksum = crypto.createHash('sha256')
+                    .update(hex)
+                    .digest('hex')
+                    .slice(-2)
+                    .toUpperCase();
+
+                const recoveredMemo = `${prefix}-${hex}-${correctedChecksum}`;
+                console.warn(`✅ Recovered memo as: ${recoveredMemo}`);
+                // Return the recovered memo (it should now pass strict validation)
+                return recoveredMemo;
             }
         }
     }
+    // --- END: UPDATED BLOCK FOR CHECKSUM CORRECTION ---
 
     // Recovery Case 1: Missing checksum but valid prefix and 16-char hex?
     if (parts.length === 2) {
@@ -1154,8 +1168,8 @@ class PaymentProcessor {
         // Add signature to session cache AFTER successful DB update
         processedSignaturesThisSession.add(signature);
          if (processedSignaturesThisSession.size > MAX_PROCESSED_SIGNATURES) {
-             console.log('Clearing processed signatures cache (reached max size)');
-             processedSignaturesThisSession.clear();
+              console.log('Clearing processed signatures cache (reached max size)');
+              processedSignaturesThisSession.clear();
          }
 
         // 12. Link wallet address to user ID
@@ -1269,20 +1283,20 @@ async function monitorPayments() {
                 }
 
                  // Filter out old transactions
-                const recentSignatures = signaturesForWallet.filter(sigInfo => {
-                    if (sigInfo.blockTime && sigInfo.blockTime < botStartupTime - 60) {
-                         // console.log(`🕒 Skipping old TX for ${walletAddress}: ${sigInfo.signature}`);
-                         return false;
-                    }
-                    return true;
-                });
+                 const recentSignatures = signaturesForWallet.filter(sigInfo => {
+                     if (sigInfo.blockTime && sigInfo.blockTime < botStartupTime - 60) {
+                          // console.log(`🕒 Skipping old TX for ${walletAddress}: ${sigInfo.signature}`);
+                          return false;
+                     }
+                     return true;
+                 });
 
-                if (recentSignatures.length === 0) {
-                     console.log(`ℹ️ No RECENT signatures for ${walletAddress} after filtering.`);
-                     // Update pagination marker even if all fetched were old
-                     lastProcessedSignature[walletAddress] = signaturesForWallet[0].signature;
-                     continue;
-                }
+                 if (recentSignatures.length === 0) {
+                      console.log(`ℹ️ No RECENT signatures for ${walletAddress} after filtering.`);
+                      // Update pagination marker even if all fetched were old
+                      lastProcessedSignature[walletAddress] = signaturesForWallet[0].signature;
+                      continue;
+                 }
 
                 console.log(`✅ Found ${recentSignatures.length} potentially new signatures for ${walletAddress}.`);
                 signaturesFoundThisCycle += recentSignatures.length;
@@ -1342,23 +1356,23 @@ async function monitorPayments() {
        // --- End Core Logic from User Snippet ---
 
     } catch (err) {
-         // General error handling
+        // General error handling
         console.error('❌ MonitorPayments Error in main block:', err);
         performanceMonitor.logRequest(false);
 
          if (err?.message?.includes('429') || err?.code === 429 || err?.statusCode === 429) {
-            // --- NEW: Aggressive Backoff Logic (also applied to main block errors) ---
-            console.warn('⚠️ Solana RPC 429 detected in main block. Backing off more aggressively...');
-            monitorIntervalSeconds = Math.min(monitorIntervalSeconds * 2, 300); // Double interval, max 5 minutes (300s)
-            console.log(`ℹ️ New monitor interval after backoff: ${monitorIntervalSeconds}s`);
-            // --- END: Aggressive Backoff Logic ---
+             // --- NEW: Aggressive Backoff Logic (also applied to main block errors) ---
+             console.warn('⚠️ Solana RPC 429 detected in main block. Backing off more aggressively...');
+             monitorIntervalSeconds = Math.min(monitorIntervalSeconds * 2, 300); // Double interval, max 5 minutes (300s)
+             console.log(`ℹ️ New monitor interval after backoff: ${monitorIntervalSeconds}s`);
+             // --- END: Aggressive Backoff Logic ---
 
-            if (monitorInterval) clearInterval(monitorInterval);
-            monitorInterval = setInterval(() => {
-                 monitorPayments().catch(err => console.error('❌ [FATAL MONITOR ERROR in setInterval catch]:', err));
-            }, monitorIntervalSeconds * 1000);
-            await new Promise(resolve => setTimeout(resolve, 15000)); // Wait after resetting interval
-        }
+             if (monitorInterval) clearInterval(monitorInterval);
+             monitorInterval = setInterval(() => {
+                  monitorPayments().catch(err => console.error('❌ [FATAL MONITOR ERROR in setInterval catch]:', err));
+             }, monitorIntervalSeconds * 1000);
+             await new Promise(resolve => setTimeout(resolve, 15000)); // Wait after resetting interval
+         }
     } finally {
         isMonitorRunning = false; // Release the lock
         const duration = Date.now() - startTime;
@@ -2062,13 +2076,13 @@ async function handleRaceCommand(msg) {
 
     const config = GAME_CONFIG.race;
     raceMessage += `\n*How to play:*\n` +
-                       `1. Type \`/betrace amount horse_name\`\n` +
-                       `   (e.g., \`/betrace 0.1 Yellow\`)\n\n` +
-                       `*Rules:*\n` +
-                       `- Min Bet: ${config.minBet} SOL\n` +
-                       `- Max Bet: ${config.maxBet} SOL\n` +
-                       `- House Edge: ${(config.houseEdge * 100).toFixed(1)}% (applied to winnings)\n\n` +
-                       `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`;
+                         `1. Type \`/betrace amount horse_name\`\n` +
+                         `   (e.g., \`/betrace 0.1 Yellow\`)\n\n` +
+                         `*Rules:*\n` +
+                         `- Min Bet: ${config.minBet} SOL\n` +
+                         `- Max Bet: ${config.maxBet} SOL\n` +
+                         `- House Edge: ${(config.houseEdge * 100).toFixed(1)}% (applied to winnings)\n\n` +
+                         `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`;
 
     await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2235,17 +2249,17 @@ async function handleBetRaceCommand(msg, args) {
 // Handles /help command
 async function handleHelpCommand(msg) {
     const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
-                          `/start - Show welcome message\n` +
-                          `/help - Show this help message\n\n` +
-                          `*Games:*\n` +
-                          `/coinflip - Show Coinflip game info & how to bet\n` +
-                          `/race - Show Horse Race game info & how to bet\n\n` +
-                          `*Betting:*\n` +
-                          `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
-                          `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
-                          `*Wallet:*\n` +
-                          `/wallet - View your linked Solana wallet for payouts\n\n` +
-                          `*Support:* If you encounter issues, please contact support.`; // Replace placeholder
+                           `/start - Show welcome message\n` +
+                           `/help - Show this help message\n\n` +
+                           `*Games:*\n` +
+                           `/coinflip - Show Coinflip game info & how to bet\n` +
+                           `/race - Show Horse Race game info & how to bet\n\n` +
+                           `*Betting:*\n` +
+                           `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
+                           `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
+                           `*Wallet:*\n` +
+                           `/wallet - View your linked Solana wallet for payouts\n\n` +
+                           `*Support:* If you encounter issues, please contact support.`; // Replace placeholder
 
     await safeSendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2289,8 +2303,8 @@ async function startPollingIfNeeded() {
         if (!info || !info.url) { // Start polling only if webhook is not set
              // Added check to prevent polling start if already polling
              if (bot.isPolling()) {
-                 console.log("ℹ️ Bot is already polling.");
-                 return;
+                  console.log("ℹ️ Bot is already polling.");
+                  return;
              }
             console.log("ℹ️ Webhook not set, starting bot polling...");
             await bot.deleteWebHook({ drop_pending_updates: true }); // Ensure no residual webhook
@@ -2300,8 +2314,8 @@ async function startPollingIfNeeded() {
             console.log(`ℹ️ Webhook is set (${info.url}), polling will not be started.`);
              // Ensure polling is stopped if webhook is somehow set later
              if (bot.isPolling()) {
-                 console.log("ℹ️ Stopping polling because webhook is set.");
-                 await bot.stopPolling({ cancel: true });
+                  console.log("ℹ️ Stopping polling because webhook is set.");
+                  await bot.stopPolling({ cancel: true });
              }
         }
     } catch (err) {
@@ -2323,13 +2337,13 @@ function startPaymentMonitor() {
     console.log(`⚙️ Starting payment monitor (Initial Interval: ${monitorIntervalSeconds}s)`);
     monitorInterval = setInterval(() => {
          try {
-             monitorPayments().catch(err => {
-                 console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
-                 performanceMonitor.logRequest(false);
-             });
+              monitorPayments().catch(err => {
+                  console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
+                  performanceMonitor.logRequest(false);
+              });
          } catch (syncErr) {
-             console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
-             performanceMonitor.logRequest(false);
+              console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
+              performanceMonitor.logRequest(false);
          }
     }, monitorIntervalSeconds * 1000);
 
@@ -2362,8 +2376,8 @@ const shutdown = async (signal, isRailwayRotation = false) => { // Added isRailw
         }
         // Potentially stop polling immediately too if needed for faster rotation?
         // if (bot.isPolling()) {
-        //    await bot.stopPolling({ cancel: true }).catch(e => console.error("Error stopping polling on rotation:", e.message));
-        //    console.log("- Stopped Telegram polling for rotation.");
+        //     await bot.stopPolling({ cancel: true }).catch(e => console.error("Error stopping polling on rotation:", e.message));
+        //     console.log("- Stopped Telegram polling for rotation.");
         // }
         // Railway handles container lifecycle, so we don't need to drain queues or close DB here.
         return; // Exit the shutdown function early for rotation
@@ -2383,16 +2397,16 @@ const shutdown = async (signal, isRailwayRotation = false) => { // Added isRailw
         // Stop server from accepting new connections (wait for close)
         if (server) {
              await new Promise((resolve, reject) => {
-                 server.close((err) => {
-                     if (err) {
-                         console.error("⚠️ Error closing Express server:", err.message);
-                         return reject(err);
-                     }
-                     console.log("- Express server closed.");
-                     resolve();
-                 });
-                 // Add a timeout for server close
-                 setTimeout(() => reject(new Error('Server close timeout')), 5000).unref();
+                  server.close((err) => {
+                       if (err) {
+                            console.error("⚠️ Error closing Express server:", err.message);
+                            return reject(err);
+                       }
+                       console.log("- Express server closed.");
+                       resolve();
+                  });
+                  // Add a timeout for server close
+                  setTimeout(() => reject(new Error('Server close timeout')), 5000).unref();
              });
         }
 
@@ -2512,11 +2526,11 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
 
              // --- BONUS: Solana Connection Boost after 20s (Moved here from removed startServer) ---
              setTimeout(() => {
-                 if (solanaConnection && solanaConnection.options) {
-                     console.log("⚡ Boosting Solana connection concurrency...");
-                     solanaConnection.options.maxConcurrent = 5; // Increase max parallel requests
-                     console.log("✅ Solana maxConcurrent increased to 5");
-                 }
+                  if (solanaConnection && solanaConnection.options) {
+                       console.log("⚡ Boosting Solana connection concurrency...");
+                       solanaConnection.options.maxConcurrent = 5; // Increase max parallel requests
+                       console.log("✅ Solana maxConcurrent increased to 5");
+                  }
              }, 20000); // Boost after 20 seconds of being fully ready
 
             isFullyInitialized = true; // Mark as fully initialized *after* setup completes
@@ -2531,8 +2545,8 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
             await shutdown('INITIALIZATION_FAILURE', false).catch(() => process.exit(1)); // Attempt full shutdown
             // Ensure exit if shutdown hangs
              setTimeout(() => {
-                 console.error("Shutdown timed out after initialization failure. Forcing exit.");
-                 process.exit(1);
+                  console.error("Shutdown timed out after initialization failure. Forcing exit.");
+                  process.exit(1);
              }, 10000).unref();
         }
     }, 1000); // 1-second delay before starting heavy init
