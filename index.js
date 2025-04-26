@@ -87,11 +87,9 @@ app.get('/prestop', (req, res) => {
 // 1. Enhanced Solana Connection with Rate Limiting
 console.log("⚙️ Initializing scalable Solana connection...");
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 2,
-    retryBaseDelay: 1000,
-    rateLimitCooloff: 15000,      // Max parallel requests
-    retryBaseDelay: 600,   // Initial delay for retries (ms)
-    commitment: 'confirmed', // Default commitment level
+    maxConcurrent: 2,          // Initial max parallel requests (can be boosted later)
+    retryBaseDelay: 600,       // Initial delay for retries (ms)
+    commitment: 'confirmed',   // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
         'solana-client': `SolanaGamblesBot/2.0 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info
@@ -176,10 +174,10 @@ async function initializeDatabase() {
         // Wallets Table: Links Telegram User ID to their Solana wallet address
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
-                user_id TEXT PRIMARY KEY,                       -- Telegram User ID
-                wallet_address TEXT NOT NULL,                   -- User's Solana wallet address
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),   -- When the wallet was first linked
-                last_used_at TIMESTAMPTZ                        -- When the wallet was last used for a bet/payout
+                user_id TEXT PRIMARY KEY,                         -- Telegram User ID
+                wallet_address TEXT NOT NULL,                     -- User's Solana wallet address
+                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),     -- When the wallet was first linked
+                last_used_at TIMESTAMPTZ                          -- When the wallet was last used for a bet/payout
             );
         `);
 
@@ -290,58 +288,15 @@ app.post(webhookPath, (req, res) => {
         } catch (error) {
             console.error("❌ Webhook processing error:", error);
             performanceMonitor.logRequest(false);
-            res.status(500).json({ // Send error response
-                error: 'Internal server error processing webhook',
-                details: error.message
-            });
-
-// --- PATCH: Start Express Fast and Initialize Async Later (with PHASE LOGS + Solana Boost) ---
-async function startServer() {
-    const PORT = process.env.PORT || 3000;
-
-    try {
-        console.log("🛫 Phase 1️⃣ Starting Express Server...");
-        server = app.listen(PORT, () => {
-            console.log(`✅ Express server listening on port ${PORT}`);
-        });
-
-        console.log("⚙️ Phase 2️⃣ Initializing Database...");
-        await initializeDatabase();
-        console.log("✅ Database initialized!");
-
-        console.log("⏳ Phase 3️⃣ Preparing Payment Monitor (delayed start)...");
-        setTimeout(() => {
-            monitorInterval = setInterval(() => {
-                monitorPayments().catch(err => {
-                    console.error('❌ [FATAL MONITOR ERROR]:', err);
-                    performanceMonitor.logRequest(false);
-                });
-            }, monitorIntervalSeconds * 1000);
-            console.log("✅ Payment monitor started after delay.");
-        }, 10000);
-
-        isFullyInitialized = true;
-        console.log("🎯 Phase 4️⃣ Background initialization complete. Bot is fully operational!");
-
-        // --- BONUS: Solana Connection Boost after 20s ---
-        setTimeout(() => {
-            if (solanaConnection && solanaConnection.options) {
-                console.log("⚡ Boosting Solana connection concurrency...");
-                solanaConnection.options.maxConcurrent = 5;
-                console.log("✅ Solana maxConcurrent increased to 5");
-            }
-        }, 20000);
-
-    } catch (err) {
-        console.error("❌ Fatal error during server startup:", err);
-        process.exit(1);
-    }
-}
-startServer();
-
-        }
-    });
-});
+            // --- THIS SECTION SEEMS TO BE MISSING A CLOSING BRACKET FOR THE TRY BLOCK AND THE RESPONSE ---
+            // --- ADDING IT BACK BASED ON CONTEXT ---
+             res.status(500).json({ // Send error response
+                 error: 'Internal server error processing webhook',
+                 details: error.message
+             });
+        } // <-- Added missing closing brace for catch
+    }); // <-- Added missing closing parenthesis and brace for messageQueue.add
+}); // <-- Added missing closing parenthesis for app.post
 
 // --- State Management & Constants ---
 
@@ -1284,7 +1239,7 @@ async function monitorPayments() {
                 signaturesForWallet = await solanaConnection.getSignaturesForAddress(
                     new PublicKey(wallet.address),
                     {
-                        limit: 25,     // Fetch a slightly larger batch
+                        limit: 25,      // Fetch a slightly larger batch
                         before: beforeSig   // Use the specific 'before' signature for pagination
                     }
                 );
@@ -1308,10 +1263,12 @@ async function monitorPayments() {
                 // Queue each found signature for processing by the PaymentProcessor
                 for (const sigInfo of signaturesForWallet) {
                     // Skip transactions older than bot startup time (with a small buffer)
-                    if (sigInfo.blockTime && sigInfo.blockTime < botStartupTime - 60) { // 60 second buffer
-                        // console.log(`🕒 Skipping old TX: ${sigInfo.signature} (BlockTime: ${sigInfo.blockTime} < Startup: ${botStartupTime})`); // Reduce noise
+                    // --- PATCH 1 START ---
+                    if (sigInfo.blockTime && sigInfo.blockTime < botStartupTime - 5) { // 5 second buffer
+                        // ⏩ Skipping old transaction (older than startup time minus 5s buffer)
                         continue;
                     }
+                    // --- PATCH 1 END ---
 
                     // Double check session cache before queuing
                     if (processedSignaturesThisSession.has(sigInfo.signature)) {
@@ -1334,9 +1291,28 @@ async function monitorPayments() {
         } // End loop through wallets
         // --- Original Monitor Logic End ---
 
+    // --- PATCH 2 START ---
     } catch (error) {
-        console.error("[Monitor] Unexpected error in main monitor loop:", error);
-        performanceMonitor.logRequest(false);
+        if (error.message?.includes('429') || error.code === 429) {
+            console.warn("⚠️ Rate limit (429) detected during monitorPayments. Cooling down...");
+            // Increase interval, capped at 60s
+            monitorIntervalSeconds = Math.min(monitorIntervalSeconds + 10, 60);
+            if (monitorIntervalSeconds >= 50) { // Log if interval gets very high
+                console.warn(`⚠️ Monitor interval is very high (${monitorIntervalSeconds}s) due to repeated 429s.`);
+            }
+            // Apply changes to the running interval timer immediately
+            adjustMonitorInterval(0); // Call adjustMonitorInterval to potentially reset the timer with the new interval
+
+            // Wait 15s cooldown before allowing the *next* monitor cycle to run fully
+            // Note: The finally block will still execute immediately after this catch.
+            // The *delay* is effectively added *before* the *next* successful `try` block execution.
+            await new Promise(resolve => setTimeout(resolve, 15000));
+        } else {
+            // Log other unexpected errors
+            console.error("[Monitor] Unexpected error in main monitor loop:", error);
+        }
+        performanceMonitor.logRequest(false); // Log error for performance tracking
+    // --- PATCH 2 END ---
     } finally {
         isMonitorRunning = false; // Release the lock
         const duration = Date.now() - startTime;
@@ -1344,7 +1320,8 @@ async function monitorPayments() {
             console.log(`[Monitor] Cycle finished in ${duration}ms. Found ${signaturesFoundThisCycle} new signatures.`);
         }
 
-        // Adjust monitoring interval based on activity
+        // Adjust monitoring interval based on activity (unless adjusted by 429 handler)
+        // Note: adjustMonitorInterval is now also called within the 429 catch block
         adjustMonitorInterval(signaturesFoundThisCycle);
 
         // console.log(`[${new Date().toISOString()}] ---- monitorPayments function END ----`); // Reduce log noise
@@ -1360,13 +1337,20 @@ function adjustMonitorInterval(processedCount) {
     const maxInterval = 120; // Maximum interval (seconds)
     const step = 10; // How much to change interval by
 
-    if (processedCount > 10) { // High activity, check sooner
-        newInterval = Math.max(minInterval, monitorIntervalSeconds - step);
-    } else if (processedCount === 0) { // No activity, check less often
-        newInterval = Math.min(maxInterval, monitorIntervalSeconds + step);
-    } // else: Moderate activity, keep interval the same
+    // Only adjust based on processedCount if not recently adjusted by 429 handler
+    // (429 handler sets monitorIntervalSeconds directly before calling this)
+    const wasAdjustedBy429 = newInterval > monitorIntervalSeconds; // Simple check if interval was increased
 
-    if (newInterval !== monitorIntervalSeconds) {
+    if (!wasAdjustedBy429) {
+        if (processedCount > 10) { // High activity, check sooner
+            newInterval = Math.max(minInterval, monitorIntervalSeconds - step);
+        } else if (processedCount === 0) { // No activity, check less often
+            newInterval = Math.min(maxInterval, monitorIntervalSeconds + step);
+        } // else: Moderate activity, keep interval the same
+    }
+
+
+    if (newInterval !== monitorIntervalSeconds || wasAdjustedBy429) { // Update interval if changed OR if forced by 429
         monitorIntervalSeconds = newInterval;
         if (monitorInterval) clearInterval(monitorInterval); // Clear existing interval
 
@@ -1863,11 +1847,17 @@ function calculatePayout(betLamports, gameType, gameDetails = {}) {
 
     if (gameType === 'coinflip') {
         // Payout is Bet * (2 - House Edge)
-        const multiplier = 2.0 - GAME_CONFIG.coinflip.houseEdge;
+        // Corrected calculation: Payout = Bet * (2 - 1) - (Bet * HouseEdge) = Bet - (Bet * HouseEdge) --- NO, this is wrong
+        // Corrected: Payout = Bet * 2 * (1 - HouseEdge) -- Or simply Bet * (2 - HouseEdge) if edge applies to total payout
+        // Assuming payout is 2x, then house takes % of the win. Payout = Bet + (Bet * (1-HouseEdge)) = Bet * (2-HouseEdge) -- Let's stick to this
+        const multiplier = 2.0 - GAME_CONFIG.coinflip.houseEdge; // e.g., 2.0 - 0.02 = 1.98
         payoutLamports = BigInt(Math.floor(Number(betLamports) * multiplier));
     } else if (gameType === 'race' && gameDetails.odds) {
-        // Payout is Bet * Odds * (1 - House Edge)
-        const multiplier = gameDetails.odds * (1.0 - GAME_CONFIG.race.houseEdge);
+        // Payout is Bet * Odds * (1 - House Edge) -- Assuming edge applies to the profit part? Or total?
+        // Let's assume Payout = Bet + (Bet * (Odds - 1) * (1 - HouseEdge)) -- Edge applies to profit
+        // OR Payout = (Bet * Odds) * (1 - HouseEdge) -- Edge applies to total potential win
+        // The second seems more common. Let's use that.
+        const multiplier = gameDetails.odds * (1.0 - GAME_CONFIG.race.houseEdge); // e.g., 10 * (1 - 0.02) = 9.8
         payoutLamports = BigInt(Math.floor(Number(betLamports) * multiplier));
     } else {
         console.error(`Cannot calculate payout: Unknown game type ${gameType} or missing race odds.`);
@@ -2006,20 +1996,26 @@ async function handleStartCommand(msg) {
     const bannerUrl = 'https://i.ibb.co/9vDo58q/banner.gif'; // Keep banner URL
 
     try {
+        // Attempt to send animation, fallback to text
         await bot.sendAnimation(msg.chat.id, bannerUrl, {
             caption: welcomeText,
             parse_mode: 'Markdown'
+        }).catch(async (err) => { // Catch specific error if animation fails
+            console.warn("⚠️ Failed to send start animation, sending text fallback:", err.message);
+            await safeSendMessage(msg.chat.id, welcomeText, { parse_mode: 'Markdown' })
+                .catch(e => console.error("TG Send Error (start fallback):", e.message));
         });
-    } catch (err) {
-        console.warn("⚠️ Failed to send start animation, sending text fallback:", err.message);
-        await safeSendMessage(msg.chat.id, welcomeText, { parse_mode: 'Markdown' })
-            .catch(e => console.error("TG Send Error (start fallback):", e.message));
+    } catch (err) { // Catch unexpected errors during the process
+        console.error("Error in handleStartCommand:", err.message);
+         await safeSendMessage(msg.chat.id, welcomeText, { parse_mode: 'Markdown' }) // Ensure fallback on any error
+             .catch(e => console.error("TG Send Error (start fallback general):", e.message));
     }
 }
 
 // Handles the /coinflip command (shows instructions)
 async function handleCoinflipCommand(msg) {
     const config = GAME_CONFIG.coinflip;
+    const payoutMultiplier = (2.0 * (1.0 - config.houseEdge)).toFixed(2); // Calculate payout display
     await safeSendMessage(msg.chat.id,
         `🪙 *Coinflip Game* 🪙\n\n` +
         `Bet on Heads or Tails!\n\n` +
@@ -2030,7 +2026,7 @@ async function handleCoinflipCommand(msg) {
         `- Min Bet: ${config.minBet} SOL\n` +
         `- Max Bet: ${config.maxBet} SOL\n` +
         `- House Edge: ${(config.houseEdge * 100).toFixed(1)}%\n` +
-        `- Payout: ~${(2.0 * (1.0 - config.houseEdge)).toFixed(2)}x (Win Amount = Bet * ${(2.0 * (1.0 - config.houseEdge)).toFixed(2)}x)\n\n` +
+        `- Payout on Win: Bet x ${payoutMultiplier}\n\n` + // Simplified payout description
         `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`,
         { parse_mode: 'Markdown' }
     ).catch(e => console.error("TG Send Error:", e.message));
@@ -2047,7 +2043,7 @@ async function handleRaceCommand(msg) {
         { name: 'Silver', emoji: '💎', odds: 15.0 }
     ];
 
-    let raceMessage = `🐎 *Horse Race Game* 🐎\n\nBet on the winning horse!\n\n*Available Horses & Approx Payout (Bet x Odds):*\n`;
+    let raceMessage = `🐎 *Horse Race Game* 🐎\n\nBet on the winning horse!\n\n*Available Horses & Approx Payout (Bet x Odds after edge):*\n`;
     horses.forEach(horse => {
         const effectiveMultiplier = (horse.odds * (1.0 - GAME_CONFIG.race.houseEdge)).toFixed(2);
         raceMessage += `- ${horse.emoji} *${horse.name}* (~${effectiveMultiplier}x Payout)\n`;
@@ -2228,17 +2224,17 @@ async function handleBetRaceCommand(msg, args) {
 // Handles /help command
 async function handleHelpCommand(msg) {
     const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
-                           `/start - Show welcome message\n` +
-                           `/help - Show this help message\n\n` +
-                           `*Games:*\n` +
-                           `/coinflip - Show Coinflip game info & how to bet\n` +
-                           `/race - Show Horse Race game info & how to bet\n\n` +
-                           `*Betting:*\n` +
-                           `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
-                           `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
-                           `*Wallet:*\n` +
-                           `/wallet - View your linked Solana wallet for payouts\n\n` +
-                           `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
+                          `/start - Show welcome message\n` +
+                          `/help - Show this help message\n\n` +
+                          `*Games:*\n` +
+                          `/coinflip - Show Coinflip game info & how to bet\n` +
+                          `/race - Show Horse Race game info & how to bet\n\n` +
+                          `*Betting:*\n` +
+                          `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
+                          `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
+                          `*Wallet:*\n` +
+                          `/wallet - View your linked Solana wallet for payouts\n\n` +
+                          `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
 
     await safeSendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2299,45 +2295,45 @@ async function startPollingIfNeeded() {
         }
     } catch (err) {
         console.error("❌ Error managing polling state:", err.message);
-         if (err.message.includes('409 Conflict')) {
+        if (err.message.includes('409 Conflict')) {
              console.error("❌❌❌ Conflict detected! Another instance might be polling.");
              console.error("❌ Exiting due to conflict."); process.exit(1);
-         }
+        }
     }
 }
 
 // Encapsulated Payment Monitor Start Logic
 function startPaymentMonitor() {
-     if (monitorInterval) {
+    if (monitorInterval) {
          console.log("ℹ️ Payment monitor already running.");
          return; // Prevent multiple intervals
-     }
-     console.log(`⚙️ Starting payment monitor (Initial Interval: ${monitorIntervalSeconds}s)`);
-     monitorInterval = setInterval(() => {
-         try {
-             monitorPayments().catch(err => {
-                 console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
-                 performanceMonitor.logRequest(false);
-             });
-         } catch (syncErr) {
-             console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
-             performanceMonitor.logRequest(false);
-         }
-     }, monitorIntervalSeconds * 1000);
+    }
+    console.log(`⚙️ Starting payment monitor (Initial Interval: ${monitorIntervalSeconds}s)`);
+    monitorInterval = setInterval(() => {
+       try {
+           monitorPayments().catch(err => {
+               console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
+               performanceMonitor.logRequest(false);
+           });
+       } catch (syncErr) {
+           console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
+           performanceMonitor.logRequest(false);
+       }
+    }, monitorIntervalSeconds * 1000);
 
-     // Run monitor once shortly after initialization completes
-     setTimeout(() => {
-         console.log("⚙️ Performing initial payment monitor run...");
-         try {
-             monitorPayments().catch(err => {
-                 console.error('[FATAL MONITOR ERROR in initial run catch]:', err);
-                 performanceMonitor.logRequest(false);
-             });
-         } catch (syncErr) {
-             console.error('[FATAL MONITOR SYNC ERROR in initial run try/catch]:', syncErr);
-             performanceMonitor.logRequest(false);
-         }
-     }, 5000); // Delay initial run slightly
+    // Run monitor once shortly after initialization completes
+    setTimeout(() => {
+        console.log("⚙️ Performing initial payment monitor run...");
+        try {
+            monitorPayments().catch(err => {
+                console.error('[FATAL MONITOR ERROR in initial run catch]:', err);
+                performanceMonitor.logRequest(false);
+            });
+        } catch (syncErr) {
+            console.error('[FATAL MONITOR SYNC ERROR in initial run try/catch]:', syncErr);
+            performanceMonitor.logRequest(false);
+        }
+    }, 5000); // Delay initial run slightly
 }
 
 
