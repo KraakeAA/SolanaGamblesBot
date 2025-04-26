@@ -81,7 +81,7 @@ app.get('/health', (req, res) => {
 app.get('/railway-health', (req, res) => {
     res.status(200).json({
         status: isFullyInitialized ? 'ready' : 'starting',
-        version: '2.0.5' // Consider updating version if significant changes (Version Bump for monitor fix)
+        version: '2.0.6' // Consider updating version if significant changes (Version Bump for V2 memo fix)
     });
 });
 
@@ -99,12 +99,12 @@ console.log("⚙️ Initializing scalable Solana connection...");
 // TODO: Consider implementing request prioritization (e.g., payouts > monitoring) within RateLimitedConnection.
 // TODO: Consider implementing exponential backoff within RateLimitedConnection for RPC errors.
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 3,        // MODIFIED: Initial max parallel requests set to 3
+    maxConcurrent: 3,        // Initial max parallel requests set to 3
     retryBaseDelay: 600,     // Initial delay for retries (ms)
     commitment: 'confirmed',   // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
-        'solana-client': `SolanaGamblesBot/2.0.5 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info (Version Bump)
+        'solana-client': `SolanaGamblesBot/2.0.6 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info (Version Bump)
     },
     rateLimitCooloff: 10000,     // Pause duration after hitting rate limits (ms) - Changed back to 10000ms as per original structure.
     disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
@@ -280,7 +280,7 @@ app.get('/', (req, res) => {
         status: 'ok',
         initialized: isFullyInitialized, // Report background initialization status here
         timestamp: new Date().toISOString(),
-        version: '2.0.5', // Bot version (incremented for startup changes + monitor fix)
+        version: '2.0.6', // Bot version (incremented for V2 memo fix)
         queueStats: { // Report queue status
             pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
             active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
@@ -331,9 +331,6 @@ const CACHE_TTL = 300000; // Cache wallet links for 5 minutes (300,000 ms)
 const processedSignaturesThisSession = new Set(); // Set<signature>
 const MAX_PROCESSED_SIGNATURES = 10000; // Reset cache if it gets too large
 
-// *** REMOVED: State object for payment monitor pagination - No longer needed ***
-// let lastProcessedSignature = {}; // Per wallet tracking << REMOVED
-
 // Game Configuration
 const GAME_CONFIG = {
     coinflip: {
@@ -382,11 +379,11 @@ function generateMemoId(prefix = 'BET') {
     return `${prefix}-${hexString}-${checksum}`;
 }
 
-// 2. Strict Memo Validation with Checksum Verification
+// 2. Strict Memo Validation with Checksum Verification (Used only for V1 now)
 function validateOriginalMemoFormat(memo) {
     if (typeof memo !== 'string') return false;
 
-    // New format: PREFIX-HEX16-CHECKSUM (e.g., CF-A1B2C3D4E5F6A7B8-9F)
+    // Expected format: PREFIX-HEX16-CHECKSUM (e.g., CF-A1B2C3D4E5F6A7B8-9F)
     const parts = memo.split('-');
     if (parts.length !== 3) return false;
 
@@ -397,7 +394,7 @@ function validateOriginalMemoFormat(memo) {
         /^[A-F0-9]{16}$/.test(hex) &&
         checksum.length === 2 &&
         /^[A-F0-9]{2}$/.test(checksum) &&
-        validateMemoChecksum(hex, checksum) // Use new checksum validator
+        validateMemoChecksum(hex, checksum) // Use checksum validator
     );
 }
 
@@ -426,85 +423,65 @@ function normalizeMemo(rawMemo) {
         .replace(/[^a-zA-Z0-9\-]/g, '') // Remove remaining invalid characters aggressively
         .toUpperCase(); // Standardize case early
 
+    // --- Start: Logic specific to V1 memo recovery/validation ---
     // Attempt to parse based on expected format (PREFIX-HEX16-CHECKSUM)
     const parts = memo.split('-').filter(p => p.length > 0); // Split and remove empty segments
 
-    // --- START: UPDATED BLOCK FOR CHECKSUM CORRECTION ---
+    // Checksum Correction/Validation for potential V1 formats
     if (parts.length === 3) {
         const [prefix, hex, checksum] = parts;
-        // Check if structure matches (prefix, hex length/chars, checksum length/chars)
         if (['BET', 'CF', 'RA'].includes(prefix) &&
             hex.length === 16 && /^[A-F0-9]{16}$/.test(hex) &&
             checksum.length === 2 && /^[A-F0-9]{2}$/.test(checksum)) {
 
-            // Validate the provided checksum
             if (validateMemoChecksum(hex, checksum)) {
-                return `${prefix}-${hex}-${checksum}`; // Perfect, strict pass
+                return `${prefix}-${hex}-${checksum}`; // Perfect V1 format, pass
             } else {
-                console.warn(`⚠️ Memo checksum mismatch detected for "${prefix}-${hex}-${checksum}". Attempting auto-correct.`);
-
-                // Attempt to correct checksum automatically
-                const correctedChecksum = crypto.createHash('sha256')
-                    .update(hex)
-                    .digest('hex')
-                    .slice(-2)
-                    .toUpperCase();
-
+                // Try correcting checksum - only relevant if we assume it *should* be V1 format
+                const correctedChecksum = crypto.createHash('sha256').update(hex).digest('hex').slice(-2).toUpperCase();
                 const recoveredMemo = `${prefix}-${hex}-${correctedChecksum}`;
-                console.warn(`✅ Recovered memo as: ${recoveredMemo}`);
-                // Return the recovered memo (it should now pass strict validation)
-                return recoveredMemo;
+                 console.warn(`⚠️ Memo checksum mismatch for potential V1 format "${memo}". Corrected: ${recoveredMemo}`);
+                return recoveredMemo; // Return corrected V1 format
             }
         }
     }
-    // --- END: UPDATED BLOCK FOR CHECKSUM CORRECTION ---
-
-    // Recovery Case 1: Missing checksum but valid prefix and 16-char hex?
-    if (parts.length === 2) {
-        const [prefix, hex] = parts;
-        if (['BET', 'CF', 'RA'].includes(prefix) && hex.length === 16 && /^[A-F0-9]{16}$/.test(hex)) {
-            console.warn(`Attempting to recover memo "${memo}": Missing checksum. Calculating...`);
-            // Calculate the expected checksum
-            const expectedChecksum = crypto.createHash('sha256')
-                .update(hex)
-                .digest('hex')
-                .slice(-2)
-                .toUpperCase();
-            const recoveredMemo = `${prefix}-${hex}-${expectedChecksum}`;
-            console.warn(`Recovered memo as: ${recoveredMemo}`);
-            // Validate the recovered memo format (should pass) before returning
-            return validateOriginalMemoFormat(recoveredMemo) ? recoveredMemo : null;
-        }
-    }
-
-    // Recovery Case 2: Extra segments? Try to extract valid prefix, hex, checksum
-    if (parts.length > 3) {
+    // Recovery Case 1: Missing checksum (assume V1 intention)
+     if (parts.length === 2) {
+         const [prefix, hex] = parts;
+         if (['BET', 'CF', 'RA'].includes(prefix) && hex.length === 16 && /^[A-F0-9]{16}$/.test(hex)) {
+             console.warn(`Attempting to recover V1 memo "${memo}": Missing checksum. Calculating...`);
+             const expectedChecksum = crypto.createHash('sha256').update(hex).digest('hex').slice(-2).toUpperCase();
+             const recoveredMemo = `${prefix}-${hex}-${expectedChecksum}`;
+             console.warn(`Recovered V1 memo as: ${recoveredMemo}`);
+             return recoveredMemo;
+         }
+     }
+     // Recovery Case 2: Extra segments (assume V1 intention)
+     if (parts.length > 3) {
         const prefix = parts[0];
         if (['BET', 'CF', 'RA'].includes(prefix)) {
-            // Assume the hex part might be split, try joining segments
             const potentialHex = parts.slice(1, -1).join('');
-            const potentialChecksum = parts.slice(-1)[0]; // Last segment
-
-            // Check if the joined hex is 16 chars and the checksum is 2 chars
+            const potentialChecksum = parts.slice(-1)[0];
             if (potentialHex.length === 16 && /^[A-F0-9]{16}$/.test(potentialHex) &&
-                potentialChecksum.length === 2 && /^[A-F0-9]{2}$/.test(potentialChecksum))
-            {
+                potentialChecksum.length === 2 && /^[A-F0-9]{2}$/.test(potentialChecksum)) {
                 if (validateMemoChecksum(potentialHex, potentialChecksum)) {
                     const recoveredMemo = `${prefix}-${potentialHex}-${potentialChecksum}`;
-                    console.warn(`Recovered memo from extra segments "${memo}" to: ${recoveredMemo}`);
+                     console.warn(`Recovered V1 memo from extra segments "${memo}" to: ${recoveredMemo}`);
                     return recoveredMemo;
                 }
             }
         }
-    }
+     }
+    // --- End: Logic specific to V1 memo recovery/validation ---
 
-    // If no valid format or recovery attempt worked
-    // console.log(`Memo "${rawMemo}" could not be normalized to a valid format.`); // Reduce log noise
-    return null;
+    // If it didn't match V1 recovery/validation patterns, return the cleaned-up memo as is.
+    // This will be the path taken by most standard V2 memos after basic cleanup.
+    // console.log(`Memo "${rawMemo}" normalized to: ${memo}`);
+    return memo && memo.length > 0 ? memo : null; // Return cleaned memo if not empty, else null
 }
 
 
-// 4. Enhanced Transaction Memo Search (with Base64 fix for V2)
+// 4. Enhanced Transaction Memo Search (MODIFIED VALIDATION LOGIC)
 function findMemoInTx(tx) {
     // Added null checks for tx and nested properties
     if (!tx?.transaction?.message?.instructions || !tx?.transaction?.message?.accountKeys) {
@@ -528,36 +505,24 @@ function findMemoInTx(tx) {
                                 ? tx.transaction.message.accountKeys[inst.programIdIndex]?.pubkey?.toBase58()
                                 : null; // Handle case where index might be missing or invalid
 
-            // --- Memo Debug Logs ---
-            if (programId) {
-                console.log(`[MEMO DEBUG] Checking instruction with Program ID: ${programId}`);
-            }
-            // --- End Memo Debug Logs ---
+            if (!programId || !MEMO_PROGRAM_IDS.has(programId)) continue; // Skip non-memo instructions
 
-            if (!programId || !MEMO_PROGRAM_IDS.has(programId)) continue;
-
-            // --- Memo Debug Logs ---
             console.log(`[MEMO DEBUG] Matched Memo Program ID: ${programId}. Raw data: ${inst.data}`);
-            // --- End Memo Debug Logs ---
 
             // Safely decode data, handle potential errors
             let rawMemo = null;
             try {
-                // --- PATCH START: Conditional Decoding for Memo V1/V2 ---
                 if (programId === MEMO_V2_PROGRAM_ID) {
                     // Decode SPL Memo (V2) data from Base64
                     const dataBuffer = Buffer.from(inst.data || '', 'base64');
                     rawMemo = dataBuffer.toString('utf8').replace(/\0/g, ''); // Remove null bytes
                     console.log(`[MEMO DEBUG] Decoded V2 (Base64) memo: "${rawMemo}"`);
                 } else if (programId === MEMO_V1_PROGRAM_ID) {
-                    // Decode original Memo (V1) data as UTF-8 (best guess)
-                    // Note: Original code used bs58.decode, which might work if data IS base58,
-                    // but UTF-8 is more standard for simple text memos in V1.
-                    const dataBuffer = Buffer.from(bs58.decode(inst.data || '')); // Keep bs58 for now to match previous logic
+                    // Decode original Memo (V1) data (assuming bs58 -> utf8)
+                    const dataBuffer = Buffer.from(bs58.decode(inst.data || ''));
                     rawMemo = dataBuffer.toString('utf8').replace(/\0/g, ''); // Remove null bytes
                     console.log(`[MEMO DEBUG] Decoded V1 (bs58->utf8) memo: "${rawMemo}"`);
                 }
-                // --- PATCH END ---
             } catch (decodeError) {
                  console.warn(`[MEMO DEBUG] Error decoding instruction data for memo program ${programId}: ${decodeError.message}`);
                 continue; // Skip if data is invalid or decoding fails
@@ -567,15 +532,26 @@ function findMemoInTx(tx) {
             const normalized = normalizeMemo(rawMemo);
             console.log(`[MEMO DEBUG] Normalized memo: ${normalized}`);
 
-
-            // Return the first valid, normalized, and checksum-verified memo found
-            if (normalized && validateOriginalMemoFormat(normalized)) {
-                console.log(`[MEMO DEBUG] Validated memo found: ${normalized}`);
-                return normalized;
-            } else if (normalized) {
-                 console.warn(`[MEMO DEBUG] Normalized memo "${normalized}" failed strict validation.`);
+            // *** MODIFIED VALIDATION LOGIC ***
+            if (normalized) { // Check if normalization yielded anything
+                if (programId === MEMO_V1_PROGRAM_ID) {
+                    // Apply strict validation (PREFIX-HEX-CHECKSUM format) ONLY for V1
+                    if (validateOriginalMemoFormat(normalized)) {
+                        console.log(`[MEMO DEBUG] Validated V1 memo found: ${normalized}`);
+                        return normalized; // Return strictly validated V1 memo
+                    } else {
+                        // Log if a potential V1 memo failed the strict check (might be intentional if user sent different V1 format)
+                        console.warn(`[MEMO DEBUG] Normalized V1 memo "${normalized}" failed strict validation (PREFIX-HEX-CHECKSUM format).`);
+                    }
+                } else if (programId === MEMO_V2_PROGRAM_ID) {
+                    // Accept any non-empty normalized memo for V2
+                    console.log(`[MEMO DEBUG] Accepted normalized V2 memo: ${normalized}`);
+                    return normalized; // Return normalized V2 memo without strict format validation
+                }
             }
-        }
+            // *** END MODIFIED VALIDATION LOGIC ***
+
+        } // End instruction loop
     } catch (e) {
         console.error("Memo parsing error:", e);
     }
@@ -591,6 +567,7 @@ function findMemoInTx(tx) {
 // Saves a new bet intention to the database
 async function savePendingBet(userId, chatId, gameType, details, lamports, memoId, expiresAt, priority = 0) {
     // Use the STRICT validation for the generated memo ID before saving
+    // (Generated IDs should always match the strict V1 format)
     if (!validateOriginalMemoFormat(memoId)) {
         console.error(`DB: Attempted to save bet with invalid generated memo format: ${memoId}`);
         return { success: false, error: 'Internal error: Invalid memo ID generated' };
@@ -633,15 +610,16 @@ async function savePendingBet(userId, chatId, gameType, details, lamports, memoI
 
 // Finds a pending bet by its unique memo ID
 async function findBetByMemo(memoId) {
-    // Use the STRICT validation when searching by memo ID
-    if (!validateOriginalMemoFormat(memoId)) {
-        // console.warn(`DB: findBetByMemo called with invalid format: ${memoId}`); // Reduce noise
+    // Allow searching by V2 memos which might not pass strict validation,
+    // but still try to validate if it looks like V1 format for safety.
+    // We primarily rely on the database index for lookup speed.
+    // The memoId passed here should already be normalized.
+    if (!memoId || typeof memoId !== 'string') {
         return undefined;
     }
 
     // Select the highest priority bet first if multiple match (unlikely with unique memo)
     // Use FOR UPDATE SKIP LOCKED to prevent race conditions if multiple monitors pick up the same TX
-    // Select only necessary columns initially
     const query = `
         SELECT id, user_id, chat_id, game_type, bet_details, expected_lamports, status, expires_at, fees_paid, priority
         FROM bets
@@ -804,8 +782,6 @@ async function recordPayout(betId, status, signature) {
         return false;
     }
 }
-
-// <<< REMOVED recordProcessedSignature function >>>
 
 // --- Solana Transaction Analysis ---
 
@@ -1065,7 +1041,7 @@ class PaymentProcessor {
         }
     }
 
-    // Core logic to process an incoming payment transaction signature (REVERTED - no processed_signatures table)
+    // Core logic to process an incoming payment transaction signature
     async _processIncomingPayment(signature, walletType, attempt = 0) {
         // 1. Check session cache first (quickest check)
         if (processedSignaturesThisSession.has(signature)) {
@@ -1097,9 +1073,7 @@ class PaymentProcessor {
                 signature,
                 { maxSupportedTransactionVersion: 0 }
             );
-            // --- Log added in previous step ---
             console.log(`[PAYMENT DEBUG] Fetched transaction for signature: ${signature}`);
-            // --- End log ---
         } catch (fetchError) {
             console.error(`Failed to fetch TX ${signature}: ${fetchError.message}`);
             if (isRetryableError(fetchError) && attempt < 3) throw fetchError;
@@ -1122,28 +1096,24 @@ class PaymentProcessor {
 
         // --- Signature successfully fetched and is valid ---
 
-        // 5. Find and validate the memo
-        const memo = findMemoInTx(tx); // This function now includes diagnostic logs & base64 fix
-        // --- Log added in previous step ---
+        // 5. Find and validate the memo (Uses updated findMemoInTx logic)
+        const memo = findMemoInTx(tx);
         console.log(`[PAYMENT DEBUG] Found memo in TX: ${memo}`);
-        // --- End log ---
         if (!memo) {
             // console.log(`Transaction ${signature} does not contain a valid game memo.`);
             processedSignaturesThisSession.add(signature); // Mark as processed
             return { processed: false, reason: 'no_valid_memo' };
         }
 
-        // 6. Find the corresponding bet in the database
+        // 6. Find the corresponding bet in the database using the potentially less strict memo
         const bet = await findBetByMemo(memo);
-        // --- Log added in previous step ---
         console.log(`[PAYMENT DEBUG] Found pending bet ID: ${bet?.id} for memo: ${memo}`);
-        // --- End log ---
         if (!bet) {
-            console.warn(`No matching pending bet found for memo "${memo}" from TX ${signature}.`);
+            console.warn(`No matching pending bet found for memo "${memo}" from TX ${signature}. Could be V2 memo or unrelated tx.`);
             processedSignaturesThisSession.add(signature); // Mark as processed
-            return { processed: false, reason: 'no_matching_bet_strict' };
+            return { processed: false, reason: 'no_matching_bet' };
         }
-        console.log(`Processing payment TX ${signature} with validated memo: ${memo} for Bet ID: ${bet.id}`);
+        console.log(`Processing payment TX ${signature} with memo: ${memo} for Bet ID: ${bet.id}`);
 
 
         // 7. Check bet status (already filtered by findBetByMemo, but good defense)
@@ -1186,12 +1156,9 @@ class PaymentProcessor {
 
         // 11. Mark bet as paid in DB
         const markResult = await markBetPaid(bet.id, signature);
-        // --- Log added in previous step ---
         if (markResult.success) {
             console.log(`[PAYMENT DEBUG] Successfully marked bet ${bet.id} as paid with TX: ${signature}`);
-        }
-        // --- End log ---
-        if (!markResult.success) {
+        } else {
             console.error(`Failed to mark bet ${bet.id} as paid: ${markResult.error}`);
              if (markResult.error === 'Transaction signature already recorded' || markResult.error === 'Bet not found or already processed') {
                   processedSignaturesThisSession.add(signature); // Add to cache on collision
@@ -1219,8 +1186,6 @@ class PaymentProcessor {
         } else {
             console.warn(`Could not identify valid payer address for bet ${bet.id} to link wallet.`);
         }
-
-        // <<< REMOVED Step 13: Update processed_signatures table >>>
 
         // 14. Queue the bet for actual game processing
         console.log(`Payment verified for bet ${bet.id}. Queuing for game processing.`);
@@ -1359,10 +1324,6 @@ async function monitorPayments() {
                     });
                 }
 
-                // *** REMOVED: Update last processed signature - Not needed with this approach ***
-                // lastProcessedSignature[walletAddress] = signaturesForWallet[0].signature; << REMOVED
-                // console.log(`[Monitor] Updated last signature for ${walletAddress} to: ${lastProcessedSignature[walletAddress]}`); << REMOVED
-
             } catch (error) {
                 // Catch errors during signature fetching for a specific wallet
                 if (error?.message?.includes('429') || error?.code === 429 || error?.statusCode === 429) {
@@ -1419,14 +1380,6 @@ async function monitorPayments() {
     }
 }
 // *** END UPDATED FUNCTION ***
-
-
-// Adjusts the monitor interval based on how many new signatures were found
-/* <<<< COMMENTED OUT - Monitor logic now handles interval adjustment internally for 429 errors >>>>
-function adjustMonitorInterval(processedCount) {
-    // ... old logic ...
-}
-*/
 
 
 // --- SOL Sending Function ---
@@ -1903,7 +1856,6 @@ function calculatePayout(betLamports, gameType, gameDetails = {}) {
     let payoutLamports = 0n;
 
     if (gameType === 'coinflip') {
-        // Payout is Bet * (2 - House Edge) => Simplified payout = Bet * (2 * (1 - HouseEdge))? No, payout is 2x bet minus house edge commission on the WINNINGS.
         // Correct calculation: Payout = Bet + (Bet * (1 - HouseEdge)) = Bet * (2 - HouseEdge)
         const multiplier = 2.0 - GAME_CONFIG.coinflip.houseEdge;
         payoutLamports = BigInt(Math.floor(Number(betLamports) * multiplier));
@@ -2327,7 +2279,7 @@ async function setupTelegramWebhook() {
         while (attempts < 3) {
             try {
                 await bot.deleteWebHook({ drop_pending_updates: true });
-                await bot.setWebHook(webhookUrl, { max_connections: 3 }); // MODIFIED: Increased connections set to 3
+                await bot.setWebHook(webhookUrl, { max_connections: 3 }); // Max connections set to 3
                 console.log(`✅ Webhook successfully set to: ${webhookUrl}`);
                 return true; // Indicate webhook was set
             } catch (webhookError) {
@@ -2425,12 +2377,6 @@ const shutdown = async (signal, isRailwayRotation = false) => { // Added isRailw
             // Don't wait for full close, just initiate it. Railway manages the rest.
             server.close(() => console.log("- Stopped accepting new server connections for rotation."));
         }
-        // Potentially stop polling immediately too if needed for faster rotation?
-        // if (bot.isPolling()) {
-        //     await bot.stopPolling({ cancel: true }).catch(e => console.error("Error stopping polling on rotation:", e.message));
-        //     console.log("- Stopped Telegram polling for rotation.");
-        // }
-        // Railway handles container lifecycle, so we don't need to drain queues or close DB here.
         return; // Exit the shutdown function early for rotation
     }
 
@@ -2579,10 +2525,10 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
              setTimeout(() => {
                   if (solanaConnection && solanaConnection.options) {
                        console.log("⚡ Adjusting Solana connection concurrency...");
-                       solanaConnection.options.maxConcurrent = 3; // MODIFIED: Increase/Set max parallel requests to 3
+                       solanaConnection.options.maxConcurrent = 3; // Set max parallel requests to 3
                        console.log("✅ Solana maxConcurrent adjusted to 3");
                   }
-             }, 20000); // Boost/Adjust after 20 seconds of being fully ready
+             }, 20000); // Adjust after 20 seconds of being fully ready
 
             isFullyInitialized = true; // Mark as fully initialized *after* setup completes
             console.log("✅ Delayed Background Initialization Complete. Bot is fully ready.");
@@ -2611,11 +2557,3 @@ server.on('error', (err) => {
     }
     process.exit(1); // Exit on any server startup error
 });
-
-// --- Removed old startServer function ---
-/*
-async function startServer() {
-    // ... (old startup logic - removed as startup is now handled directly above)
-}
-// startServer(); // Removed call
-*/
