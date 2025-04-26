@@ -99,7 +99,7 @@ console.log("⚙️ Initializing scalable Solana connection...");
 // TODO: Consider implementing request prioritization (e.g., payouts > monitoring) within RateLimitedConnection.
 // TODO: Consider implementing exponential backoff within RateLimitedConnection for RPC errors.
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 2,          // Initial max parallel requests (can be boosted later)
+    maxConcurrent: 3,          // Initial max parallel requests (can be boosted later)
     retryBaseDelay: 600,       // Initial delay for retries (ms)
     commitment: 'confirmed',   // Default commitment level
     httpHeaders: {
@@ -2579,8 +2579,8 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
              setTimeout(() => {
                  if (solanaConnection && solanaConnection.options) {
                      console.log("⚡ Boosting Solana connection concurrency...");
-                     solanaConnection.options.maxConcurrent = 5; // Increase max parallel requests
-                     console.log("✅ Solana maxConcurrent increased to 5");
+                     solanaConnection.options.maxConcurrent = 3; // Increase max parallel requests
+                     console.log("✅ Solana maxConcurrent increased to 3");
                  }
              }, 20000); // Boost after 20 seconds of being fully ready
 
