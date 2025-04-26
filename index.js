@@ -482,85 +482,42 @@ function normalizeMemo(rawMemo) {
 
 
 // 4. Enhanced Transaction Memo Search (MODIFIED VALIDATION LOGIC)
-function findMemoInTx(tx) {
-    // Added null checks for tx and nested properties
-    if (!tx?.transaction?.message?.instructions || !tx?.transaction?.message?.accountKeys) {
+const findMemoInTx = (tx) => {
+    if (!tx || !tx.transaction || !tx.transaction.message || !tx.transaction.message.instructions) {
         return null;
     }
 
-    try {
-        const MEMO_V1_PROGRAM_ID = 'Memo1UhkJRfHyvLMcVuc6beZNRYqUP2VZwW';
-        const MEMO_V2_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcVtrp5GktfD';
-        const MEMO_PROGRAM_IDS = new Set([MEMO_V1_PROGRAM_ID, MEMO_V2_PROGRAM_ID]);
+    for (const instruction of tx.transaction.message.instructions) {
+        try {
+            const programId = instruction.programId || (instruction.programIdIndex !== undefined
+                ? tx.transaction.message.accountKeys[instruction.programIdIndex]
+                : null);
 
-        // Combine instructions and inner instructions
-        const instructions = [
-            ...(tx.transaction.message.instructions || []),
-            ...(tx.meta?.innerInstructions || []).flatMap(i => i.instructions || [])
-        ];
+            if (!programId) continue;
 
-        for (const inst of instructions) {
-            // Safely get program ID using index
-            const programId = inst.programIdIndex !== undefined
-                                ? tx.transaction.message.accountKeys[inst.programIdIndex]?.pubkey?.toBase58()
-                                : null; // Handle case where index might be missing or invalid
+            const programIdStr = programId.toBase58 ? programId.toBase58() : programId;
 
-            if (!programId || !MEMO_PROGRAM_IDS.has(programId)) continue; // Skip non-memo instructions
+            if (programIdStr === "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr" || programIdStr === "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo") {
+                // Memo V2 or V1 detected
+                let memoText = "";
 
-            console.log(`[MEMO DEBUG] Matched Memo Program ID: ${programId}. Raw data: ${inst.data}`);
-
-            // Safely decode data, handle potential errors
-            let rawMemo = null;
-            try {
-                if (programId === MEMO_V2_PROGRAM_ID) {
-                    // Decode SPL Memo (V2) data from Base64
-                    const dataBuffer = Buffer.from(inst.data || '', 'base64');
-                    rawMemo = dataBuffer.toString('utf8').replace(/\0/g, ''); // Remove null bytes
-                    console.log(`[MEMO DEBUG] Decoded V2 (Base64) memo: "${rawMemo}"`);
-                } else if (programId === MEMO_V1_PROGRAM_ID) {
-                    // Decode original Memo (V1) data (assuming bs58 -> utf8)
-                    const dataBuffer = Buffer.from(bs58.decode(inst.data || ''));
-                    rawMemo = dataBuffer.toString('utf8').replace(/\0/g, ''); // Remove null bytes
-                    console.log(`[MEMO DEBUG] Decoded V1 (bs58->utf8) memo: "${rawMemo}"`);
+                if (instruction.data) {
+                    // Decode base64 safely
+                    memoText = Buffer.from(instruction.data, 'base64').toString('utf8').trim();
                 }
-            } catch (decodeError) {
-                 console.warn(`[MEMO DEBUG] Error decoding instruction data for memo program ${programId}: ${decodeError.message}`);
-                continue; // Skip if data is invalid or decoding fails
-            }
 
-            // Attempt to normalize the raw memo text
-            const normalized = normalizeMemo(rawMemo);
-            console.log(`[MEMO DEBUG] Normalized memo: ${normalized}`);
-
-            // *** MODIFIED VALIDATION LOGIC ***
-            if (normalized) { // Check if normalization yielded anything
-                if (programId === MEMO_V1_PROGRAM_ID) {
-                    // Apply strict validation (PREFIX-HEX-CHECKSUM format) ONLY for V1
-                    if (validateOriginalMemoFormat(normalized)) {
-                        console.log(`[MEMO DEBUG] Validated V1 memo found: ${normalized}`);
-                        return normalized; // Return strictly validated V1 memo
-                    } else {
-                        // Log if a potential V1 memo failed the strict check (might be intentional if user sent different V1 format)
-                        console.warn(`[MEMO DEBUG] Normalized V1 memo "${normalized}" failed strict validation (PREFIX-HEX-CHECKSUM format).`);
-                    }
-                } else if (programId === MEMO_V2_PROGRAM_ID) {
-                    // Accept any non-empty normalized memo for V2
-                    console.log(`[MEMO DEBUG] Accepted normalized V2 memo: ${normalized}`);
-                    return normalized; // Return normalized V2 memo without strict format validation
+                if (memoText.length > 0) {
+                    console.log(`[MEMO DEBUG] Found memo: ${memoText}`);
+                    return normalizeMemo(memoText);
                 }
             }
-            // *** END MODIFIED VALIDATION LOGIC ***
-
-        } // End instruction loop
-    } catch (e) {
-        console.error("Memo parsing error:", e);
+        } catch (err) {
+            console.error("[MEMO DEBUG] Failed to parse memo instruction:", err);
+        }
     }
-    console.log(`[MEMO DEBUG] No valid game memo found in transaction.`);
-    return null; // No valid memo found
-}
 
-// --- END: Enhanced Memo Handling System ---
-
+    return null;
+};
 
 // --- Database Operations ---
 
