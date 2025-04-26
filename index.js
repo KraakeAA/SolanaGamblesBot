@@ -81,7 +81,7 @@ app.get('/health', (req, res) => {
 app.get('/railway-health', (req, res) => {
     res.status(200).json({
         status: isFullyInitialized ? 'ready' : 'starting',
-        version: '2.0.6' // Consider updating version if significant changes (Version Bump for V2 memo fix)
+        version: '2.0.7' // Version Bump for Memo V2 fix
     });
 });
 
@@ -99,12 +99,12 @@ console.log("⚙️ Initializing scalable Solana connection...");
 // TODO: Consider implementing request prioritization (e.g., payouts > monitoring) within RateLimitedConnection.
 // TODO: Consider implementing exponential backoff within RateLimitedConnection for RPC errors.
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 3,        // Initial max parallel requests set to 3
+    maxConcurrent: 3,       // Initial max parallel requests set to 3
     retryBaseDelay: 600,     // Initial delay for retries (ms)
     commitment: 'confirmed',   // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
-        'solana-client': `SolanaGamblesBot/2.0.6 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info (Version Bump)
+        'solana-client': `SolanaGamblesBot/2.0.7 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info (Version Bump)
     },
     rateLimitCooloff: 10000,     // Pause duration after hitting rate limits (ms) - Changed back to 10000ms as per original structure.
     disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
@@ -187,10 +187,10 @@ async function initializeDatabase() {
         // Wallets Table: Links Telegram User ID to their Solana wallet address
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
-                user_id TEXT PRIMARY KEY,                        -- Telegram User ID
-                wallet_address TEXT NOT NULL,                    -- User's Solana wallet address
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),    -- When the wallet was first linked
-                last_used_at TIMESTAMPTZ                         -- When the wallet was last used for a bet/payout
+                user_id TEXT PRIMARY KEY,                            -- Telegram User ID
+                wallet_address TEXT NOT NULL,                        -- User's Solana wallet address
+                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),        -- When the wallet was first linked
+                last_used_at TIMESTAMPTZ                             -- When the wallet was last used for a bet/payout
             );
         `);
 
@@ -280,7 +280,7 @@ app.get('/', (req, res) => {
         status: 'ok',
         initialized: isFullyInitialized, // Report background initialization status here
         timestamp: new Date().toISOString(),
-        version: '2.0.6', // Bot version (incremented for V2 memo fix)
+        version: '2.0.7', // Bot version (incremented for Memo V2 fix)
         queueStats: { // Report queue status
             pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
             active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
@@ -358,7 +358,12 @@ const PRIORITY_FEE_RATE = 0.0001;
 
 // --- START: Enhanced Memo Handling System ---
 
-// 1. Revised Memo Generation with Checksum
+// Define Memo Program IDs
+const MEMO_V1_PROGRAM_ID = new PublicKey("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo");
+const MEMO_V2_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+
+
+// 1. Revised Memo Generation with Checksum (Used for *generating* our memos)
 function generateMemoId(prefix = 'BET') {
     const validPrefixes = ['BET', 'CF', 'RA'];
     if (!validPrefixes.includes(prefix)) {
@@ -379,7 +384,7 @@ function generateMemoId(prefix = 'BET') {
     return `${prefix}-${hexString}-${checksum}`;
 }
 
-// 2. Strict Memo Validation with Checksum Verification (Used only for V1 now)
+// 2. Strict Memo Validation with Checksum Verification (Used only for validating OUR generated V1 format)
 function validateOriginalMemoFormat(memo) {
     if (typeof memo !== 'string') return false;
 
@@ -409,7 +414,7 @@ function validateMemoChecksum(hex, checksum) {
 }
 
 
-// 3. Robust Memo Normalization with Fallbacks
+// 3. Robust Memo Normalization with Fallbacks (Primarily for handling potential V1 memos)
 function normalizeMemo(rawMemo) {
     if (typeof rawMemo !== 'string') return null;
 
@@ -458,24 +463,23 @@ function normalizeMemo(rawMemo) {
      }
      // Recovery Case 2: Extra segments (assume V1 intention)
      if (parts.length > 3) {
-        const prefix = parts[0];
-        if (['BET', 'CF', 'RA'].includes(prefix)) {
-            const potentialHex = parts.slice(1, -1).join('');
-            const potentialChecksum = parts.slice(-1)[0];
-            if (potentialHex.length === 16 && /^[A-F0-9]{16}$/.test(potentialHex) &&
-                potentialChecksum.length === 2 && /^[A-F0-9]{2}$/.test(potentialChecksum)) {
-                if (validateMemoChecksum(potentialHex, potentialChecksum)) {
-                    const recoveredMemo = `${prefix}-${potentialHex}-${potentialChecksum}`;
-                     console.warn(`Recovered V1 memo from extra segments "${memo}" to: ${recoveredMemo}`);
-                    return recoveredMemo;
-                }
-            }
-        }
+       const prefix = parts[0];
+       if (['BET', 'CF', 'RA'].includes(prefix)) {
+           const potentialHex = parts.slice(1, -1).join('');
+           const potentialChecksum = parts.slice(-1)[0];
+           if (potentialHex.length === 16 && /^[A-F0-9]{16}$/.test(potentialHex) &&
+               potentialChecksum.length === 2 && /^[A-F0-9]{2}$/.test(potentialChecksum)) {
+               if (validateMemoChecksum(potentialHex, potentialChecksum)) {
+                   const recoveredMemo = `${prefix}-${potentialHex}-${potentialChecksum}`;
+                    console.warn(`Recovered V1 memo from extra segments "${memo}" to: ${recoveredMemo}`);
+                   return recoveredMemo;
+               }
+           }
+       }
      }
     // --- End: Logic specific to V1 memo recovery/validation ---
 
     // If it didn't match V1 recovery/validation patterns, return the cleaned-up memo as is.
-    // This will be the path taken by most standard V2 memos after basic cleanup.
     // console.log(`Memo "${rawMemo}" normalized to: ${memo}`);
     return memo && memo.length > 0 ? memo : null; // Return cleaned memo if not empty, else null
 }
@@ -487,37 +491,73 @@ const findMemoInTx = (tx) => {
         return null;
     }
 
+    // Helper to get PublicKey object from accountKeys array
+    const getInstructionProgramIdKey = (instruction, message) => {
+        if (!instruction || !message || !message.accountKeys) return null;
+        if (instruction.programId) return instruction.programId; // Already a PublicKey
+        if (instruction.programIdIndex !== undefined && message.accountKeys[instruction.programIdIndex]) {
+             // accountKeys can be PublicKey objects or CompiledInstruction format { pubkey: PublicKey, ... }
+             const keyInfo = message.accountKeys[instruction.programIdIndex];
+             if (keyInfo instanceof PublicKey) return keyInfo;
+             if (keyInfo?.pubkey instanceof PublicKey) return keyInfo.pubkey;
+             // Fallback for base58 strings (less common in getParsedTransaction)
+             if (typeof keyInfo === 'string') {
+                 try { return new PublicKey(keyInfo); } catch { return null; }
+             }
+             if (typeof keyInfo?.pubkey === 'string') {
+                 try { return new PublicKey(keyInfo.pubkey); } catch { return null; }
+             }
+        }
+        return null;
+    };
+
     for (const instruction of tx.transaction.message.instructions) {
         try {
-            const programId = instruction.programId || (instruction.programIdIndex !== undefined
-                ? tx.transaction.message.accountKeys[instruction.programIdIndex]
-                : null);
+            const programId = getInstructionProgramIdKey(instruction, tx.transaction.message);
 
             if (!programId) continue;
 
-            const programIdStr = programId.toBase58 ? programId.toBase58() : programId;
-
-            if (programIdStr === "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr" || programIdStr === "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo") {
-                // Memo V2 or V1 detected
-                let memoText = "";
-
-                if (instruction.data) {
-                    // Decode base64 safely
-                    memoText = Buffer.from(instruction.data, 'base64').toString('utf8').trim();
-                }
-
-                if (memoText.length > 0) {
-                    console.log(`[MEMO DEBUG] Found memo: ${memoText}`);
-                    return normalizeMemo(memoText);
-                }
+             // --- START: FIX IMPLEMENTATION ---
+            if (programId.equals(MEMO_V2_PROGRAM_ID)) {
+                 // For Memo V2: just decode as UTF-8 and accept it
+                 try {
+                     if (instruction.data) {
+                        const memoString = Buffer.from(instruction.data, 'base64').toString('utf8').trim();
+                        if (memoString) {
+                            console.log(`[MEMO DEBUG] Found V2 memo: ${memoString}`);
+                            return memoString; // ✅ accept trimmed V2 memo directly
+                        }
+                     }
+                 } catch (e) {
+                     console.error("[MEMO DEBUG] Error decoding Memo V2 data:", e);
+                 }
+            } else if (programId.equals(MEMO_V1_PROGRAM_ID)) {
+                 // For Memo V1: decode and use the normalization logic
+                 try {
+                    if (instruction.data) {
+                        const rawDecodedMemo = Buffer.from(instruction.data, 'base64').toString('utf8');
+                        const normalized = normalizeMemo(rawDecodedMemo); // Apply V1 recovery/validation
+                        if (normalized) {
+                             console.log(`[MEMO DEBUG] Found and normalized V1 memo: ${normalized} (Raw: ${rawDecodedMemo})`);
+                            return normalized;
+                        }
+                    }
+                 } catch (e) {
+                    console.error("[MEMO DEBUG] Error decoding/normalizing Memo V1 data:", e);
+                 }
             }
+             // --- END: FIX IMPLEMENTATION ---
+
         } catch (err) {
-            console.error("[MEMO DEBUG] Failed to parse memo instruction:", err);
+            console.error("[MEMO DEBUG] Error processing memo instruction:", err);
         }
     }
 
-    return null;
+    console.log("[MEMO DEBUG] No V1 or V2 memo found in transaction instructions.");
+    return null; // Return null if no relevant memo instruction found
 };
+// --- END: Enhanced Memo Handling System ---
+
 
 // --- Database Operations ---
 
@@ -567,10 +607,8 @@ async function savePendingBet(userId, chatId, gameType, details, lamports, memoI
 
 // Finds a pending bet by its unique memo ID
 async function findBetByMemo(memoId) {
-    // Allow searching by V2 memos which might not pass strict validation,
-    // but still try to validate if it looks like V1 format for safety.
-    // We primarily rely on the database index for lookup speed.
-    // The memoId passed here should already be normalized.
+    // Memo ID lookup now handles both V1 (normalized/validated) and V2 (raw) formats
+    // Relies primarily on the database index for lookup speed.
     if (!memoId || typeof memoId !== 'string') {
         return undefined;
     }
@@ -835,8 +873,18 @@ function getPayerFromTransaction(tx) {
     // Fee payer is always the first account listed
     if (message.accountKeys.length > 0) {
         const feePayerKeyInfo = message.accountKeys[0];
-        const feePayerAddress = feePayerKeyInfo?.pubkey ? feePayerKeyInfo.pubkey.toBase58() :
-                                (typeof feePayerKeyInfo === 'string' ? new PublicKey(feePayerKeyInfo).toBase58() : null);
+        let feePayerAddress = null;
+         // Handle different structures of accountKeys
+         if (feePayerKeyInfo instanceof PublicKey) {
+             feePayerAddress = feePayerKeyInfo.toBase58();
+         } else if (feePayerKeyInfo?.pubkey instanceof PublicKey) {
+             feePayerAddress = feePayerKeyInfo.pubkey.toBase58();
+         } else if (typeof feePayerKeyInfo === 'string') {
+             try { feePayerAddress = new PublicKey(feePayerKeyInfo).toBase58(); } catch {}
+         } else if (typeof feePayerKeyInfo?.pubkey === 'string') {
+             try { feePayerAddress = new PublicKey(feePayerKeyInfo.pubkey).toBase58(); } catch {}
+         }
+
         // console.log(`Identified fee payer as ${feePayerAddress}`); // Optional log
         return feePayerAddress ? new PublicKey(feePayerAddress) : null; // Return PublicKey or null
     }
@@ -855,13 +903,18 @@ function getPayerFromTransaction(tx) {
         if (isSigner) {
             let key;
             try {
-                if (message.accountKeys[i].pubkey) {
-                    key = message.accountKeys[i].pubkey instanceof PublicKey ? message.accountKeys[i].pubkey : new PublicKey(message.accountKeys[i].pubkey);
-                } else if (typeof message.accountKeys[i] === 'string') {
-                    key = new PublicKey(message.accountKeys[i]);
-                } else {
+                const keyInfo = message.accountKeys[i];
+                 if (keyInfo instanceof PublicKey) {
+                     key = keyInfo;
+                 } else if (keyInfo?.pubkey instanceof PublicKey) {
+                    key = keyInfo.pubkey;
+                 } else if (typeof keyInfo === 'string') {
+                    key = new PublicKey(keyInfo);
+                 } else if (typeof keyInfo?.pubkey === 'string') {
+                    key = new PublicKey(keyInfo.pubkey);
+                 } else {
                     continue;
-                }
+                 }
             } catch (e) { continue; } // Skip if key is invalid
 
             // Check if balance decreased (paid fees or sent funds)
@@ -1028,23 +1081,25 @@ class PaymentProcessor {
         try {
             tx = await solanaConnection.getParsedTransaction(
                 signature,
-                { maxSupportedTransactionVersion: 0 }
+                { maxSupportedTransactionVersion: 0 } // Fetch including version 0
             );
+            // Basic check if tx was fetched
+             if (!tx) {
+                 console.warn(`[PAYMENT DEBUG] Transaction ${signature} returned null from RPC.`);
+                 // Don't immediately add to cache, might be temporary RPC issue
+                 // Allow potential retry from job handler if error was retryable
+                 throw new Error(`Transaction ${signature} not found (null response)`);
+             }
             console.log(`[PAYMENT DEBUG] Fetched transaction for signature: ${signature}`);
         } catch (fetchError) {
             console.error(`Failed to fetch TX ${signature}: ${fetchError.message}`);
-            if (isRetryableError(fetchError) && attempt < 3) throw fetchError;
-            // Only add to session cache on permanent failure
+            if (isRetryableError(fetchError) && attempt < 3) throw fetchError; // Allow retry
+            // Only add to session cache on permanent failure or max retries
             processedSignaturesThisSession.add(signature);
             return { processed: false, reason: 'tx_fetch_failed' };
         }
 
-        // 4. Validate transaction fetched
-        if (!tx) {
-            console.warn(`Transaction ${signature} not found or null after fetch.`);
-            processedSignaturesThisSession.add(signature); // Mark as processed
-            return { processed: false, reason: 'tx_not_found' };
-        }
+        // 4. Validate transaction fetched (already checked for null above)
         if (tx.meta?.err) {
             console.log(`Transaction ${signature} failed on-chain: ${JSON.stringify(tx.meta.err)}`);
             processedSignaturesThisSession.add(signature); // Mark as processed
@@ -1054,19 +1109,19 @@ class PaymentProcessor {
         // --- Signature successfully fetched and is valid ---
 
         // 5. Find and validate the memo (Uses updated findMemoInTx logic)
-        const memo = findMemoInTx(tx);
-        console.log(`[PAYMENT DEBUG] Found memo in TX: ${memo}`);
+        const memo = findMemoInTx(tx); // Will return V2 memo directly or normalized V1 memo
+        console.log(`[PAYMENT DEBUG] Found memo in TX ${signature}: ${memo}`);
         if (!memo) {
-            // console.log(`Transaction ${signature} does not contain a valid game memo.`);
+            // console.log(`Transaction ${signature} does not contain a valid game memo.`); // Reduce noise
             processedSignaturesThisSession.add(signature); // Mark as processed
             return { processed: false, reason: 'no_valid_memo' };
         }
 
-        // 6. Find the corresponding bet in the database using the potentially less strict memo
-        const bet = await findBetByMemo(memo);
+        // 6. Find the corresponding bet in the database using the extracted/normalized memo
+        const bet = await findBetByMemo(memo); // findBetByMemo uses the memo string directly
         console.log(`[PAYMENT DEBUG] Found pending bet ID: ${bet?.id} for memo: ${memo}`);
         if (!bet) {
-            console.warn(`No matching pending bet found for memo "${memo}" from TX ${signature}. Could be V2 memo or unrelated tx.`);
+            console.warn(`No matching pending bet found for memo "${memo}" from TX ${signature}. Could be unrelated or already processed.`);
             processedSignaturesThisSession.add(signature); // Mark as processed
             return { processed: false, reason: 'no_matching_bet' };
         }
@@ -1090,12 +1145,12 @@ class PaymentProcessor {
 
         // 9. Validate amount sent vs expected (with tolerance)
         const expectedAmount = BigInt(bet.expected_lamports);
-        const tolerance = BigInt(5000);
+        const tolerance = BigInt(5000); // 0.000005 SOL tolerance
         if (transferAmount < (expectedAmount - tolerance) || transferAmount > (expectedAmount + tolerance)) {
             console.warn(`Amount mismatch for bet ${bet.id} (memo ${memo}). Expected ~${expectedAmount}, got ${transferAmount}.`);
             await updateBetStatus(bet.id, 'error_payment_mismatch');
             processedSignaturesThisSession.add(signature); // Mark as processed
-            await safeSendMessage(bet.chat_id, `⚠️ Payment amount mismatch for bet ${memo}. Expected ${Number(expectedAmount)/LAMPORTS_PER_SOL} SOL, received ${Number(transferAmount)/LAMPORTS_PER_SOL} SOL. Bet cancelled.`).catch(e => console.error("TG Send Error:", e.message));
+            await safeSendMessage(bet.chat_id, `⚠️ Payment amount mismatch for bet \`${memo}\`. Expected ${Number(expectedAmount)/LAMPORTS_PER_SOL} SOL, received ${Number(transferAmount)/LAMPORTS_PER_SOL} SOL. Bet cancelled.`, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
             return { processed: false, reason: 'amount_mismatch' };
         }
 
@@ -1107,7 +1162,7 @@ class PaymentProcessor {
             console.warn(`Payment for bet ${bet.id} (memo ${memo}) received after expiry.`);
             await updateBetStatus(bet.id, 'error_payment_expired');
             processedSignaturesThisSession.add(signature); // Mark as processed
-            await safeSendMessage(bet.chat_id, `⚠️ Payment for bet ${memo} received after expiry time. Bet cancelled.`).catch(e => console.error("TG Send Error:", e.message));
+            await safeSendMessage(bet.chat_id, `⚠️ Payment for bet \`${memo}\` received after expiry time. Bet cancelled.`, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
             return { processed: false, reason: 'expired' };
         }
 
@@ -1118,8 +1173,8 @@ class PaymentProcessor {
         } else {
             console.error(`Failed to mark bet ${bet.id} as paid: ${markResult.error}`);
              if (markResult.error === 'Transaction signature already recorded' || markResult.error === 'Bet not found or already processed') {
-                  processedSignaturesThisSession.add(signature); // Add to cache on collision
-                  return { processed: false, reason: 'db_mark_paid_collision' };
+                 processedSignaturesThisSession.add(signature); // Add to cache on collision
+                 return { processed: false, reason: 'db_mark_paid_collision' };
              }
              // Don't add to cache on other DB errors, allow retry
             return { processed: false, reason: 'db_mark_paid_failed' };
@@ -1249,7 +1304,7 @@ async function monitorPayments() {
                 });
 
                 if (recentSignatures.length === 0) {
-                     console.log(`ℹ️ No RECENT signatures for ${walletAddress} after filtering.`);
+                     // console.log(`ℹ️ No RECENT signatures for ${walletAddress} after filtering.`); // Reduce noise
                      continue;
                 }
 
@@ -1305,7 +1360,7 @@ async function monitorPayments() {
             }
         } // End loop through wallets
 
-        console.log(`[Monitor] Cycle check finished.`);
+        // console.log(`[Monitor] Cycle check finished.`); // Reduce noise
 
         if (monitorIntervalSeconds >= 60) { // Adjusted warning threshold slightly
             console.warn(`⚠️ Warning: Monitor interval high (${monitorIntervalSeconds}s). RPC may be struggling or backoff active.`);
@@ -1318,17 +1373,17 @@ async function monitorPayments() {
         performanceMonitor.logRequest(false);
 
          if (err?.message?.includes('429') || err?.code === 429 || err?.statusCode === 429) {
-              // --- Aggressive Backoff Logic (also applied to main block errors) ---
-              console.warn('⚠️ Solana RPC 429 detected in main block. Backing off more aggressively...');
-              monitorIntervalSeconds = Math.min(monitorIntervalSeconds * 2, 300); // Double interval, max 5 minutes (300s)
-              console.log(`ℹ️ New monitor interval after backoff: ${monitorIntervalSeconds}s`);
-              // --- END: Aggressive Backoff Logic ---
+             // --- Aggressive Backoff Logic (also applied to main block errors) ---
+             console.warn('⚠️ Solana RPC 429 detected in main block. Backing off more aggressively...');
+             monitorIntervalSeconds = Math.min(monitorIntervalSeconds * 2, 300); // Double interval, max 5 minutes (300s)
+             console.log(`ℹ️ New monitor interval after backoff: ${monitorIntervalSeconds}s`);
+             // --- END: Aggressive Backoff Logic ---
 
-              if (monitorInterval) clearInterval(monitorInterval);
-              monitorInterval = setInterval(() => {
-                   monitorPayments().catch(err => console.error('❌ [FATAL MONITOR ERROR in setInterval catch]:', err));
-              }, monitorIntervalSeconds * 1000);
-              await new Promise(resolve => setTimeout(resolve, 15000)); // Wait after resetting interval
+             if (monitorInterval) clearInterval(monitorInterval);
+             monitorInterval = setInterval(() => {
+                 monitorPayments().catch(err => console.error('❌ [FATAL MONITOR ERROR in setInterval catch]:', err));
+             }, monitorIntervalSeconds * 1000);
+             await new Promise(resolve => setTimeout(resolve, 15000)); // Wait after resetting interval
          }
     } finally {
         isMonitorRunning = false; // Release the lock
@@ -1771,7 +1826,7 @@ async function handlePayoutJob(job) {
             console.log(`💸 Payout successful for bet ${betId}, TX: ${sendResult.signature}`);
             // Send success message to user
             await safeSendMessage(chatId,
-                `✅ Payout successful for bet ${betId}!\n` +
+                `✅ Payout successful for bet ID \`${betId}\`!\n` + // Use betId in message
                 `${(Number(payoutAmountLamports)/LAMPORTS_PER_SOL).toFixed(6)} SOL sent.\n` +
                 `TX: \`https://solscan.io/tx/${sendResult.signature}\``, // Add link
                 { parse_mode: 'Markdown', disable_web_page_preview: true } // Don't preview Solscan etc.
@@ -1783,7 +1838,7 @@ async function handlePayoutJob(job) {
             // Payout failed after retries
             console.error(`❌ Payout failed permanently for bet ${betId}: ${sendResult.error}`);
             await safeSendMessage(chatId,
-                `⚠️ Payout failed for bet ID ${betId}: ${sendResult.error}\n` +
+                `⚠️ Payout failed for bet ID \`${betId}\`: ${sendResult.error}\n` + // Use betId
                 `The team has been notified. Please contact support if needed.`,
                 { parse_mode: 'Markdown' }
             ).catch(e => console.error("TG Send Error:", e.message));
@@ -1798,7 +1853,7 @@ async function handlePayoutJob(job) {
         await updateBetStatus(betId, 'error_payout_exception');
         // Notify user of technical error
         await safeSendMessage(chatId,
-            `⚠️ A technical error occurred during payout for bet ID ${betId}.\n` +
+            `⚠️ A technical error occurred during payout for bet ID \`${betId}\`.\n` + // Use betId
             `Please contact support.`,
             { parse_mode: 'Markdown' }
         ).catch(e => console.error("TG Send Error:", e.message));
@@ -1988,17 +2043,17 @@ async function handleStartCommand(msg) {
 
 // Handles the /coinflip command (shows instructions) - MODIFIED
 async function handleCoinflipCommand(msg) {
-    console.log("--- Entering handleCoinflipCommand ---");
+    // console.log("--- Entering handleCoinflipCommand ---"); // Reduce noise
     try {
         const config = GAME_CONFIG.coinflip;
-        console.log("Coinflip config:", config);
+        // console.log("Coinflip config:", config); // Reduce noise
 
-        // Using HTML tags (<b> for bold)
+        // Using HTML tags (<b> for bold, <code> for inline code)
         const messageText = `🪙 <b>Coinflip Game</b> 🪙\n\n` +
             `Bet on Heads or Tails!\n\n` +
             `<b>How to play:</b>\n` +
-            `1. Type /bet amount heads (e.g., /bet 0.1 heads)\n` +
-            `2. Type /bet amount tails (e.g., /bet 0.1 tails)\n\n` +
+            `1. Type <code>/bet amount heads</code> (e.g., <code>/bet 0.1 heads</code>)\n` +
+            `2. Type <code>/bet amount tails</code> (e.g., <code>/bet 0.1 tails</code>)\n\n` +
             `<b>Rules:</b>\n` +
             `- Min Bet: ${config.minBet} SOL\n` +
             `- Max Bet: ${config.maxBet} SOL\n` +
@@ -2006,13 +2061,13 @@ async function handleCoinflipCommand(msg) {
             `- Payout: ~${(2.0 * (1.0 - config.houseEdge)).toFixed(2)}x (Win Amount = Bet * ${(2.0 * (1.0 - config.houseEdge)).toFixed(2)}x)\n\n` +
             `You will be given a wallet address and a <b>unique Memo ID</b>. Send the <b>exact</b> SOL amount with the memo to place your bet.`;
 
-        console.log("Attempting to send coinflip message (HTML mode)...");
+        // console.log("Attempting to send coinflip message (HTML mode)..."); // Reduce noise
         // Set parse_mode to HTML
         await safeSendMessage(msg.chat.id, messageText, { parse_mode: 'HTML' })
             .catch(e => {
                 console.error("TG Send Error (HTML - within handleCoinflipCommand catch):", e.message);
             });
-        console.log("--- Exiting handleCoinflipCommand (after send attempt) ---");
+        // console.log("--- Exiting handleCoinflipCommand (after send attempt) ---"); // Reduce noise
     } catch (error) {
         console.error("Error INSIDE handleCoinflipCommand:", error);
     }
@@ -2036,13 +2091,13 @@ async function handleRaceCommand(msg) {
 
     const config = GAME_CONFIG.race;
     raceMessage += `\n*How to play:*\n` +
-                         `1. Type \`/betrace amount horse_name\`\n` +
-                         `   (e.g., \`/betrace 0.1 Yellow\`)\n\n` +
-                         `*Rules:*\n` +
-                         `- Min Bet: ${config.minBet} SOL\n` +
-                         `- Max Bet: ${config.maxBet} SOL\n` +
-                         `- House Edge: ${(config.houseEdge * 100).toFixed(1)}% (applied to winnings)\n\n` +
-                         `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`;
+                     `1. Type \`/betrace amount horse_name\`\n` +
+                     `   (e.g., \`/betrace 0.1 Yellow\`)\n\n` +
+                     `*Rules:*\n` +
+                     `- Min Bet: ${config.minBet} SOL\n` +
+                     `- Max Bet: ${config.maxBet} SOL\n` +
+                     `- House Edge: ${(config.houseEdge * 100).toFixed(1)}% (applied to winnings)\n\n` +
+                     `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`;
 
     await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2094,7 +2149,7 @@ async function handleBetCommand(msg, args) {
     }
 
     const userChoice = match[2].toLowerCase();
-    const memoId = generateMemoId('CF'); // Uses new enhanced generator
+    const memoId = generateMemoId('CF'); // Uses new enhanced generator (generates V1 format)
     const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
     const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
 
@@ -2112,12 +2167,12 @@ async function handleBetCommand(msg, args) {
 
     // Send payment instructions
     await safeSendMessage(chatId,
-        `✅ Coinflip bet registered! (ID: ${memoId})\n\n` +
+        `✅ Coinflip bet registered! (ID: \`${memoId}\`)\n\n` + // Use code formatting for Memo ID
         `You chose: *${userChoice}*\n` +
         `Amount: *${betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length))} SOL*\n\n` + // Display appropriate decimals
         `➡️ Send *exactly ${betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length))} SOL* to:\n` +
         `\`${process.env.MAIN_WALLET_ADDRESS}\`\n\n` +
-        `📎 *Include MEMO:* \`${memoId}\`\n\n` +
+        `📎 *Include MEMO:* \`${memoId}\`\n\n` + // Use code formatting for Memo ID
         `⏱️ This request expires in ${config.expiryMinutes} minutes.\n\n` +
         `*IMPORTANT:* Send from your own wallet. Do not send from an exchange. Ensure you include the memo correctly.`,
         { parse_mode: 'Markdown', disable_web_page_preview: true }
@@ -2171,7 +2226,7 @@ async function handleBetRaceCommand(msg, args) {
         return;
     }
 
-    const memoId = generateMemoId('RA'); // Uses new enhanced generator
+    const memoId = generateMemoId('RA'); // Uses new enhanced generator (generates V1 format)
     const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
     const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
 
@@ -2193,13 +2248,13 @@ async function handleBetRaceCommand(msg, args) {
 
     // Send payment instructions
     await safeSendMessage(chatId,
-        `✅ Race bet registered! (ID: ${memoId})\n\n` +
+        `✅ Race bet registered! (ID: \`${memoId}\`)\n\n` + // Use code formatting for Memo ID
         `You chose: ${chosenHorse.emoji} *${chosenHorse.name}*\n` +
         `Amount: *${betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length))} SOL*\n` + // Display appropriate decimals
         `Potential Payout: ~${potentialPayoutSOL} SOL\n\n`+
         `➡️ Send *exactly ${betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length))} SOL* to:\n` +
         `\`${process.env.RACE_WALLET_ADDRESS}\`\n\n` +
-        `📎 *Include MEMO:* \`${memoId}\`\n\n` +
+        `📎 *Include MEMO:* \`${memoId}\`\n\n` + // Use code formatting for Memo ID
         `⏱️ This request expires in ${config.expiryMinutes} minutes.\n\n` +
         `*IMPORTANT:* Send from your own wallet. Do not send from an exchange. Ensure you include the memo correctly.`,
         { parse_mode: 'Markdown', disable_web_page_preview: true }
@@ -2209,17 +2264,17 @@ async function handleBetRaceCommand(msg, args) {
 // Handles /help command
 async function handleHelpCommand(msg) {
     const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
-                                `/start - Show welcome message\n` +
-                                `/help - Show this help message\n\n` +
-                                `*Games:*\n` +
-                                `/coinflip - Show Coinflip game info & how to bet\n` +
-                                `/race - Show Horse Race game info & how to bet\n\n` +
-                                `*Betting:*\n` +
-                                `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
-                                `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
-                                `*Wallet:*\n` +
-                                `/wallet - View your linked Solana wallet for payouts\n\n` +
-                                `*Support:* If you encounter issues, please contact support.`; // Replace placeholder
+                         `/start - Show welcome message\n` +
+                         `/help - Show this help message\n\n` +
+                         `*Games:*\n` +
+                         `/coinflip - Show Coinflip game info & how to bet\n` +
+                         `/race - Show Horse Race game info & how to bet\n\n` +
+                         `*Betting:*\n` +
+                         `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
+                         `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
+                         `*Wallet:*\n` +
+                         `/wallet - View your linked Solana wallet for payouts\n\n` +
+                         `*Support:* If you encounter issues, please contact support.`; // Replace placeholder
 
     await safeSendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2350,18 +2405,18 @@ const shutdown = async (signal, isRailwayRotation = false) => { // Added isRailw
     try {
         // Stop server from accepting new connections (wait for close)
         if (server) {
-             await new Promise((resolve, reject) => {
+              await new Promise((resolve, reject) => {
                   server.close((err) => {
-                       if (err) {
-                            console.error("⚠️ Error closing Express server:", err.message);
-                            return reject(err);
-                       }
-                       console.log("- Express server closed.");
-                       resolve(undefined); // Resolve explicitly with undefined for void promise
+                      if (err) {
+                          console.error("⚠️ Error closing Express server:", err.message);
+                          return reject(err);
+                      }
+                      console.log("- Express server closed.");
+                      resolve(undefined); // Resolve explicitly with undefined for void promise
                   });
                   // Add a timeout for server close
                   setTimeout(() => reject(new Error('Server close timeout')), 5000).unref();
-             });
+              });
         }
 
         // Try deleting webhook regardless of env var
