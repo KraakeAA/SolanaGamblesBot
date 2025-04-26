@@ -1,1 +1,47 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS", // Nixpacks is well-suited for Node.js applications
+    "nixpacksConfig": {
+      // Specify Node.js version if needed (optional, Nixpacks usually detects)
+      // "nodeVersion": "18" // Or your preferred LTS version
+    },
+    // --- Build/Install Optimizations ---
+    // Use 'npm ci' for faster, deterministic installs based on package-lock.json
+    // '--only=production' skips devDependencies, reducing build time and image size.
+    "installCommand": "npm ci --only=production",
+    // No explicit build command seems necessary as it's not a compiled language like TS
+    "buildCommand": null,
+    "watchPatterns": [
+      // Default watch patterns are usually sufficient for Node.js
+      "*.js",
+      "lib/**/*.js", // Watch your custom lib directory
+      "package.json",
+      "package-lock.json", // Important for 'npm ci'
+      ".env" // Rebuild if environment variables change structure (though values are injected)
+    ]
+  },
+  "deploy": {
+    // --- Start Command Optimization ---
+    // Directly execute the main script using node.
+    // This avoids potential overhead from 'npm start' if it just wraps 'node index.js'.
+    "startCommand": "node index.js",
+    "restartPolicyType": "ON_FAILURE", // Restart only if the process exits with an error
+    "restartPolicyMaxRetries": 10, // Standard number of retries
 
+    // --- Health Check Configuration ---
+    // Your code provides an immediate '/health' endpoint, which is ideal.
+    "healthcheckPath": "/health",
+    // Timeout for the health check request itself. Your '/health' is fast,
+    // but this allows time for the server to become responsive initially.
+    // Keep under your 30s target.
+    "healthcheckTimeout": 25,
+    // How often to check after the initial successful check.
+    "healthcheckInterval": 10,
+    // Number of consecutive failures before marking the deployment as unhealthy.
+    "healthcheckRetries": 3,
+    // Optional delay before the *first* health check. Your server starts listening quickly,
+    // so a short delay is fine.
+    "healthcheckInitialDelay": 5
+  }
+}
