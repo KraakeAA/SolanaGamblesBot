@@ -1,14 +1,10 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "nixpacks",
+    "builder": "NIXPACKS",
     "buildCommand": "npm ci --omit=dev",
     "installCommand": "npm ci --omit=dev",
-    "startCommand": "node index.js",
-    "nixpacks": {
-      "providers": ["nodejs"],
-      "buildImage": "node:18-alpine"
-    }
+    "startCommand": "node index.js"
   },
   "deploy": {
     "startTimeout": 28,
@@ -52,9 +48,6 @@
     {
       "name": "solana-gambles-bot",
       "serviceType": "backend",
-      "source": {
-        "image": "node:18-alpine"
-      },
       "resources": {
         "memory": 1024,
         "cpu": 1000
