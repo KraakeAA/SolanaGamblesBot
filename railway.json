@@ -1,61 +1,16 @@
 {
-  "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS", // Or "DOCKERFILE" if you are using a Dockerfile
-    // --- Nixpacks Specific Optimizations ---
-    // If using Nixpacks, you can customize build, install, and start commands.
-    // Ensure these commands are as efficient as possible.
-    // Example: Specify exact commands to avoid auto-detection overhead if needed.
-    "nixpacksConfigPath": "nixpacks.toml", // Optional: For more complex Nixpacks config
-    "buildCommand": null, // Optional: Override default build command (e.g., "npm run build --prod")
-    "installCommand": null, // Optional: Override default install command (e.g., "npm ci --only=production")
-    "watchPatterns": [
-      // Optional: Specify files/directories to watch for rebuilds.
-      // Being specific can sometimes speed up rebuild triggers if needed,
-      // but doesn't directly impact initial cold start time as much as build/start commands.
-      // "/src",
-      // "package.json",
-      // "yarn.lock"
-    ],
-    // --- Dockerfile Specific Optimizations ---
-    // If using "builder": "DOCKERFILE", ensure your Dockerfile is optimized:
-    // 1. Use multi-stage builds to keep the final image small.
-    // 2. Cache dependency layers effectively.
-    // 3. Minimize the number of layers.
-    // 4. Use specific base images (e.g., alpine) instead of larger ones.
-    "dockerfilePath": "Dockerfile", // Specify if not at the root or named differently
-    "dockerContext": ".",
-    "dockerBuildArgs": {
-      // Optional: Pass build arguments to your Dockerfile
-      // "NODE_ENV": "production"
+    "env": {
+      "NODE_ENV": "production"
     }
   },
   "deploy": {
-    // --- Start Command Optimization ---
-    // This is crucial for startup time.
-    // - Use the most direct command to start your application server.
-    // - Avoid running migrations or other setup tasks in the start command;
-    //   run those as separate one-off jobs or during the build phase if possible.
-    // - If using Node.js, consider starting directly with `node index.js`
-    //   instead of `npm start` if the latter adds overhead.
-    "startCommand": "npm start", // Replace with your actual, optimized start command (e.g., "node dist/main.js", "gunicorn app:app", "java -jar app.jar")
-    "restartPolicyType": "ON_FAILURE", // Or "ALWAYS"
-    "restartPolicyMaxRetries": 10,
-    // --- Health Check Optimization ---
-    // A faster, reliable health check helps Railway mark the deployment as successful sooner.
-    // - Use a lightweight endpoint (e.g., /healthz) that returns quickly (e.g., simple 200 OK).
-    // - Avoid endpoints that perform heavy computations or database checks.
-    // - Adjust timeouts and intervals carefully. Too short might cause false failures, too long delays startup detection.
-    "healthcheckPath": "/healthz", // Replace with your app's health check endpoint
-    "healthcheckTimeout": 25, // Max time (seconds) for the check to respond. Keep below your 30s target.
-    "healthcheckInterval": 5, // Time (seconds) between checks.
-    "healthcheckRetries": 3, // Number of failed attempts before marking as unhealthy.
-    "healthcheckInitialDelay": 5, // Optional: Seconds to wait before starting the first health check.
-    // --- Concurrency and Scaling ---
-    // While not directly in railway.json, ensure your service plan (CPU/RAM)
-    // is adequate. Insufficient resources will slow down startup.
-    // Concurrency settings might be relevant if your app uses multiple processes/workers (e.g., gunicorn workers).
-    // Ensure the start command reflects the optimal number for your plan.
-    "numReplicas": 1 // Optional: For scaling horizontally if needed.
+    "startCommand": "node index.js",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5,
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 15,
+    "healthcheckMaxRetries": 2,
+    "healthcheckDelay": 5
   }
 }
