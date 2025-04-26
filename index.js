@@ -60,15 +60,30 @@ if (!process.env.FEE_MARGIN) {
 }
 console.log(`ℹ️ Using FEE_MARGIN: ${process.env.FEE_MARGIN} lamports`);
 
+// --- NEW: Startup State Tracking ---
+let isFullyInitialized = false;
+
 // --- Initialize Scalable Components ---
 const app = express();
+
+// --- NEW: Railway Health Check Endpoint ---
+// Add this near the top, after app initialization, before other routes
+app.get('/health', (req, res) => {
+    if (isFullyInitialized) {
+        res.status(200).json({ status: 'ok' });
+    } else {
+        // Service is starting but not ready to serve traffic fully
+        res.status(503).json({ status: 'initializing' });
+    }
+});
+// --- END NEW ---
 
 // 1. Enhanced Solana Connection with Rate Limiting
 console.log("⚙️ Initializing scalable Solana connection...");
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 3,       // Max parallel requests
-    retryBaseDelay: 600,    // Initial delay for retries (ms)
-    commitment: 'confirmed',  // Default commitment level
+    maxConcurrent: 3,      // Max parallel requests
+    retryBaseDelay: 600,   // Initial delay for retries (ms)
+    commitment: 'confirmed', // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
         'solana-client': `SolanaGamblesBot/2.0 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info
@@ -81,7 +96,7 @@ console.log("✅ Scalable Solana connection initialized");
 // 2. Message Processing Queue (for handling Telegram messages)
 const messageQueue = new PQueue({
     concurrency: 5,   // Max concurrent messages processed
-    timeout: 10000    // Max time per message task (ms)
+    timeout: 10000     // Max time per message task (ms)
 });
 console.log("✅ Message processing queue initialized");
 
@@ -89,8 +104,8 @@ console.log("✅ Message processing queue initialized");
 console.log("⚙️ Setting up optimized PostgreSQL Pool...");
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    max: 15,                      // Max connections in pool
-    min: 5,                       // Min connections maintained
+    max: 15,                     // Max connections in pool
+    min: 5,                      // Min connections maintained
     idleTimeoutMillis: 30000,   // Close idle connections after 30s
     connectionTimeoutMillis: 5000, // Timeout for acquiring connection
     ssl: process.env.NODE_ENV === 'production' ? {
@@ -122,110 +137,78 @@ const performanceMonitor = {
     }
 };
 
-// --- Database Initialization (// --- Database Initialization (Updated with Detailed Logging AND Connection Retry) ---
+// --- Database Initialization (Updated) ---
 async function initializeDatabase() {
     console.log("⚙️ Initializing Database schema...");
     let client;
-    const maxRetries = 3; // Number of times to retry connection
-    const retryDelay = 3000; // Delay between retries in milliseconds (3 seconds)
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            console.log(`Attempting pool.connect() (Attempt ${attempt}/${maxRetries})...`);
-            client = await pool.connect();
-            console.log("✅ pool.connect() successful.");
-            break; // Exit loop if connection is successful
-        } catch (connectErr) {
-            console.error(`❌ pool.connect() failed on attempt ${attempt}:`, connectErr.message);
-            if (attempt === maxRetries) {
-                console.error("❌ Max DB connection retries reached. Throwing error.");
-                throw connectErr; // Throw error if max retries are exhausted
-            }
-            console.log(`Retrying DB connection in ${retryDelay / 1000} seconds...`);
-            await new Promise(resolve => setTimeout(resolve, retryDelay)); // Wait before retrying
-        }
-    }
-
-    // If client is null here, it means connection failed after all retries (error already thrown)
-    // Proceed with schema setup only if connection succeeded
     try {
-        // --- Schema setup queries remain the same ---
-        console.log("Attempting CREATE TABLE bets...");
+        client = await pool.connect();
+
+        // Bets Table: Tracks individual game bets
         await client.query(`
             CREATE TABLE IF NOT EXISTS bets (
-                id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, chat_id TEXT NOT NULL, game_type TEXT NOT NULL,
-                bet_details JSONB, expected_lamports BIGINT NOT NULL, memo_id TEXT UNIQUE NOT NULL, status TEXT NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), expires_at TIMESTAMPTZ NOT NULL,
-                paid_tx_signature TEXT UNIQUE, payout_tx_signature TEXT UNIQUE, processed_at TIMESTAMPTZ,
-                fees_paid BIGINT, priority INT DEFAULT 0
+                id SERIAL PRIMARY KEY,                       -- Unique bet identifier
+                user_id TEXT NOT NULL,                       -- Telegram User ID
+                chat_id TEXT NOT NULL,                       -- Telegram Chat ID
+                game_type TEXT NOT NULL,                     -- 'coinflip' or 'race'
+                bet_details JSONB,                           -- Game-specific details (choice, horse, odds)
+                expected_lamports BIGINT NOT NULL,           -- Amount user should send (in lamports)
+                memo_id TEXT UNIQUE NOT NULL,                -- Unique memo for payment tracking
+                status TEXT NOT NULL,                        -- Bet status (e.g., 'awaiting_payment', 'completed_win_paid', 'error_...')
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- When the bet was initiated
+                expires_at TIMESTAMPTZ NOT NULL,             -- When the payment window closes
+                paid_tx_signature TEXT UNIQUE,               -- Signature of the user's payment transaction
+                payout_tx_signature TEXT UNIQUE,             -- Signature of the bot's payout transaction (if win)
+                processed_at TIMESTAMPTZ,                    -- When the bet was fully resolved
+                fees_paid BIGINT,                            -- Estimated fees buffer associated with this bet
+                priority INT DEFAULT 0                       -- Priority for processing (higher first)
             );
         `);
-        console.log("✅ CREATE TABLE bets successful.");
 
-        console.log("Attempting CREATE TABLE wallets...");
+        // Wallets Table: Links Telegram User ID to their Solana wallet address
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
-                user_id TEXT PRIMARY KEY, wallet_address TEXT NOT NULL,
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_used_at TIMESTAMPTZ
+                user_id TEXT PRIMARY KEY,                    -- Telegram User ID
+                wallet_address TEXT NOT NULL,                -- User's Solana wallet address
+                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- When the wallet was first linked
+                last_used_at TIMESTAMPTZ                     -- When the wallet was last used for a bet/payout
             );
         `);
-        console.log("✅ CREATE TABLE wallets successful.");
 
-        console.log("Attempting ALTER TABLE bets (priority)...");
+        // Add columns using ALTER TABLE IF NOT EXISTS for backward compatibility
         await client.query(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS priority INT DEFAULT 0;`);
-        console.log("✅ ALTER TABLE bets (priority) successful.");
-
-        console.log("Attempting ALTER TABLE bets (fees_paid)...");
         await client.query(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS fees_paid BIGINT;`);
-        console.log("✅ ALTER TABLE bets (fees_paid) successful.");
 
-        console.log("Attempting CREATE INDEX idx_bets_status...");
+
+        // Add indexes for performance on frequently queried columns
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_status ON bets(status);`);
-        console.log("✅ CREATE INDEX idx_bets_status successful.");
-
-        console.log("Attempting CREATE INDEX idx_bets_user_id...");
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_user_id ON bets(user_id);`);
-        console.log("✅ CREATE INDEX idx_bets_user_id successful.");
-
-        console.log("Attempting CREATE INDEX idx_bets_expires_at...");
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_expires_at ON bets(expires_at);`);
-        console.log("✅ CREATE INDEX idx_bets_expires_at successful.");
-
-        console.log("Attempting CREATE INDEX idx_bets_priority...");
+        // --- Removed old memo index creation here, replaced below ---
+        // await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_memo_id ON bets(memo_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_bets_priority ON bets(priority);`);
-        console.log("✅ CREATE INDEX idx_bets_priority successful.");
 
-        console.log("Attempting CREATE UNIQUE INDEX idx_bets_memo_id...");
+        // --- NEW: Add improved unique index for memo_id ---
         await client.query(`
             CREATE UNIQUE INDEX IF NOT EXISTS idx_bets_memo_id
             ON bets (memo_id)
             INCLUDE (status, expected_lamports, expires_at);
         `);
-        console.log("✅ CREATE UNIQUE INDEX idx_bets_memo_id successful.");
+        // --- END NEW ---
 
-        console.log("✅ Database schema initialized/verified"); // Success log
-
-    } catch (queryErr) {
-        // Log errors during query execution
-        console.error("❌ Database schema setup query error occurred!");
-        console.error("Error Code:", queryErr.code);
-        console.error("Error Message:", queryErr.message);
-        console.error("Error Stack:", queryErr.stack);
-        throw queryErr; // Re-throw to prevent startup
+        console.log("✅ Database schema initialized/verified");
+    } catch (err) {
+        console.error("❌ Database initialization error:", err);
+        throw err; // Re-throw to prevent startup if DB fails
     } finally {
-        // Release client only if it was successfully acquired
-        if (client) {
-            console.log("Releasing DB client.");
-            client.release();
-        } else {
-            console.log("No DB client acquired to release.");
-        }
+        if (client) client.release(); // Release client back to the pool
     }
 }
+
 // --- Telegram Bot Initialization with Queue ---
 console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
-    polling: false, // Use webhooks in production (set later)
+    polling: false, // Use webhooks in production (set later in startServer)
     request: {      // Adjust request options for stability
         timeout: 10000, // Request timeout: 10s
         agentOptions: {
@@ -267,13 +250,14 @@ app.use(express.json({
     }
 }));
 
-// Health check endpoint
+// Original Health check / Info endpoint (keep for manual checks)
 app.get('/', (req, res) => {
     performanceMonitor.logRequest(true);
     res.status(200).json({
         status: 'ok',
+        initialized: isFullyInitialized, // Include initialization status
         timestamp: new Date().toISOString(),
-        version: '2.0.1', // Bot version (incremented for change)
+        version: '2.0.2', // Bot version (incremented for change)
         queueStats: { // Report queue status
             pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
             active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
@@ -786,19 +770,19 @@ function analyzeTransactionAmounts(tx, walletType) {
                 transferAmount = balanceChange;
                 // Try to identify payer based on who lost balance
                  for (let i = 0; i < accountKeys.length; i++) {
-                    if (i === targetIndex || accountKeys[i] === null) continue;
-                    const payerBalanceChange = BigInt(tx.meta.postBalances[i] || 0) - BigInt(tx.meta.preBalances[i] || 0);
-                     // Consider the fee payer (account 0) as the primary suspect if their balance decreased
-                     if (i === 0 && payerBalanceChange < 0n) {
-                         payerAddress = accountKeys[i];
-                         break; // Assume fee payer is the sender
+                     if (i === targetIndex || accountKeys[i] === null) continue;
+                     const payerBalanceChange = BigInt(tx.meta.postBalances[i] || 0) - BigInt(tx.meta.preBalances[i] || 0);
+                      // Consider the fee payer (account 0) as the primary suspect if their balance decreased
+                      if (i === 0 && payerBalanceChange < 0n) {
+                           payerAddress = accountKeys[i];
+                           break; // Assume fee payer is the sender
+                      }
+                      // Otherwise, look for a signer whose balance decreased appropriately
+                     const isSigner = tx.transaction.message.accountKeys[i]?.signer || (tx.transaction.message.header?.numRequiredSignatures > 0 && i < tx.transaction.message.header.numRequiredSignatures);
+                     if (isSigner && payerBalanceChange <= -transferAmount) { // Allow for fees
+                          payerAddress = accountKeys[i];
+                          break;
                      }
-                     // Otherwise, look for a signer whose balance decreased appropriately
-                    const isSigner = tx.transaction.message.accountKeys[i]?.signer || (tx.transaction.message.header?.numRequiredSignatures > 0 && i < tx.transaction.message.header.numRequiredSignatures);
-                    if (isSigner && payerBalanceChange <= -transferAmount) { // Allow for fees
-                        payerAddress = accountKeys[i];
-                        break;
-                    }
                  }
                 // If payer still not found, fallback to fee payer if their balance decreased
                 if (!payerAddress && accountKeys[0] && (BigInt(tx.meta.postBalances[0] || 0) - BigInt(tx.meta.preBalances[0] || 0)) < 0n) {
@@ -832,9 +816,9 @@ function analyzeTransactionAmounts(tx, walletType) {
                  if (transferInfo.destination === targetAddress) {
                      const instructionAmount = BigInt(transferInfo.lamports || transferInfo.amount || 0);
                      if (instructionAmount > 0n) {
-                        transferAmount = instructionAmount; // Take the amount from the first relevant transfer instruction
-                        payerAddress = transferInfo.source; // Get payer from instruction
-                        break; // Assume the first direct transfer is the one we care about
+                         transferAmount = instructionAmount; // Take the amount from the first relevant transfer instruction
+                         payerAddress = transferInfo.source; // Get payer from instruction
+                         break; // Assume the first direct transfer is the one we care about
                      }
                  }
              }
@@ -873,13 +857,13 @@ function getPayerFromTransaction(tx) {
          if (isSigner) {
              let key;
              try {
-                  if (message.accountKeys[i].pubkey) {
-                      key = message.accountKeys[i].pubkey instanceof PublicKey ? message.accountKeys[i].pubkey : new PublicKey(message.accountKeys[i].pubkey);
-                  } else if (typeof message.accountKeys[i] === 'string') {
-                      key = new PublicKey(message.accountKeys[i]);
-                  } else {
-                      continue;
-                  }
+                 if (message.accountKeys[i].pubkey) {
+                     key = message.accountKeys[i].pubkey instanceof PublicKey ? message.accountKeys[i].pubkey : new PublicKey(message.accountKeys[i].pubkey);
+                 } else if (typeof message.accountKeys[i] === 'string') {
+                     key = new PublicKey(message.accountKeys[i]);
+                 } else {
+                     continue;
+                 }
              } catch (e) { continue; } // Skip if key is invalid
 
              // Check if balance decreased (paid fees or sent funds)
@@ -924,7 +908,7 @@ function isRetryableError(error) {
 
     // Database potentially transient errors
     if (msg.includes('connection terminated') || code === 'econnrefused') { // Basic examples
-        return true;
+         return true;
     }
 
 
@@ -975,11 +959,11 @@ class PaymentProcessor {
             } else if (job.type === 'process_bet') {
                  const bet = await pool.query('SELECT * FROM bets WHERE id = $1', [job.betId]).then(res => res.rows[0]);
                  if (bet) {
-                     await processPaidBet(bet); // Trigger game logic processing
-                     result = { processed: true }; // Assume success unless exception
+                      await processPaidBet(bet); // Trigger game logic processing
+                      result = { processed: true }; // Assume success unless exception
                  } else {
-                     console.error(`Cannot process bet: Bet ID ${job.betId} not found.`);
-                     result = { processed: false, reason: 'bet_not_found' };
+                      console.error(`Cannot process bet: Bet ID ${job.betId} not found.`);
+                      result = { processed: false, reason: 'bet_not_found' };
                  }
             } else if (job.type === 'payout') {
                  await handlePayoutJob(job); // Trigger payout logic
@@ -1011,13 +995,13 @@ class PaymentProcessor {
                  console.error(`Job failed permanently or exceeded retries for identifier: ${jobIdentifier}`, error);
                  // Potentially update bet status to an error state if applicable and if betId exists
                  if(job.betId && job.type !== 'monitor_payment') { // Only update status for non-monitor failures with betId
-                     await updateBetStatus(job.betId, `error_${job.type}_failed`);
+                      await updateBetStatus(job.betId, `error_${job.type}_failed`);
                  }
             }
         } finally {
              // Always remove identifier from active set when processing finishes (success or final fail)
              if (jobIdentifier) {
-                 this.activeProcesses.delete(jobIdentifier);
+                  this.activeProcesses.delete(jobIdentifier);
              }
         }
     }
@@ -1144,8 +1128,8 @@ class PaymentProcessor {
              console.error(`Failed to mark bet ${bet.id} as paid: ${markResult.error}`);
              // Check if error was due to signature collision (already processed by another worker)
              if (markResult.error === 'Transaction signature already recorded' || markResult.error === 'Bet not found or already processed') {
-                processedSignaturesThisSession.add(signature); // Mark as processed if collision occurred
-                return { processed: false, reason: 'db_mark_paid_collision' };
+                 processedSignaturesThisSession.add(signature); // Mark as processed if collision occurred
+                 return { processed: false, reason: 'db_mark_paid_collision' };
              }
              // For other DB errors, potentially retry if possible, otherwise mark processed to prevent loop
              processedSignaturesThisSession.add(signature);
@@ -1208,6 +1192,11 @@ async function monitorPayments() {
         // console.log('[Monitor] Cycle already running, skipping.'); // Reduce log noise
         return;
     }
+    // Check if app is fully initialized before running monitor
+    if (!isFullyInitialized) {
+        console.log('[Monitor] Skipping cycle, application not fully initialized yet.');
+        return;
+    }
 
     isMonitorRunning = true;
     const startTime = Date.now();
@@ -1254,7 +1243,7 @@ async function monitorPayments() {
                 signaturesForWallet = await solanaConnection.getSignaturesForAddress(
                     new PublicKey(wallet.address),
                     {
-                        limit: 25,       // Fetch a slightly larger batch
+                        limit: 25,     // Fetch a slightly larger batch
                         before: beforeSig  // Use the specific 'before' signature for pagination
                     }
                 );
@@ -1297,9 +1286,9 @@ async function monitorPayments() {
                     });
                 }
             } catch (error) {
-                console.error(`[Monitor] Error fetching/processing signatures for wallet ${wallet.address}:`, error.message);
-                performanceMonitor.logRequest(false);
-                // Don't reset lastProcessedSignature on error, rely on next successful run
+                 console.error(`[Monitor] Error fetching/processing signatures for wallet ${wallet.address}:`, error.message);
+                 performanceMonitor.logRequest(false);
+                 // Don't reset lastProcessedSignature on error, rely on next successful run
             }
         } // End loop through wallets
         // --- Original Monitor Logic End ---
@@ -1448,7 +1437,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
                      {
                          commitment: 'confirmed', // Confirm at 'confirmed' level
                          skipPreflight: false,    // Perform preflight checks
-                         maxRetries: 2,          // Retries within sendAndConfirm (lower internal retries)
+                         maxRetries: 2,           // Retries within sendAndConfirm (lower internal retries)
                          preflightCommitment: 'confirmed' // Match commitment
                      }
                  ),
@@ -1535,7 +1524,7 @@ async function processPaidBet(bet) {
     } catch (error) {
          console.error(`❌ Error during game processing setup for bet ${bet.id}:`, error.message);
          if (client) {
-            try { await client.query('ROLLBACK'); } catch (rbError) { console.error("Rollback failed:", rbError); }
+             try { await client.query('ROLLBACK'); } catch (rbError) { console.error("Rollback failed:", rbError); }
          }
          await updateBetStatus(bet.id, 'error_processing_setup'); // Mark bet with error
     } finally {
@@ -1750,8 +1739,8 @@ async function handleRaceGame(bet) {
                 { parse_mode: 'Markdown' }
             ).catch(e => console.error("TG Send Error:", e.message));
 
-             // Update bet status before queuing payout
-              await updateBetStatus(betId, 'processing_payout');
+              // Update bet status before queuing payout
+               await updateBetStatus(betId, 'processing_payout');
 
             // Add payout job to the high priority queue
             await paymentProcessor.addPaymentJob({
@@ -1824,21 +1813,21 @@ async function handlePayoutJob(job) {
 
         } else {
             // Payout failed after retries
-             console.error(`❌ Payout failed permanently for bet ${betId}: ${sendResult.error}`);
-             await safeSendMessage(chatId,
-                 `⚠️ Payout failed for bet ID ${betId}: ${sendResult.error}\n` +
-                 `The team has been notified. Please contact support if needed.`,
-                 { parse_mode: 'Markdown' }
-             ).catch(e => console.error("TG Send Error:", e.message));
+              console.error(`❌ Payout failed permanently for bet ${betId}: ${sendResult.error}`);
+              await safeSendMessage(chatId,
+                  `⚠️ Payout failed for bet ID ${betId}: ${sendResult.error}\n` +
+                  `The team has been notified. Please contact support if needed.`,
+                  { parse_mode: 'Markdown' }
+              ).catch(e => console.error("TG Send Error:", e.message));
             // Update status to indicate payout failure
-             await updateBetStatus(betId, 'error_payout_failed');
-             // TODO: Implement admin notification for failed payouts (Log is already present)
+              await updateBetStatus(betId, 'error_payout_failed');
+              // TODO: Implement admin notification for failed payouts (Log is already present)
         }
     } catch (error) {
         // Catch unexpected errors during payout processing
          console.error(`❌ Unexpected error processing payout job for bet ${betId}:`, error);
         // Update status to reflect exception during payout attempt
-         await updateBetStatus(betId, 'error_payout_exception');
+          await updateBetStatus(betId, 'error_payout_exception');
         // Notify user of technical error
           await safeSendMessage(chatId,
               `⚠️ A technical error occurred during payout for bet ID ${betId}.\n` +
@@ -2021,10 +2010,10 @@ async function handleStartCommand(msg) {
     const firstName = msg.from.first_name || 'there';
     const sanitizedFirstName = firstName.replace(/</g, '&lt;').replace(/>/g, '&gt;'); // Basic sanitization
     const welcomeText = `👋 Welcome, ${sanitizedFirstName}!\n\n` +
-                        `🎰 *Solana Gambles Bot*\n\n` +
-                        `Use /coinflip or /race to see game options.\n` +
-                        `Use /wallet to view your linked Solana wallet.\n` +
-                        `Use /help to see all commands.`;
+                      `🎰 *Solana Gambles Bot*\n\n` +
+                      `Use /coinflip or /race to see game options.\n` +
+                      `Use /wallet to view your linked Solana wallet.\n` +
+                      `Use /help to see all commands.`;
     const bannerUrl = 'https://i.ibb.co/9vDo58q/banner.gif'; // Keep banner URL
 
     try {
@@ -2150,7 +2139,7 @@ async function handleBetCommand(msg, args) {
     );
 
     if (!saveResult.success) {
-         await safeSendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
+        await safeSendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
          // Don't throw, just return after notifying user
          return;
     }
@@ -2174,12 +2163,12 @@ async function handleBetCommand(msg, args) {
 async function handleBetRaceCommand(msg, args) {
     const match = args.trim().match(/^(\d+\.?\d*)\s+(\w+)/i); // Match against args string
      if (!match) {
-        await safeSendMessage(msg.chat.id,
-             `⚠️ Invalid format. Use: \`/betrace <amount> <horse_name>\`\n`+
-             `Example: \`/betrace 0.1 Yellow\``,
-             { parse_mode: 'Markdown' }
-         ).catch(e => console.error("TG Send Error:", e.message));
-         return;
+         await safeSendMessage(msg.chat.id,
+              `⚠️ Invalid format. Use: \`/betrace <amount> <horse_name>\`\n`+
+              `Example: \`/betrace 0.1 Yellow\``,
+              { parse_mode: 'Markdown' }
+          ).catch(e => console.error("TG Send Error:", e.message));
+          return;
      }
 
     const userId = String(msg.from.id);
@@ -2227,11 +2216,11 @@ async function handleBetRaceCommand(msg, args) {
         expectedLamports, memoId, expiresAt
     );
 
-      if (!saveResult.success) {
+     if (!saveResult.success) {
          await safeSendMessage(chatId, `⚠️ Error registering bet: ${saveResult.error}. Please try the command again.`).catch(e => console.error("TG Send Error:", e.message));
          // Don't throw, just return
          return;
-      }
+     }
 
     // Calculate potential payout for display
      const potentialPayoutLamports = calculatePayout(expectedLamports, 'race', chosenHorse);
@@ -2255,17 +2244,17 @@ async function handleBetRaceCommand(msg, args) {
 // Handles /help command
 async function handleHelpCommand(msg) {
      const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
-                       `/start - Show welcome message\n` +
-                       `/help - Show this help message\n\n` +
-                       `*Games:*\n` +
-                       `/coinflip - Show Coinflip game info & how to bet\n` +
-                       `/race - Show Horse Race game info & how to bet\n\n` +
-                       `*Betting:*\n` +
-                       `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
-                       `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
-                       `*Wallet:*\n` +
-                       `/wallet - View your linked Solana wallet for payouts\n\n` +
-                       `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
+                        `/start - Show welcome message\n` +
+                        `/help - Show this help message\n\n` +
+                        `*Games:*\n` +
+                        `/coinflip - Show Coinflip game info & how to bet\n` +
+                        `/race - Show Horse Race game info & how to bet\n\n` +
+                        `*Betting:*\n` +
+                        `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
+                        `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
+                        `*Wallet:*\n` +
+                        `/wallet - View your linked Solana wallet for payouts\n\n` +
+                        `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
 
      await safeSendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2273,124 +2262,148 @@ async function handleHelpCommand(msg) {
 
 // --- Server Startup & Shutdown Logic ---
 
-// Main function to initialize and start the bot/server
+// --- MODIFIED: startServer function for Railway ---
 async function startServer() {
+    let server; // Define server variable here to be accessible in error handler
     try {
-        await initializeDatabase(); // Ensure DB is ready first
-        const PORT = process.env.PORT || 3000; // Use PORT from env or default to 3000
-
-        // Set up Telegram Webhook if in a production environment (e.g., Railway)
-        if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_PUBLIC_DOMAIN) {
-            const webhookUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}${webhookPath}`;
-            console.log(`Attempting to set webhook to: ${webhookUrl}`);
-
-            let attempts = 0;
-            while (attempts < 3) { // Retry webhook setup
-                try {
-                    // Ensure any existing webhook is deleted before setting a new one
-                    await bot.deleteWebHook({ drop_pending_updates: true });
-                    await bot.setWebHook(webhookUrl, {
-                         max_connections: 20 // Allow more concurrent webhook connections if needed
-                    });
-                    console.log(`✅ Webhook successfully set to: ${webhookUrl}`);
-                    break; // Exit loop on success
-                } catch (webhookError) {
-                    attempts++;
-                    console.error(`❌ Webhook setup attempt ${attempts} failed:`, webhookError.message);
-                    if (attempts >= 3) {
-                         console.error("❌ Max webhook setup attempts reached. Continuing without webhook (potential issues)...");
-                         // Decide if you want to throw or just log here
-                         // throw webhookError; // Option: Throw error to stop startup
-                         break; // Option: Continue without webhook if polling is fallback
-                    }
-                    // Wait before retrying
-                    await new Promise(resolve => setTimeout(resolve, 3000 * attempts));
-                }
-            }
-        } else {
-             console.log("ℹ️ Not in Railway environment or domain not set, webhook not configured. Will attempt polling.");
-        }
-
-        // Start the Express server
-        const server = app.listen(PORT, "0.0.0.0", () => { // Listen on all interfaces
-            console.log(`🚀 Server running on port ${PORT}`);
-
-            // Start the payment monitor loop AFTER server starts listening
-            console.log(`⚙️ Starting payment monitor (Initial Interval: ${monitorIntervalSeconds}s)`);
-            // --- Logging Added Around Interval ---
-            monitorInterval = setInterval(() => {
-                 // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Fired (${monitorIntervalSeconds}s) ====`); // Reduce log noise
-                 try {
-                      monitorPayments().catch(err => { // Catch async errors from monitorPayments
-                          console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
-                          performanceMonitor.logRequest(false);
-                      });
-                 } catch (syncErr) { // Catch sync errors immediately within the callback
-                      console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
-                      performanceMonitor.logRequest(false);
-                 }
-                  // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Callback End ====`); // Optional: Log end
-              }, monitorIntervalSeconds * 1000);
-            // --- End Logging Added ---
-
-
-            // Run monitor once shortly after startup
-            setTimeout(() => {
-                 console.log("⚙️ Performing initial payment monitor run...");
-                 // Also wrap this initial call
-                 try {
-                      monitorPayments().catch(err => {
-                          console.error('[FATAL MONITOR ERROR in initial run catch]:', err);
-                          performanceMonitor.logRequest(false);
-                      });
-                 } catch (syncErr) {
-                      console.error('[FATAL MONITOR SYNC ERROR in initial run try/catch]:', syncErr);
-                      performanceMonitor.logRequest(false);
-                 }
-            }, 5000); // Delay initial run slightly
-
-            // Start polling if webhook is NOT used (e.g., local development or webhook setup failed)
-             // Check if bot is already polling or has webhook set
-             bot.getWebHookInfo().then(info => {
-                if (!info || !info.url) {
-                     console.log("ℹ️ Webhook not set, starting bot polling...");
-                     // Delete any existing webhook first just in case
-                     bot.deleteWebHook({ drop_pending_updates: true })
-                         .then(() => bot.startPolling({ polling: { interval: 300 } })) // Adjust interval if needed
-                         .then(() => console.log("✅ Bot polling started successfully"))
-                         .catch(err => {
-                             console.error("❌ Error starting polling:", err.message);
-                             // Handle specific polling errors if needed
-                             if (err.message.includes('409 Conflict')) {
-                                 console.error("❌❌❌ Conflict detected! Another instance might be polling.");
-                                 console.error("❌ Exiting due to conflict."); process.exit(1);
-                             }
-                         });
-                 } else {
-                     console.log("ℹ️ Webhook is set, polling will not be started.");
-                 }
-             }).catch(err => {
-                 console.error("❌ Error checking webhook info:", err.message);
-                 // Potentially try starting polling as a fallback?
-             });
+        // Start the server IMMEDIATELY
+        const PORT = process.env.PORT || 3000;
+        server = app.listen(PORT, "0.0.0.0", () => {
+            console.log(`🚀 Server running on port ${PORT}. Waiting for initialization...`);
+            // Note: Initialization happens in the setTimeout below now
         });
 
-        // Handle server errors (e.g., port already in use)
+        // Handle server startup errors (like EADDRINUSE)
         server.on('error', (err) => {
-            console.error('❌ Server error:', err);
+            console.error('❌ Server startup error:', err);
             if (err.code === 'EADDRINUSE') {
                 console.error(`❌❌❌ Port ${PORT} is already in use. Is another instance running? Exiting.`);
-                console.error("❌ Exiting due to EADDRINUSE."); process.exit(1);
+                process.exit(1); // Exit immediately if port is taken
             }
-            // Handle other server errors if necessary
+            // Handle other potential server errors if needed
+            process.exit(1); // Exit on other server errors too
         });
 
+        // Then initialize other components ASYNCHRONOUSLY
+        // Using setTimeout 0 to run this block after the current event loop cycle
+        setTimeout(async () => {
+            try {
+                console.log("⚙️ Starting asynchronous initialization...");
+                await initializeDatabase(); // Ensure DB is ready first
+
+                // Set up Telegram Webhook if in a production environment (e.g., Railway)
+                if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_PUBLIC_DOMAIN) {
+                    const webhookUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}${webhookPath}`;
+                    console.log(`Attempting to set webhook to: ${webhookUrl}`);
+
+                    let attempts = 0;
+                    while (attempts < 3) { // Retry webhook setup (kept from original)
+                        try {
+                            // Ensure any existing webhook is deleted before setting a new one
+                            await bot.deleteWebHook({ drop_pending_updates: true });
+                            await bot.setWebHook(webhookUrl, {
+                                max_connections: 20 // Allow more concurrent webhook connections if needed
+                            });
+                            console.log(`✅ Webhook successfully set to: ${webhookUrl}`);
+                            break; // Exit loop on success
+                        } catch (webhookError) {
+                            attempts++;
+                            console.error(`❌ Webhook setup attempt ${attempts} failed:`, webhookError.message);
+                            if (attempts >= 3) {
+                                console.error("❌ Max webhook setup attempts reached. Continuing without webhook (potential issues)...");
+                                // Decide if you want to throw or just log here
+                                // throw webhookError; // Option: Throw error to stop initialization
+                                break; // Option: Continue without webhook if polling is fallback
+                            }
+                            // Wait before retrying
+                            await new Promise(resolve => setTimeout(resolve, 3000 * attempts));
+                        }
+                    }
+                } else {
+                    console.log("ℹ️ Not in Railway environment or domain not set, webhook not configured. Will attempt polling.");
+                }
+
+                // Start the payment monitor loop AFTER async initialization is done
+                console.log(`⚙️ Starting payment monitor (Initial Interval: ${monitorIntervalSeconds}s)`);
+                monitorInterval = setInterval(() => {
+                     // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Fired (${monitorIntervalSeconds}s) ====`); // Reduce log noise
+                     try {
+                         monitorPayments().catch(err => { // Catch async errors from monitorPayments
+                             console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
+                             performanceMonitor.logRequest(false);
+                         });
+                     } catch (syncErr) { // Catch sync errors immediately within the callback
+                         console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
+                         performanceMonitor.logRequest(false);
+                     }
+                      // console.log(`[${new Date().toISOString()}] ==== Monitor Interval Callback End ====`); // Optional: Log end
+                  }, monitorIntervalSeconds * 1000);
+
+
+                // Run monitor once shortly after initialization completes
+                setTimeout(() => {
+                     console.log("⚙️ Performing initial payment monitor run...");
+                     // Also wrap this initial call
+                     try {
+                         monitorPayments().catch(err => {
+                             console.error('[FATAL MONITOR ERROR in initial run catch]:', err);
+                             performanceMonitor.logRequest(false);
+                         });
+                     } catch (syncErr) {
+                         console.error('[FATAL MONITOR SYNC ERROR in initial run try/catch]:', syncErr);
+                         performanceMonitor.logRequest(false);
+                     }
+                 }, 5000); // Delay initial run slightly
+
+                // Start polling if webhook is NOT used (e.g., local development or webhook setup failed)
+                 // Check if bot is already polling or has webhook set
+                 bot.getWebHookInfo().then(info => {
+                     if (!info || !info.url) {
+                          console.log("ℹ️ Webhook not set, starting bot polling...");
+                          // Delete any existing webhook first just in case
+                          bot.deleteWebHook({ drop_pending_updates: true })
+                              .then(() => bot.startPolling({ polling: { interval: 300 } })) // Adjust interval if needed
+                              .then(() => console.log("✅ Bot polling started successfully"))
+                              .catch(err => {
+                                   console.error("❌ Error starting polling:", err.message);
+                                   // Handle specific polling errors if needed
+                                   if (err.message.includes('409 Conflict')) {
+                                        console.error("❌❌❌ Conflict detected! Another instance might be polling.");
+                                        console.error("❌ Exiting due to conflict."); process.exit(1);
+                                   }
+                              });
+                     } else {
+                          console.log("ℹ️ Webhook is set, polling will not be started.");
+                     }
+                 }).catch(err => {
+                      console.error("❌ Error checking webhook info:", err.message);
+                      // Potentially try starting polling as a fallback?
+                 });
+
+                // --- NEW: Mark initialization as complete ---
+                isFullyInitialized = true;
+                console.log("✅ Asynchronous Initialization Complete. Bot is fully ready.");
+                console.log("🚀🚀🚀 Solana Gambles Bot is up and running! 🚀🚀🚀");
+
+
+            } catch (initError) {
+                console.error("🔥🔥🔥 Asynchronous Initialization Error:", initError);
+                // Even if initialization fails, the server is running.
+                // Keep isFullyInitialized = false. The /health check will report initializing.
+                // Consider if a failed initialization requires stopping the server.
+                // For now, just logging the error. Might need manual intervention.
+                // Optionally, try to shut down gracefully here?
+                // await shutdown('INITIALIZATION_FAILURE'); // Requires shutdown to be defined
+            }
+        }, 0); // Use timeout 0 to schedule immediately after current stack clears
+
     } catch (error) {
-        // Catch errors during the overall startup process (DB init, etc.)
-        console.error("🔥🔥🔥 Failed to start application:", error);
-        console.error("❌ Exiting due to startup failure."); process.exit(1); // Exit if critical startup steps fail
+        // Catch errors during the *immediate* synchronous part of startup (e.g., Express setup itself)
+        console.error("🔥🔥🔥 Failed to start server (immediate error):", error);
+        process.exit(1); // Exit if critical startup steps fail
     }
 }
+// --- END MODIFIED startServer ---
 
 // Graceful shutdown handler
 const shutdown = async (signal) => {
@@ -2409,9 +2422,9 @@ const shutdown = async (signal) => {
          try {
              const webhookInfo = await bot.getWebHookInfo();
              if (webhookInfo && webhookInfo.url) {
-                await bot.deleteWebHook({ drop_pending_updates: true });
-                console.log("- Removed Telegram webhook.");
-                webhookDeleted = true;
+                 await bot.deleteWebHook({ drop_pending_updates: true });
+                 console.log("- Removed Telegram webhook.");
+                 webhookDeleted = true;
              }
          } catch (whErr) {
              console.error("⚠️ Error removing webhook during shutdown:", whErr.message);
@@ -2419,11 +2432,11 @@ const shutdown = async (signal) => {
 
         // Stop polling if it was active
         if (bot.isPolling()) {
-              await bot.stopPolling({ cancel: true }); // Cancel polling
-              console.log("- Stopped Telegram polling.");
+             await bot.stopPolling({ cancel: true }); // Cancel polling
+             console.log("- Stopped Telegram polling.");
         }
          // Close Express server? (Handled by Railway/Docker usually, but good practice)
-         // server.close(() => console.log("- Express server closed.")); // Need 'server' in wider scope
+         // server.close(() => console.log("- Express server closed.")); // Need 'server' in wider scope if used here
     } catch (e) {
         console.error("⚠️ Error stopping bot listeners:", e.message);
     }
@@ -2488,10 +2501,8 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // --- Start the Application ---
-startServer().then(() => {
-    console.log("🚀🚀🚀 Solana Gambles Bot is up and running! 🚀🚀🚀");
-}).catch(err => {
-    // This catch is for errors thrown *during* the async startServer call itself
-    console.error("🔥🔥🔥 Application failed to initialize:", err);
-    console.error("❌ Exiting due to initialization failure."); process.exit(1);
-});
+// No need for .then() here anymore as the final success log is inside the async init now
+startServer();
+
+// Note: The final "Bot is up and running" log message moved inside the async initialization block
+// in startServer to accurately reflect when the bot is *fully* ready.
