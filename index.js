@@ -81,7 +81,7 @@ app.get('/health', (req, res) => {
 app.get('/railway-health', (req, res) => {
     res.status(200).json({
         status: isFullyInitialized ? 'ready' : 'starting',
-        version: '2.0.7' // Version Bump for Memo V2 fix
+        version: '2.0.8' // Version Bump for user-provided findMemoInTx
     });
 });
 
@@ -104,7 +104,7 @@ const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
     commitment: 'confirmed',   // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
-        'solana-client': `SolanaGamblesBot/2.0.7 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info (Version Bump)
+        'solana-client': `SolanaGamblesBot/2.0.8 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info (Version Bump)
     },
     rateLimitCooloff: 10000,     // Pause duration after hitting rate limits (ms) - Changed back to 10000ms as per original structure.
     disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
@@ -280,7 +280,7 @@ app.get('/', (req, res) => {
         status: 'ok',
         initialized: isFullyInitialized, // Report background initialization status here
         timestamp: new Date().toISOString(),
-        version: '2.0.7', // Bot version (incremented for Memo V2 fix)
+        version: '2.0.8', // Bot version (incremented for user-provided findMemoInTx)
         queueStats: { // Report queue status
             pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
             active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
@@ -358,7 +358,7 @@ const PRIORITY_FEE_RATE = 0.0001;
 
 // --- START: Enhanced Memo Handling System ---
 
-// Define Memo Program IDs
+// Define Memo Program IDs (Note: User-provided function below only uses V2 ID string)
 const MEMO_V1_PROGRAM_ID = new PublicKey("Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo");
 const MEMO_V2_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 
@@ -414,7 +414,7 @@ function validateMemoChecksum(hex, checksum) {
 }
 
 
-// 3. Robust Memo Normalization with Fallbacks (Primarily for handling potential V1 memos)
+// 3. Robust Memo Normalization with Fallbacks (Not used by the user-provided findMemoInTx below)
 function normalizeMemo(rawMemo) {
     if (typeof rawMemo !== 'string') return null;
 
@@ -485,77 +485,54 @@ function normalizeMemo(rawMemo) {
 }
 
 
-// 4. Enhanced Transaction Memo Search (MODIFIED VALIDATION LOGIC)
-const findMemoInTx = (tx) => {
+// 4. Transaction Memo Search (USER-PROVIDED VERSION)
+async function findMemoInTx(tx) {
     if (!tx || !tx.transaction || !tx.transaction.message || !tx.transaction.message.instructions) {
         return null;
     }
 
-    // Helper to get PublicKey object from accountKeys array
-    const getInstructionProgramIdKey = (instruction, message) => {
-        if (!instruction || !message || !message.accountKeys) return null;
-        if (instruction.programId) return instruction.programId; // Already a PublicKey
-        if (instruction.programIdIndex !== undefined && message.accountKeys[instruction.programIdIndex]) {
-             // accountKeys can be PublicKey objects or CompiledInstruction format { pubkey: PublicKey, ... }
-             const keyInfo = message.accountKeys[instruction.programIdIndex];
-             if (keyInfo instanceof PublicKey) return keyInfo;
-             if (keyInfo?.pubkey instanceof PublicKey) return keyInfo.pubkey;
-             // Fallback for base58 strings (less common in getParsedTransaction)
-             if (typeof keyInfo === 'string') {
-                 try { return new PublicKey(keyInfo); } catch { return null; }
-             }
-             if (typeof keyInfo?.pubkey === 'string') {
-                 try { return new PublicKey(keyInfo.pubkey); } catch { return null; }
-             }
-        }
-        return null;
-    };
+    // --- NOTE: This line might be problematic if tx.transaction.message.instructions
+    // ---       is not directly available or populated in the parsed transaction format.
+    // ---       The previous version accessed it differently.
+    const instructions = tx.transaction.message.instructions;
 
-    for (const instruction of tx.transaction.message.instructions) {
+    for (const inst of instructions) {
         try {
-            const programId = getInstructionProgramIdKey(instruction, tx.transaction.message);
+            // Check if this is a Memo V1 or Memo V2 Program instruction
+            // --- NOTE: This assumes `inst.programId` exists and has a `toString()` method.
+            // ---       It also assumes `inst.programId` will be populated directly,
+            // ---       which might not be true for parsed transactions (might use programIdIndex).
+            // ---       It also *only* checks for the V2 Program ID string.
+            const programId = inst.programId.toString();
 
-            if (!programId) continue;
+            if (
+                programId === 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr' // Memo V2 string ID
+            ) {
+                let memoData = '';
 
-             // --- START: FIX IMPLEMENTATION ---
-            if (programId.equals(MEMO_V2_PROGRAM_ID)) {
-                 // For Memo V2: just decode as UTF-8 and accept it
-                 try {
-                     if (instruction.data) {
-                        const memoString = Buffer.from(instruction.data, 'base64').toString('utf8').trim();
-                        if (memoString) {
-                            console.log(`[MEMO DEBUG] Found V2 memo: ${memoString}`);
-                            return memoString; // ✅ accept trimmed V2 memo directly
-                        }
-                     }
-                 } catch (e) {
-                     console.error("[MEMO DEBUG] Error decoding Memo V2 data:", e);
-                 }
-            } else if (programId.equals(MEMO_V1_PROGRAM_ID)) {
-                 // For Memo V1: decode and use the normalization logic
-                 try {
-                    if (instruction.data) {
-                        const rawDecodedMemo = Buffer.from(instruction.data, 'base64').toString('utf8');
-                        const normalized = normalizeMemo(rawDecodedMemo); // Apply V1 recovery/validation
-                        if (normalized) {
-                             console.log(`[MEMO DEBUG] Found and normalized V1 memo: ${normalized} (Raw: ${rawDecodedMemo})`);
-                            return normalized;
-                        }
-                    }
-                 } catch (e) {
-                    console.error("[MEMO DEBUG] Error decoding/normalizing Memo V1 data:", e);
-                 }
+                // --- NOTE: Assumes `inst.data` contains the base64 encoded memo.
+                if (inst.data) {
+                    // Memo V2: data is expected to be base64, decode it
+                    const decoded = Buffer.from(inst.data, 'base64').toString('utf-8').trim();
+                    memoData = decoded;
+                }
+
+                if (memoData) {
+                    console.log(`[MEMO DEBUG UserProvided] Found V2 memo: ${memoData}`); // Added log
+                    return memoData; // Return the decoded memo directly
+                }
             }
-             // --- END: FIX IMPLEMENTATION ---
-
+            // --- NOTE: No handling for Memo V1 Program ID ---
         } catch (err) {
-            console.error("[MEMO DEBUG] Error processing memo instruction:", err);
+            // --- NOTE: Changed error log source identifier ---
+            console.error('[MEMO DEBUG UserProvided] Failed to process memo instruction', err);
+            continue; // Original code had `continue;` here implicitly if error happens before check
         }
     }
 
-    console.log("[MEMO DEBUG] No V1 or V2 memo found in transaction instructions.");
-    return null; // Return null if no relevant memo instruction found
-};
+    console.log("[MEMO DEBUG UserProvided] No V2 memo found in transaction instructions."); // Changed log
+    return null; // No memo found
+}
 // --- END: Enhanced Memo Handling System ---
 
 
@@ -1108,11 +1085,11 @@ class PaymentProcessor {
 
         // --- Signature successfully fetched and is valid ---
 
-        // 5. Find and validate the memo (Uses updated findMemoInTx logic)
-        const memo = findMemoInTx(tx); // Will return V2 memo directly or normalized V1 memo
-        console.log(`[PAYMENT DEBUG] Found memo in TX ${signature}: ${memo}`);
+        // 5. Find and validate the memo (Uses updated findMemoInTx logic - the user-provided one)
+        const memo = await findMemoInTx(tx); // Now uses the user-provided function
+        console.log(`[PAYMENT DEBUG] Memo found by findMemoInTx for TX ${signature}: ${memo}`); // Log result
         if (!memo) {
-            // console.log(`Transaction ${signature} does not contain a valid game memo.`); // Reduce noise
+            // console.log(`Transaction ${signature} does not contain a valid game memo according to findMemoInTx.`); // Reduce noise
             processedSignaturesThisSession.add(signature); // Mark as processed
             return { processed: false, reason: 'no_valid_memo' };
         }
