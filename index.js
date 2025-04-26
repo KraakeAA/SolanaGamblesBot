@@ -74,7 +74,7 @@ app.get('/health', (req, res) => {
     status: server ? 'ready' : 'starting', // Report 'ready' once server object exists, otherwise 'starting'
     uptime: process.uptime()
   });
-}); // <<< NOTE: Closing parenthesis for app.get was misplaced in original, corrected here.
+});
 
 // --- Railway-Specific Health Check Endpoint (NEW) ---
 // This endpoint can be used by Railway to check readiness after container rotation.
@@ -508,7 +508,7 @@ function normalizeMemo(rawMemo) {
 }
 
 
-// 4. Enhanced Transaction Memo Search
+// 4. Enhanced Transaction Memo Search (with Base64 fix for V2)
 function findMemoInTx(tx) {
     // Added null checks for tx and nested properties
     if (!tx?.transaction?.message?.instructions || !tx?.transaction?.message?.accountKeys) {
@@ -516,10 +516,9 @@ function findMemoInTx(tx) {
     }
 
     try {
-        const MEMO_PROGRAM_IDS = new Set([
-            'Memo1UhkJRfHyvLMcVuc6beZNRYqUP2VZwW', // v1
-            'MemoSq4gqABAXKb96qnH8TysNcVtrp5GktfD'  // v2
-        ]);
+        const MEMO_V1_PROGRAM_ID = 'Memo1UhkJRfHyvLMcVuc6beZNRYqUP2VZwW';
+        const MEMO_V2_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcVtrp5GktfD';
+        const MEMO_PROGRAM_IDS = new Set([MEMO_V1_PROGRAM_ID, MEMO_V2_PROGRAM_ID]);
 
         // Combine instructions and inner instructions
         const instructions = [
@@ -533,32 +532,58 @@ function findMemoInTx(tx) {
                                 ? tx.transaction.message.accountKeys[inst.programIdIndex]?.pubkey?.toBase58()
                                 : null; // Handle case where index might be missing or invalid
 
+            // --- Memo Debug Logs ---
+            if (programId) {
+                console.log(`[MEMO DEBUG] Checking instruction with Program ID: ${programId}`);
+            }
+            // --- End Memo Debug Logs ---
+
             if (!programId || !MEMO_PROGRAM_IDS.has(programId)) continue;
+
+            // --- Memo Debug Logs ---
+            console.log(`[MEMO DEBUG] Matched Memo Program ID: ${programId}. Raw data: ${inst.data}`);
+            // --- End Memo Debug Logs ---
 
             // Safely decode data, handle potential errors
             let rawMemo = null;
             try {
-                const data = bs58.decode(inst.data || '');
-                rawMemo = data.toString('utf8').replace(/\0/g, ''); // Remove null bytes often padded
+                // --- PATCH START: Conditional Decoding for Memo V1/V2 ---
+                if (programId === MEMO_V2_PROGRAM_ID) {
+                    // Decode SPL Memo (V2) data from Base64
+                    const dataBuffer = Buffer.from(inst.data || '', 'base64');
+                    rawMemo = dataBuffer.toString('utf8').replace(/\0/g, ''); // Remove null bytes
+                    console.log(`[MEMO DEBUG] Decoded V2 (Base64) memo: "${rawMemo}"`);
+                } else if (programId === MEMO_V1_PROGRAM_ID) {
+                    // Decode original Memo (V1) data as UTF-8 (best guess)
+                    // Note: Original code used bs58.decode, which might work if data IS base58,
+                    // but UTF-8 is more standard for simple text memos in V1.
+                    const dataBuffer = Buffer.from(bs58.decode(inst.data || '')); // Keep bs58 for now to match previous logic
+                    rawMemo = dataBuffer.toString('utf8').replace(/\0/g, ''); // Remove null bytes
+                    console.log(`[MEMO DEBUG] Decoded V1 (bs58->utf8) memo: "${rawMemo}"`);
+                }
+                // --- PATCH END ---
             } catch (decodeError) {
-                // console.warn(`Error decoding instruction data for potential memo: ${decodeError.message}`); // Debug log
-                continue; // Skip if data is invalid
+                 console.warn(`[MEMO DEBUG] Error decoding instruction data for memo program ${programId}: ${decodeError.message}`);
+                continue; // Skip if data is invalid or decoding fails
             }
 
             // Attempt to normalize the raw memo text
             const normalized = normalizeMemo(rawMemo);
+            console.log(`[MEMO DEBUG] Normalized memo: ${normalized}`);
+
 
             // Return the first valid, normalized, and checksum-verified memo found
             if (normalized && validateOriginalMemoFormat(normalized)) {
-                // console.log(`Found and validated memo: ${normalized} from raw: ${rawMemo}`); // Debug log
+                console.log(`[MEMO DEBUG] Validated memo found: ${normalized}`);
                 return normalized;
             } else if (normalized) {
-                // console.warn(`Normalized memo "${normalized}" failed strict validation.`); // Debug if normalized but didn't pass final check
+                 console.warn(`[MEMO DEBUG] Normalized memo "${normalized}" failed strict validation.`);
             }
         }
     } catch (e) {
         console.error("Memo parsing error:", e);
     }
+    console.log(`[MEMO DEBUG] No valid game memo found in transaction.`);
     return null; // No valid memo found
 }
 
@@ -1076,9 +1101,9 @@ class PaymentProcessor {
                 signature,
                 { maxSupportedTransactionVersion: 0 }
             );
-            // --- PATCH START: Add Payment Debugging Logs ---
+            // --- Log added in previous step ---
             console.log(`[PAYMENT DEBUG] Fetched transaction for signature: ${signature}`);
-            // --- PATCH END ---
+            // --- End log ---
         } catch (fetchError) {
             console.error(`Failed to fetch TX ${signature}: ${fetchError.message}`);
             if (isRetryableError(fetchError) && attempt < 3) throw fetchError;
@@ -1102,10 +1127,10 @@ class PaymentProcessor {
         // --- Signature successfully fetched and is valid ---
 
         // 5. Find and validate the memo
-        const memo = findMemoInTx(tx);
-        // --- PATCH START: Add Payment Debugging Logs ---
+        const memo = findMemoInTx(tx); // This function now includes diagnostic logs & base64 fix
+        // --- Log added in previous step ---
         console.log(`[PAYMENT DEBUG] Found memo in TX: ${memo}`);
-        // --- PATCH END ---
+        // --- End log ---
         if (!memo) {
             // console.log(`Transaction ${signature} does not contain a valid game memo.`);
             processedSignaturesThisSession.add(signature); // Mark as processed
@@ -1114,9 +1139,9 @@ class PaymentProcessor {
 
         // 6. Find the corresponding bet in the database
         const bet = await findBetByMemo(memo);
-        // --- PATCH START: Add Payment Debugging Logs ---
+        // --- Log added in previous step ---
         console.log(`[PAYMENT DEBUG] Found pending bet ID: ${bet?.id} for memo: ${memo}`);
-        // --- PATCH END ---
+        // --- End log ---
         if (!bet) {
             console.warn(`No matching pending bet found for memo "${memo}" from TX ${signature}.`);
             processedSignaturesThisSession.add(signature); // Mark as processed
@@ -1165,11 +1190,11 @@ class PaymentProcessor {
 
         // 11. Mark bet as paid in DB
         const markResult = await markBetPaid(bet.id, signature);
-        // --- PATCH START: Add Payment Debugging Logs ---
+        // --- Log added in previous step ---
         if (markResult.success) {
             console.log(`[PAYMENT DEBUG] Successfully marked bet ${bet.id} as paid with TX: ${signature}`);
         }
-        // --- PATCH END ---
+        // --- End log ---
         if (!markResult.success) {
             console.error(`Failed to mark bet ${bet.id} as paid: ${markResult.error}`);
              if (markResult.error === 'Transaction signature already recorded' || markResult.error === 'Bet not found or already processed') {
