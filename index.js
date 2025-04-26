@@ -1248,7 +1248,7 @@ let isMonitorRunning = false; // Flag to prevent concurrent monitor runs
 // [PATCHED: TRACK BOT START TIME]
 const botStartupTime = Math.floor(Date.now() / 1000); // Timestamp in seconds
 
-let monitorIntervalSeconds = 45; // Initial interval - INCREASED from 30s
+let monitorIntervalSeconds = 120; // Initial interval - INCREASED from 30s
 let monitorInterval = null; // Holds the setInterval ID
 
 // *** UPDATED FUNCTION with the LATEST logic from user (using per-wallet pagination) ***
