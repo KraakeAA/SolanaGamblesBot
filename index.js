@@ -76,6 +76,15 @@ app.get('/health', (req, res) => {
   });
 }); // <<< NOTE: Closing parenthesis for app.get was misplaced in original, corrected here.
 
+// --- Railway-Specific Health Check Endpoint (NEW) ---
+// This endpoint can be used by Railway to check readiness after container rotation.
+app.get('/railway-health', (req, res) => {
+    res.status(200).json({
+        status: isFullyInitialized ? 'ready' : 'starting',
+        version: '2.0.4' // Consider updating version if significant changes
+    });
+});
+
 // --- PreStop hook for Railway graceful shutdown ---
 app.get('/prestop', (req, res) => {
     console.log('🚪 Received pre-stop signal from Railway, preparing to shutdown gracefully...');
@@ -87,6 +96,8 @@ app.get('/prestop', (req, res) => {
 
 // 1. Enhanced Solana Connection with Rate Limiting
 console.log("⚙️ Initializing scalable Solana connection...");
+// TODO: Consider implementing request prioritization (e.g., payouts > monitoring) within RateLimitedConnection.
+// TODO: Consider implementing exponential backoff within RateLimitedConnection for RPC errors.
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
     maxConcurrent: 2,          // Initial max parallel requests (can be boosted later)
     retryBaseDelay: 600,       // Initial delay for retries (ms)
@@ -176,10 +187,10 @@ async function initializeDatabase() {
         // Wallets Table: Links Telegram User ID to their Solana wallet address
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
-                user_id TEXT PRIMARY KEY,                  -- Telegram User ID
-                wallet_address TEXT NOT NULL,              -- User's Solana wallet address
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),  -- When the wallet was first linked
-                last_used_at TIMESTAMPTZ                   -- When the wallet was last used for a bet/payout
+                user_id TEXT PRIMARY KEY,                    -- Telegram User ID
+                wallet_address TEXT NOT NULL,                -- User's Solana wallet address
+                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),   -- When the wallet was first linked
+                last_used_at TIMESTAMPTZ                     -- When the wallet was last used for a bet/payout
             );
         `);
 
@@ -219,7 +230,7 @@ async function initializeDatabase() {
 console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
     polling: false, // Use webhooks in production (set later in startup)
-    request: {       // Adjust request options for stability (Fix #4)
+    request: {      // Adjust request options for stability (Fix #4)
         timeout: 10000, // Request timeout: 10s
         agentOptions: {
             keepAlive: true,   // Reuse connections
@@ -1134,8 +1145,8 @@ class PaymentProcessor {
         if (!markResult.success) {
             console.error(`Failed to mark bet ${bet.id} as paid: ${markResult.error}`);
              if (markResult.error === 'Transaction signature already recorded' || markResult.error === 'Bet not found or already processed') {
-                 processedSignaturesThisSession.add(signature); // Add to cache on collision
-                 return { processed: false, reason: 'db_mark_paid_collision' };
+                  processedSignaturesThisSession.add(signature); // Add to cache on collision
+                  return { processed: false, reason: 'db_mark_paid_collision' };
              }
              // Don't add to cache on other DB errors, allow retry
             return { processed: false, reason: 'db_mark_paid_failed' };
@@ -1184,7 +1195,7 @@ let isMonitorRunning = false; // Flag to prevent concurrent monitor runs
 // [PATCHED: TRACK BOT START TIME]
 const botStartupTime = Math.floor(Date.now() / 1000); // Timestamp in seconds
 
-let monitorIntervalSeconds = 30; // Initial interval - Will be adjusted by new monitor logic
+let monitorIntervalSeconds = 45; // Initial interval - INCREASED from 30s
 let monitorInterval = null; // Holds the setInterval ID
 
 // *** UPDATED FUNCTION with the LATEST logic from user (using per-wallet pagination) ***
@@ -1221,6 +1232,10 @@ async function monitorPayments() {
             await new Promise(resolve => setTimeout(resolve, baseDelay)); // Always enforce base delay
         }
         // --- END: Adaptive Rate Limiting Logic ---
+
+        // --- NEW: Add Jitter to Requests ---
+        await new Promise(resolve => setTimeout(resolve, Math.random() * 2000)); // 0-2s jitter
+        // --- END: Jitter ---
 
         // --- Core Logic from User Snippet (Adapted) ---
         console.log("⚙️ Performing payment monitor run...");
@@ -1298,14 +1313,17 @@ async function monitorPayments() {
             } catch (error) {
                 // Catch errors during signature fetching for a specific wallet
                 if (error?.message?.includes('429') || error?.code === 429 || error?.statusCode === 429) {
-                    console.warn(`⚠️ Solana RPC 429 Too Many Requests detected fetching for ${walletAddress}. Backing off monitor...`);
-                    monitorIntervalSeconds = Math.min(monitorIntervalSeconds + 10, 60);
+                    // --- NEW: Aggressive Backoff Logic ---
+                    console.warn(`⚠️ Solana RPC 429 - backing off more aggressively...`);
+                    monitorIntervalSeconds = Math.min(monitorIntervalSeconds * 2, 300); // Double interval, max 5 minutes (300s)
                     console.log(`ℹ️ New monitor interval after backoff: ${monitorIntervalSeconds}s`);
+                    // --- END: Aggressive Backoff Logic ---
+
                     if (monitorInterval) clearInterval(monitorInterval);
                     monitorInterval = setInterval(() => {
                         monitorPayments().catch(err => console.error('❌ [FATAL MONITOR ERROR in setInterval catch]:', err));
                     }, monitorIntervalSeconds * 1000);
-                    await new Promise(resolve => setTimeout(resolve, 15000));
+                    await new Promise(resolve => setTimeout(resolve, 15000)); // Wait after resetting interval
                     isMonitorRunning = false;
                     return; // Exit monitor function for this cycle
                 } else {
@@ -1318,8 +1336,8 @@ async function monitorPayments() {
 
         console.log(`[Monitor] Cycle finished.`);
 
-        if (monitorIntervalSeconds >= 50) {
-            console.warn(`⚠️ Warning: Monitor interval high (${monitorIntervalSeconds}s). RPC may be struggling.`);
+        if (monitorIntervalSeconds >= 60) { // Adjusted warning threshold slightly
+            console.warn(`⚠️ Warning: Monitor interval high (${monitorIntervalSeconds}s). RPC may be struggling or backoff active.`);
         }
        // --- End Core Logic from User Snippet ---
 
@@ -1329,14 +1347,17 @@ async function monitorPayments() {
         performanceMonitor.logRequest(false);
 
          if (err?.message?.includes('429') || err?.code === 429 || err?.statusCode === 429) {
-            console.warn('⚠️ Solana RPC 429 Too Many Requests detected in main block. Backing off monitor...');
-            monitorIntervalSeconds = Math.min(monitorIntervalSeconds + 10, 60);
+            // --- NEW: Aggressive Backoff Logic (also applied to main block errors) ---
+            console.warn('⚠️ Solana RPC 429 detected in main block. Backing off more aggressively...');
+            monitorIntervalSeconds = Math.min(monitorIntervalSeconds * 2, 300); // Double interval, max 5 minutes (300s)
             console.log(`ℹ️ New monitor interval after backoff: ${monitorIntervalSeconds}s`);
-             if (monitorInterval) clearInterval(monitorInterval);
-             monitorInterval = setInterval(() => {
+            // --- END: Aggressive Backoff Logic ---
+
+            if (monitorInterval) clearInterval(monitorInterval);
+            monitorInterval = setInterval(() => {
                  monitorPayments().catch(err => console.error('❌ [FATAL MONITOR ERROR in setInterval catch]:', err));
-             }, monitorIntervalSeconds * 1000);
-            await new Promise(resolve => setTimeout(resolve, 15000));
+            }, monitorIntervalSeconds * 1000);
+            await new Promise(resolve => setTimeout(resolve, 15000)); // Wait after resetting interval
         }
     } finally {
         isMonitorRunning = false; // Release the lock
@@ -1350,35 +1371,7 @@ async function monitorPayments() {
 // Adjusts the monitor interval based on how many new signatures were found
 /* <<<< COMMENTED OUT - Monitor logic now handles interval adjustment internally for 429 errors >>>>
 function adjustMonitorInterval(processedCount) {
-    let newInterval = monitorIntervalSeconds;
-    const minInterval = 15; // Minimum interval (seconds)
-    const maxInterval = 120; // Maximum interval (seconds)
-    const step = 10; // How much to change interval by
-
-    if (processedCount > 10) { // High activity, check sooner
-        newInterval = Math.max(minInterval, monitorIntervalSeconds - step);
-    } else if (processedCount === 0) { // No activity, check less often
-        newInterval = Math.min(maxInterval, monitorIntervalSeconds + step);
-    } // else: Moderate activity, keep interval the same
-
-    if (newInterval !== monitorIntervalSeconds) {
-        monitorIntervalSeconds = newInterval;
-        if (monitorInterval) clearInterval(monitorInterval); // Clear existing interval
-
-        console.log(`ℹ️ Adjusted monitor interval to ${monitorIntervalSeconds}s`);
-        // Re-apply the interval if it changes *during* runtime
-        monitorInterval = setInterval(() => {
-             try {
-                 monitorPayments().catch(err => {
-                     console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
-                     performanceMonitor.logRequest(false);
-                 });
-             } catch (syncErr) {
-                 console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
-                 performanceMonitor.logRequest(false);
-             }
-        }, monitorIntervalSeconds * 1000);
-    }
+    // ... old logic ...
 }
 */
 
@@ -2069,13 +2062,13 @@ async function handleRaceCommand(msg) {
 
     const config = GAME_CONFIG.race;
     raceMessage += `\n*How to play:*\n` +
-                   `1. Type \`/betrace amount horse_name\`\n` +
-                   `   (e.g., \`/betrace 0.1 Yellow\`)\n\n` +
-                   `*Rules:*\n` +
-                   `- Min Bet: ${config.minBet} SOL\n` +
-                   `- Max Bet: ${config.maxBet} SOL\n` +
-                   `- House Edge: ${(config.houseEdge * 100).toFixed(1)}% (applied to winnings)\n\n` +
-                   `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`;
+                       `1. Type \`/betrace amount horse_name\`\n` +
+                       `   (e.g., \`/betrace 0.1 Yellow\`)\n\n` +
+                       `*Rules:*\n` +
+                       `- Min Bet: ${config.minBet} SOL\n` +
+                       `- Max Bet: ${config.maxBet} SOL\n` +
+                       `- House Edge: ${(config.houseEdge * 100).toFixed(1)}% (applied to winnings)\n\n` +
+                       `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`;
 
     await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2242,17 +2235,17 @@ async function handleBetRaceCommand(msg, args) {
 // Handles /help command
 async function handleHelpCommand(msg) {
     const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
-                           `/start - Show welcome message\n` +
-                           `/help - Show this help message\n\n` +
-                           `*Games:*\n` +
-                           `/coinflip - Show Coinflip game info & how to bet\n` +
-                           `/race - Show Horse Race game info & how to bet\n\n` +
-                           `*Betting:*\n` +
-                           `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
-                           `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
-                           `*Wallet:*\n` +
-                           `/wallet - View your linked Solana wallet for payouts\n\n` +
-                           `*Support:* If you encounter issues, please contact support.`; // Replace placeholder
+                          `/start - Show welcome message\n` +
+                          `/help - Show this help message\n\n` +
+                          `*Games:*\n` +
+                          `/coinflip - Show Coinflip game info & how to bet\n` +
+                          `/race - Show Horse Race game info & how to bet\n\n` +
+                          `*Betting:*\n` +
+                          `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
+                          `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
+                          `*Wallet:*\n` +
+                          `/wallet - View your linked Solana wallet for payouts\n\n` +
+                          `*Support:* If you encounter issues, please contact support.`; // Replace placeholder
 
     await safeSendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2313,10 +2306,10 @@ async function startPollingIfNeeded() {
         }
     } catch (err) {
         console.error("❌ Error managing polling state:", err.message);
-         if (err.message.includes('409 Conflict')) {
-             console.error("❌❌❌ Conflict detected! Another instance might be polling.");
-             console.error("❌ Exiting due to conflict."); process.exit(1);
-         }
+        if (err.message.includes('409 Conflict')) {
+            console.error("❌❌❌ Conflict detected! Another instance might be polling.");
+            console.error("❌ Exiting due to conflict."); process.exit(1);
+        }
          // Handle other potential errors (e.g., network issues communicating with Telegram API)
     }
 }
@@ -2356,9 +2349,28 @@ function startPaymentMonitor() {
 }
 
 
-// Graceful shutdown handler
-const shutdown = async (signal) => {
-    console.log(`\n🛑 ${signal} received, shutting down gracefully...`);
+// --- NEW Graceful shutdown handler (Modified for Railway Rotations) ---
+const shutdown = async (signal, isRailwayRotation = false) => { // Added isRailwayRotation param
+    console.log(`\n🛑 ${signal} received, ${isRailwayRotation ? 'container rotation' : 'shutting down gracefully'}...`);
+
+    if (isRailwayRotation) {
+        // For Railway rotations, just stop accepting new connections quickly
+        console.log("Railway container rotation detected - minimizing disruption.");
+        if (server) {
+            // Don't wait for full close, just initiate it. Railway manages the rest.
+            server.close(() => console.log("- Stopped accepting new server connections for rotation."));
+        }
+        // Potentially stop polling immediately too if needed for faster rotation?
+        // if (bot.isPolling()) {
+        //    await bot.stopPolling({ cancel: true }).catch(e => console.error("Error stopping polling on rotation:", e.message));
+        //    console.log("- Stopped Telegram polling for rotation.");
+        // }
+        // Railway handles container lifecycle, so we don't need to drain queues or close DB here.
+        return; // Exit the shutdown function early for rotation
+    }
+
+    // --- START: Original Full Shutdown Logic (for non-rotation signals like SIGINT or manual stop) ---
+    console.log("Performing full graceful shutdown sequence...");
     isMonitorRunning = true; // Prevent monitor from starting new cycle during shutdown
 
     // 1. Stop receiving new events/requests
@@ -2368,7 +2380,7 @@ const shutdown = async (signal) => {
         console.log("- Stopped payment monitor interval.");
     }
     try {
-        // Stop server from accepting new connections
+        // Stop server from accepting new connections (wait for close)
         if (server) {
              await new Promise((resolve, reject) => {
                  server.close((err) => {
@@ -2405,7 +2417,7 @@ const shutdown = async (signal) => {
     }
 
     // 2. Wait for ongoing queue processing to finish (with timeout)
-    console.log("Waiting for active jobs to finish...");
+    console.log("Waiting for active jobs to finish (max 15s)...");
     try {
         await Promise.race([
             Promise.all([
@@ -2429,20 +2441,37 @@ const shutdown = async (signal) => {
     } catch (dbErr) {
         console.error("❌ Error closing database pool:", dbErr);
     } finally {
-        console.log("🛑 Shutdown complete.");
-        process.exit(0); // Exit cleanly
+        console.log("🛑 Full Shutdown complete.");
+        process.exit(0); // Exit cleanly after full shutdown
     }
+    // --- END: Original Full Shutdown Logic ---
 };
 
-// Register signal handlers for graceful shutdown
-process.on('SIGINT', () => shutdown('SIGINT')); // Ctrl+C
-process.on('SIGTERM', () => shutdown('SIGTERM')); // Termination signal (e.g., from Docker/Kubernetes/Railway)
+
+// --- UPDATED Signal handlers for graceful shutdown ---
+// Detect Railway container rotations (SIGTERM with RAILWAY_ENVIRONMENT)
+process.on('SIGTERM', () => {
+    const isRailwayRotation = !!process.env.RAILWAY_ENVIRONMENT;
+    console.log(`SIGTERM received. Railway Environment: ${isRailwayRotation}`);
+    shutdown('SIGTERM', isRailwayRotation).catch((err) => {
+        console.error("Error during SIGTERM shutdown:", err);
+        process.exit(1); // Force exit if shutdown logic errors
+    });
+});
+
+process.on('SIGINT', () => { // Ctrl+C remains full shutdown
+    console.log(`SIGINT received.`);
+    shutdown('SIGINT', false).catch((err) => { // Explicitly pass false
+        console.error("Error during SIGINT shutdown:", err);
+        process.exit(1);
+    });
+});
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (err, origin) => {
     console.error(`🔥🔥🔥 Uncaught Exception at: ${origin}`, err);
-    // Attempt graceful shutdown, then force exit if needed
-    shutdown('UNCAUGHT_EXCEPTION').catch(() => process.exit(1));
+    // Attempt full graceful shutdown, then force exit if needed
+    shutdown('UNCAUGHT_EXCEPTION', false).catch(() => process.exit(1)); // Pass false
     setTimeout(() => {
         console.error("Shutdown timed out after uncaught exception. Forcing exit.");
         process.exit(1);
@@ -2454,7 +2483,7 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('🔥🔥🔥 Unhandled Rejection at:', promise, 'reason:', reason);
     // Optional: Decide if shutdown is needed. For now, just logging.
     // Consider shutting down if the rejection indicates a critical state.
-    // shutdown('UNHANDLED_REJECTION').catch(() => process.exit(1));
+    // shutdown('UNHANDLED_REJECTION', false).catch(() => process.exit(1));
     // setTimeout(() => process.exit(1), 12000).unref();
 });
 
@@ -2471,24 +2500,24 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
         console.log("⚙️ Starting delayed background initialization...");
         try {
             // Initialization Steps (Progress Tracking - Fix #3 via logs)
-            console.log("  - Initializing Database...");
+            console.log("  - Initializing Database...");
             await initializeDatabase(); // Initialize DB first
-            console.log("  - Setting up Telegram...");
+            console.log("  - Setting up Telegram...");
             const webhookSet = await setupTelegramWebhook(); // Setup webhook (if applicable)
             if (!webhookSet) { // If webhook wasn't set (or failed)
                 await startPollingIfNeeded(); // Attempt to start polling
             }
-            console.log("  - Starting Payment Monitor...");
+            console.log("  - Starting Payment Monitor...");
             startPaymentMonitor(); // Start the monitor loop regardless of webhook/polling
 
              // --- BONUS: Solana Connection Boost after 20s (Moved here from removed startServer) ---
              setTimeout(() => {
-                if (solanaConnection && solanaConnection.options) {
-                    console.log("⚡ Boosting Solana connection concurrency...");
-                    solanaConnection.options.maxConcurrent = 5; // Increase max parallel requests
-                    console.log("✅ Solana maxConcurrent increased to 5");
-                }
-            }, 20000); // Boost after 20 seconds of being fully ready
+                 if (solanaConnection && solanaConnection.options) {
+                     console.log("⚡ Boosting Solana connection concurrency...");
+                     solanaConnection.options.maxConcurrent = 5; // Increase max parallel requests
+                     console.log("✅ Solana maxConcurrent increased to 5");
+                 }
+             }, 20000); // Boost after 20 seconds of being fully ready
 
             isFullyInitialized = true; // Mark as fully initialized *after* setup completes
             console.log("✅ Delayed Background Initialization Complete. Bot is fully ready.");
@@ -2499,7 +2528,7 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
             // If initialization fails, the bot might be unusable.
             // Attempt a graceful shutdown before exiting.
             console.error("❌ Exiting due to critical initialization failure.");
-            await shutdown('INITIALIZATION_FAILURE').catch(() => process.exit(1)); // Attempt shutdown
+            await shutdown('INITIALIZATION_FAILURE', false).catch(() => process.exit(1)); // Attempt full shutdown
             // Ensure exit if shutdown hangs
              setTimeout(() => {
                  console.error("Shutdown timed out after initialization failure. Forcing exit.");
