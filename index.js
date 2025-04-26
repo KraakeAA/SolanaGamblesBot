@@ -2040,36 +2040,33 @@ async function handleStartCommand(msg) {
 
 // Handles the /coinflip command (shows instructions) - MODIFIED
 async function handleCoinflipCommand(msg) {
-    console.log("--- Entering handleCoinflipCommand ---"); // <<< ADD LOG
-    try { // Added try block for better error catching within the function
+    console.log("--- Entering handleCoinflipCommand ---");
+    try {
         const config = GAME_CONFIG.coinflip;
-        console.log("Coinflip config:", config); // <<< ADD LOG (check if config is valid)
+        console.log("Coinflip config:", config);
 
-        const messageText = `🪙 *Coinflip Game* 🪙\n\n` +
+        // Using HTML tags (<b> for bold)
+        const messageText = `🪙 <b>Coinflip Game</b> 🪙\n\n` +
             `Bet on Heads or Tails!\n\n` +
-            `*How to play:*\n` +
-            `1. Type /bet amount heads (e.g., /bet 0.1 heads)\n` + // No backticks
-            `2. Type /bet amount tails (e.g., /bet 0.1 tails)\n\n` + // No backticks
-            `*Rules:*\n` +
+            `<b>How to play:</b>\n` +
+            `1. Type /bet amount heads (e.g., /bet 0.1 heads)\n` +
+            `2. Type /bet amount tails (e.g., /bet 0.1 tails)\n\n` +
+            `<b>Rules:</b>\n` +
             `- Min Bet: ${config.minBet} SOL\n` +
             `- Max Bet: ${config.maxBet} SOL\n` +
             `- House Edge: ${(config.houseEdge * 100).toFixed(1)}%\n` +
             `- Payout: ~${(2.0 * (1.0 - config.houseEdge)).toFixed(2)}x (Win Amount = Bet * ${(2.0 * (1.0 - config.houseEdge)).toFixed(2)}x)\n\n` +
-            `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`;
+            `You will be given a wallet address and a <b>unique Memo ID</b>. Send the <b>exact</b> SOL amount with the memo to place your bet.`;
 
-        console.log("Attempting to send coinflip message..."); // <<< ADD LOG
-        await safeSendMessage(msg.chat.id, messageText, { parse_mode: 'Markdown' })
+        console.log("Attempting to send coinflip message (HTML mode)...");
+        // Set parse_mode to HTML
+        await safeSendMessage(msg.chat.id, messageText, { parse_mode: 'HTML' })
             .catch(e => {
-                // This catch is specifically for safeSendMessage promise rejection
-                console.error("TG Send Error (within handleCoinflipCommand catch):", e.message);
-                // Optionally re-throw or handle differently if needed
+                console.error("TG Send Error (HTML - within handleCoinflipCommand catch):", e.message);
             });
-        console.log("--- Exiting handleCoinflipCommand (after send attempt) ---"); // <<< ADD LOG
+        console.log("--- Exiting handleCoinflipCommand (after send attempt) ---");
     } catch (error) {
-        // Catch any synchronous errors within the function before sending
-        console.error("Error INSIDE handleCoinflipCommand:", error); // <<< ADD LOG
-        // Optionally send an error message to the user
-        // await safeSendMessage(msg.chat.id, "An error occurred processing the coinflip command.");
+        console.error("Error INSIDE handleCoinflipCommand:", error);
     }
 }
 // Handles the /race command (shows instructions)
