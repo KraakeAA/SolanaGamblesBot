@@ -74,13 +74,22 @@ app.get('/health', (req, res) => {
     status: server ? 'ready' : 'starting', // Report 'ready' once server object exists, otherwise 'starting'
     uptime: process.uptime()
   });
+
+// --- PreStop hook for Railway graceful shutdown ---
+app.get('/prestop', (req, res) => {
+    console.log('🚪 Received pre-stop signal from Railway, preparing to shutdown gracefully...');
+    res.status(200).send('Shutting down');
+});
+
 });
 // --- END IMMEDIATE Health Check Endpoint ---
 
 // 1. Enhanced Solana Connection with Rate Limiting
 console.log("⚙️ Initializing scalable Solana connection...");
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 3,      // Max parallel requests
+    maxConcurrent: 2,
+    retryBaseDelay: 1000,
+    rateLimitCooloff: 15000,      // Max parallel requests
     retryBaseDelay: 600,   // Initial delay for retries (ms)
     commitment: 'confirmed', // Default commitment level
     httpHeaders: {
@@ -285,6 +294,51 @@ app.post(webhookPath, (req, res) => {
                 error: 'Internal server error processing webhook',
                 details: error.message
             });
+
+// --- PATCH: Start Express Fast and Initialize Async Later (with PHASE LOGS + Solana Boost) ---
+async function startServer() {
+    const PORT = process.env.PORT || 3000;
+
+    try {
+        console.log("🛫 Phase 1️⃣ Starting Express Server...");
+        server = app.listen(PORT, () => {
+            console.log(`✅ Express server listening on port ${PORT}`);
+        });
+
+        console.log("⚙️ Phase 2️⃣ Initializing Database...");
+        await initializeDatabase();
+        console.log("✅ Database initialized!");
+
+        console.log("⏳ Phase 3️⃣ Preparing Payment Monitor (delayed start)...");
+        setTimeout(() => {
+            monitorInterval = setInterval(() => {
+                monitorPayments().catch(err => {
+                    console.error('❌ [FATAL MONITOR ERROR]:', err);
+                    performanceMonitor.logRequest(false);
+                });
+            }, monitorIntervalSeconds * 1000);
+            console.log("✅ Payment monitor started after delay.");
+        }, 10000);
+
+        isFullyInitialized = true;
+        console.log("🎯 Phase 4️⃣ Background initialization complete. Bot is fully operational!");
+
+        // --- BONUS: Solana Connection Boost after 20s ---
+        setTimeout(() => {
+            if (solanaConnection && solanaConnection.options) {
+                console.log("⚡ Boosting Solana connection concurrency...");
+                solanaConnection.options.maxConcurrent = 5;
+                console.log("✅ Solana maxConcurrent increased to 5");
+            }
+        }, 20000);
+
+    } catch (err) {
+        console.error("❌ Fatal error during server startup:", err);
+        process.exit(1);
+    }
+}
+startServer();
+
         }
     });
 });
