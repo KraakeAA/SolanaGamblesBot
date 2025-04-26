@@ -307,26 +307,15 @@ app.post(webhookPath, (req, res) => {
 
 
 // --- State Management & Constants ---
-
-// User command cooldown (prevents spam)
-const confirmCooldown = new Map(); // Map<userId, lastCommandTimestamp>
-const cooldownInterval = 3000; // 3 seconds
-
-// Cache for linked wallets (reduces DB lookups)
-const walletCache = new Map(); // Map<userId, { wallet: address, timestamp: cacheTimestamp }>
-const CACHE_TTL = 300000; // Cache wallet links for 5 minutes (300,000 ms)
-
-// Cache of processed transaction signatures during this bot session (prevents double processing)
-const processedSignaturesThisSession = new Set(); // Set<signature>
-const MAX_PROCESSED_SIGNATURES = 10000; // Reset cache if it gets too large
+// ... (confirmCooldown, walletCache, processedSignaturesThisSession remain) ...
 
 // *** PAGINATION FIX: Initialize state object for payment monitor pagination ***
-// Changed from const to let to allow updates by the new monitor logic
-let lastProcessedSignature = {}; // Per wallet tracking
+let lastProcessedSignature = {}; // Per wallet tracking (ensure it's 'let')
 // *** END PAGINATION FIX ***
 
-// ~~ Removed: let lastSignatureProcessed = null; ~~ // No longer needed for the final monitor logic
+let retryCount = 0; // Global retry counter for monitor 429 errors
 
+// ... (GAME_CONFIG, FEE_BUFFER, PRIORITY_FEE_RATE remain) ...
 // Game Configuration
 const GAME_CONFIG = {
     coinflip: {
