@@ -69,6 +69,7 @@ const app = express();
 
 // --- IMMEDIATE Health Check Endpoint (Critical Fix #1) ---
 // This endpoint responds instantly, regardless of background initialization state.
+// Kept for fast Railway deployment checks.
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: server ? 'ready' : 'starting', // Report 'ready' once server object exists, otherwise 'starting'
@@ -77,25 +78,25 @@ app.get('/health', (req, res) => {
 });
 // --- END IMMEDIATE Health Check Endpoint ---
 
-// 1. Enhanced Solana Connection with Rate Limiting
-console.log("⚙️ Initializing scalable Solana connection...");
+// --- PATCH: Safe Solana Connection (Startup Safe) ---
+console.log("⚙️ Initializing scalable Solana connection (starting slow)...");
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 3,      // Max parallel requests
-    retryBaseDelay: 600,   // Initial delay for retries (ms)
-    commitment: 'confirmed', // Default commitment level
+    maxConcurrent: 2,           // Start slower at boot (2 concurrent requests)
+    retryBaseDelay: 1000,       // Wait longer before retrying after 429
+    rateLimitCooloff: 15000,    // If 429 happens, cooloff for 15s
+    commitment: 'confirmed',
     httpHeaders: {
         'Content-Type': 'application/json',
-        'solana-client': `SolanaGamblesBot/2.0 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info
+        'solana-client': `SolanaGamblesBot/2.0 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})`
     },
-    rateLimitCooloff: 10000,   // Pause duration after hitting rate limits (ms)
-    disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
+    disableRetryOnRateLimit: false
 });
-console.log("✅ Scalable Solana connection initialized");
+console.log("✅ Scalable Solana connection initialized (starting slow)");
 
 // 2. Message Processing Queue (for handling Telegram messages)
 const messageQueue = new PQueue({
     concurrency: 5,   // Max concurrent messages processed
-    timeout: 10000     // Max time per message task (ms)
+    timeout: 10000    // Max time per message task (ms)
 });
 console.log("✅ Message processing queue initialized");
 
@@ -113,23 +114,23 @@ const pool = new Pool({
 });
 console.log("✅ PostgreSQL Pool created with optimized settings");
 
-// 4. Simple Performance Monitor
+// 4. Simple Performance Monitor (Updated for /health endpoint)
 const performanceMonitor = {
-    requests: 0,
-    errors: 0,
+    requestCount: 0, // Renamed from 'requests'
+    errorCount: 0,   // Renamed from 'errors'
     startTime: Date.now(),
     logRequest(success) {
-        this.requests++;
-        if (!success) this.errors++;
+        this.requestCount++;
+        if (!success) this.errorCount++;
 
-        // Log stats every 50 requests
-        if (this.requests % 50 === 0) {
+        // Log stats every 50 requests (logic remains the same)
+        if (this.requestCount % 50 === 0) {
             const uptime = (Date.now() - this.startTime) / 1000;
-            const errorRate = this.requests > 0 ? (this.errors / this.requests * 100).toFixed(1) : 0;
+            const errorRate = this.requestCount > 0 ? (this.errorCount / this.requestCount * 100).toFixed(1) : 0;
             console.log(`
 📊 Performance Metrics:
     - Uptime: ${uptime.toFixed(0)}s
-    - Total Requests Handled: ${this.requests}
+    - Total Requests Handled: ${this.requestCount}
     - Error Rate: ${errorRate}%
             `);
         }
@@ -246,21 +247,6 @@ app.use(express.json({
     }
 }));
 
-// Original Health check / Info endpoint (keep for manual checks / detailed status)
-// Modified to include initialization status (Fix #3 - Progress Tracking Info)
-app.get('/', (req, res) => {
-    performanceMonitor.logRequest(true);
-    res.status(200).json({
-        status: 'ok',
-        initialized: isFullyInitialized, // Report background initialization status here
-        timestamp: new Date().toISOString(),
-        version: '2.0.4', // Bot version (incremented for startup changes)
-        queueStats: { // Report queue status
-            pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
-            active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
-        }
-    });
-});
 
 // Webhook handler (listens for updates from Telegram)
 const webhookPath = `/bot${process.env.BOT_TOKEN}`;
@@ -288,6 +274,49 @@ app.post(webhookPath, (req, res) => {
         }
     });
 });
+
+// --- Detailed Health Check endpoint (Replaces original '/') ---
+app.get('/health', (req, res) => {
+    const uptimeSeconds = Math.floor(process.uptime());
+    const memoryUsage = process.memoryUsage().rss / (1024 * 1024); // in MB
+
+    // Read performance monitor stats safely
+    const currentRequestCount = performanceMonitor?.requestCount || 0;
+    const currentErrorCount = performanceMonitor?.errorCount || 0;
+    const errorRatePercentage = currentRequestCount > 0
+        ? ((currentErrorCount / currentRequestCount) * 100).toFixed(2)
+        : '0.00';
+
+    res.status(200).json({
+        status: server ? 'ready' : 'starting', // Use server existence for readiness
+        initialized: isFullyInitialized, // Add initialization status
+        uptime_seconds: uptimeSeconds,
+        memory_usage_mb: memoryUsage.toFixed(2),
+        total_requests: currentRequestCount,
+        error_rate: `${errorRatePercentage}%`,
+        queue_pending: messageQueue.size, // Pending in message queue
+        queue_active: messageQueue.pending, // Active in message queue
+        payment_queue_high_pending: paymentProcessor?.highPriorityQueue?.size || 0, // Payment queues
+        payment_queue_high_active: paymentProcessor?.highPriorityQueue?.pending || 0,
+        payment_queue_normal_pending: paymentProcessor?.normalQueue?.size || 0,
+        payment_queue_normal_active: paymentProcessor?.normalQueue?.pending || 0,
+        telegram_queue_pending: telegramSendQueue?.size || 0, // Telegram queue
+        telegram_queue_active: telegramSendQueue?.pending || 0,
+        timestamp: new Date().toISOString(),
+        version: "2.0.5" // Incremented version
+    });
+});
+
+
+// --- PreStop hook for Railway graceful shutdown ---
+app.get('/prestop', (req, res) => {
+    console.log('🚪 Received pre-stop signal from Railway, preparing to shutdown gracefully...');
+    // No need to call shutdown() here, Railway sends SIGTERM after this responds
+    res.status(200).send('Acknowledged pre-stop, initiating shutdown process.');
+    // Optionally trigger shutdown explicitly if needed, but SIGTERM should follow
+    // shutdown('PRESTOP_HOOK').catch(e => console.error("Error triggering shutdown from prestop:", e));
+});
+
 
 // --- State Management & Constants ---
 
@@ -628,7 +657,7 @@ async function linkUserWallet(userId, walletAddress) {
         INSERT INTO wallets (user_id, wallet_address, last_used_at)
         VALUES ($1, $2, NOW())
         ON CONFLICT (user_id) -- If user already exists
-        DO UPDATE SET      -- Update their wallet address and last used time
+        DO UPDATE SET       -- Update their wallet address and last used time
             wallet_address = EXCLUDED.wallet_address,
             last_used_at = NOW()
         RETURNING wallet_address; -- Return just the address
@@ -1191,10 +1220,8 @@ async function monitorPayments() {
 
     try {
         // --- START: Adaptive Rate Limiting Logic ---
-        const currentLoad = paymentProcessor.highPriorityQueue.pending +
-                            paymentProcessor.normalQueue.pending +
-                            paymentProcessor.highPriorityQueue.size + // Include active items too
-                            paymentProcessor.normalQueue.size;
+        const currentLoad = (paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending) +
+                            (paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size); // Include active items too
 
         // Calculate delay: Base delay + delay per pending item, max N seconds
         const baseDelay = 500; // Minimum delay between cycles (ms)
@@ -1230,7 +1257,7 @@ async function monitorPayments() {
                 signaturesForWallet = await solanaConnection.getSignaturesForAddress(
                     new PublicKey(wallet.address),
                     {
-                        limit: 25,     // Fetch a slightly larger batch
+                        limit: 25,       // Fetch a slightly larger batch
                         before: beforeSig   // Use the specific 'before' signature for pagination
                     }
                 );
@@ -2174,17 +2201,17 @@ async function handleBetRaceCommand(msg, args) {
 // Handles /help command
 async function handleHelpCommand(msg) {
     const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
-                           `/start - Show welcome message\n` +
-                           `/help - Show this help message\n\n` +
-                           `*Games:*\n` +
-                           `/coinflip - Show Coinflip game info & how to bet\n` +
-                           `/race - Show Horse Race game info & how to bet\n\n` +
-                           `*Betting:*\n` +
-                           `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
-                           `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
-                           `*Wallet:*\n` +
-                           `/wallet - View your linked Solana wallet for payouts\n\n` +
-                           `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
+                          `/start - Show welcome message\n` +
+                          `/help - Show this help message\n\n` +
+                          `*Games:*\n` +
+                          `/coinflip - Show Coinflip game info & how to bet\n` +
+                          `/race - Show Horse Race game info & how to bet\n\n` +
+                          `*Betting:*\n` +
+                          `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
+                          `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
+                          `*Wallet:*\n` +
+                          `/wallet - View your linked Solana wallet for payouts\n\n` +
+                          `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
 
     await safeSendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2245,49 +2272,14 @@ async function startPollingIfNeeded() {
         }
     } catch (err) {
         console.error("❌ Error managing polling state:", err.message);
-         if (err.message.includes('409 Conflict')) {
+        if (err.message.includes('409 Conflict')) {
              console.error("❌❌❌ Conflict detected! Another instance might be polling.");
              console.error("❌ Exiting due to conflict."); process.exit(1);
-         }
+        }
     }
 }
 
-// Encapsulated Payment Monitor Start Logic
-function startPaymentMonitor() {
-     if (monitorInterval) {
-         console.log("ℹ️ Payment monitor already running.");
-         return; // Prevent multiple intervals
-     }
-     console.log(`⚙️ Starting payment monitor (Initial Interval: ${monitorIntervalSeconds}s)`);
-     monitorInterval = setInterval(() => {
-         try {
-             monitorPayments().catch(err => {
-                 console.error('[FATAL MONITOR ERROR in setInterval catch]:', err);
-                 performanceMonitor.logRequest(false);
-             });
-         } catch (syncErr) {
-             console.error('[FATAL MONITOR SYNC ERROR in setInterval try/catch]:', syncErr);
-             performanceMonitor.logRequest(false);
-         }
-     }, monitorIntervalSeconds * 1000);
-
-     // Run monitor once shortly after initialization completes
-     setTimeout(() => {
-         console.log("⚙️ Performing initial payment monitor run...");
-         try {
-             monitorPayments().catch(err => {
-                 console.error('[FATAL MONITOR ERROR in initial run catch]:', err);
-                 performanceMonitor.logRequest(false);
-             });
-         } catch (syncErr) {
-             console.error('[FATAL MONITOR SYNC ERROR in initial run try/catch]:', syncErr);
-             performanceMonitor.logRequest(false);
-         }
-     }, 5000); // Delay initial run slightly
-}
-
-
-// Graceful shutdown handler
+// Graceful shutdown handler (kept at top level)
 const shutdown = async (signal) => {
     console.log(`\n🛑 ${signal} received, shutting down gracefully...`);
     isMonitorRunning = true; // Prevent monitor from starting new cycle during shutdown
@@ -2311,7 +2303,7 @@ const shutdown = async (signal) => {
                      resolve();
                  });
                  // Add a timeout for server close
-                 setTimeout(() => reject(new Error('Server close timeout')), 5000).unref();
+                 setTimeout(() => reject(new Error('Server close timeout')), 5000).unref(); // 5 second timeout
              });
         }
 
@@ -2336,7 +2328,9 @@ const shutdown = async (signal) => {
     }
 
     // 2. Wait for ongoing queue processing to finish (with timeout)
-    console.log("Waiting for active jobs to finish...");
+    // Railway gives ~30s total, server close takes time, leave ~20s for queues
+    const queueDrainTimeout = 20000;
+    console.log(`Waiting for active jobs to finish (max ${queueDrainTimeout/1000}s)...`);
     try {
         await Promise.race([
             Promise.all([
@@ -2345,11 +2339,11 @@ const shutdown = async (signal) => {
                 paymentProcessor.normalQueue.onIdle(),
                 telegramSendQueue.onIdle() // Wait for telegram send queue too
             ]),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Queue drain timeout (15s)')), 15000)) // Increased timeout
+            new Promise((_, reject) => setTimeout(() => reject(new Error(`Queue drain timeout (${queueDrainTimeout/1000}s)`)), queueDrainTimeout))
         ]);
         console.log("- All processing queues are idle.");
     } catch (queueError) {
-        console.warn("⚠️ Timed out waiting for queues or queue error during shutdown:", queueError.message);
+        console.warn(`⚠️ Timed out waiting for queues or queue error during shutdown:`, queueError.message);
     }
 
     // 3. Close database pool
@@ -2365,75 +2359,117 @@ const shutdown = async (signal) => {
     }
 };
 
-// Register signal handlers for graceful shutdown
+// Register signal handlers for graceful shutdown (kept at top level)
 process.on('SIGINT', () => shutdown('SIGINT')); // Ctrl+C
-process.on('SIGTERM', () => shutdown('SIGTERM')); // Termination signal
+process.on('SIGTERM', () => shutdown('SIGTERM')); // Termination signal (e.g., from Railway/Docker)
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions (kept at top level)
 process.on('uncaughtException', (err, origin) => {
     console.error(`🔥🔥🔥 Uncaught Exception at: ${origin}`, err);
-    shutdown('UNCAUGHT_EXCEPTION').catch(() => process.exit(1));
+    shutdown('UNCAUGHT_EXCEPTION').catch(() => process.exit(1)); // Attempt graceful shutdown first
     setTimeout(() => {
         console.error("Shutdown timed out after uncaught exception. Forcing exit.");
-        process.exit(1);
-    }, 12000).unref();
+        process.exit(1); // Force exit if shutdown hangs
+    }, 12000).unref(); // Give shutdown 12 seconds
 });
 
-// Handle unhandled promise rejections
+// Handle unhandled promise rejections (kept at top level)
 process.on('unhandledRejection', (reason, promise) => {
     console.error('🔥🔥🔥 Unhandled Rejection at:', promise, 'reason:', reason);
-    // Decide if shutdown is needed. For now, just logging.
+    // Decide if shutdown is needed. Logging is often sufficient, but critical ones might warrant shutdown.
+    // For now, only log. If needed, uncomment below:
     // shutdown('UNHANDLED_REJECTION').catch(() => process.exit(1));
     // setTimeout(() => process.exit(1), 12000).unref();
 });
 
-// --- Start the Application (MODIFIED Startup Sequence - Fix #2 & #5) ---
-const PORT = process.env.PORT || 3000;
 
-// Start server immediately, listen on 0.0.0.0
-server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 'server'
-    console.log(`🚀 Server running on port ${PORT}`);
+// --- PATCH: Start Express Fast and Initialize Async Later (with PHASE LOGS + Solana Boost) ---
+async function startServer() {
+    const PORT = process.env.PORT || 3000;
 
-    // Start heavy initialization AFTER server is listening, with a short delay
-    // This ensures the /health endpoint is responsive immediately.
-    setTimeout(async () => {
-        console.log("⚙️ Starting delayed background initialization...");
-        try {
-            // Initialization Steps (Progress Tracking - Fix #3 via logs)
-            console.log("  - Initializing Database...");
-            await initializeDatabase(); // Initialize DB first
-            console.log("  - Setting up Telegram...");
+    try {
+        console.log("🛫 Phase 1️⃣ Starting Express Server...");
+        // Start server immediately, listen on 0.0.0.0 for compatibility with containers/Railway
+        server = app.listen(PORT, "0.0.0.0", async () => { // Make callback async for await inside
+            console.log(`✅ Express server listening on port ${PORT}`);
+
+            // Setup Webhook / Polling AFTER server is listening
+            console.log("  - Setting up Telegram connection (Webhook/Polling)...");
             const webhookSet = await setupTelegramWebhook(); // Setup webhook (if applicable)
             if (!webhookSet) { // If webhook wasn't set (or failed)
                 await startPollingIfNeeded(); // Attempt to start polling
             }
-            console.log("  - Starting Payment Monitor...");
-            startPaymentMonitor(); // Start the monitor loop regardless of webhook/polling
+        });
 
-            isFullyInitialized = true; // Mark as fully initialized *after* setup completes
-            console.log("✅ Delayed Background Initialization Complete. Bot is fully ready.");
-            console.log("🚀🚀🚀 Solana Gambles Bot is up and running! 🚀🚀🚀");
+        // Handle server startup errors (like EADDRINUSE) which happen *before* the listen callback
+        server.on('error', (err) => {
+            console.error('❌ Server startup error:', err);
+            if (err.code === 'EADDRINUSE') {
+                console.error(`❌❌❌ Port ${PORT} is already in use. Exiting.`);
+            }
+            process.exit(1); // Exit on any server startup error
+        });
 
-        } catch (initError) {
-            console.error("🔥🔥🔥 Delayed Background Initialization Error:", initError);
-            // If initialization fails, the bot might be unusable.
-            // Consider a graceful shutdown attempt before exiting.
-            console.error("❌ Exiting due to critical initialization failure.");
-            await shutdown('INITIALIZATION_FAILURE').catch(() => process.exit(1)); // Attempt shutdown
-            // Ensure exit if shutdown hangs
-             setTimeout(() => {
-                 console.error("Shutdown timed out after initialization failure. Forcing exit.");
-                 process.exit(1);
-             }, 10000).unref();
-        }
-    }, 1000); // 1-second delay before starting heavy init
-});
+        console.log("⚙️ Phase 2️⃣ Initializing Database...");
+        await initializeDatabase();
+        console.log("✅ Database initialized!");
 
-// Handle server startup errors (like EADDRINUSE) which happen *before* the listen callback
-server.on('error', (err) => {
-    console.error('❌ Server startup error:', err);
-    if (err.code === 'EADDRINUSE') {
-        console.error(`❌❌❌ Port ${PORT} is already in use. Exiting.`);
+        console.log("⏳ Phase 3️⃣ Preparing Payment Monitor (delayed start)...");
+        // Delay the start of the payment monitor to allow other things to settle
+        setTimeout(() => {
+            if (monitorInterval) { // Prevent multiple intervals if startServer is called again somehow
+                console.warn("⚠️ Payment monitor interval already exists, clearing old one.");
+                clearInterval(monitorInterval);
+            }
+            monitorInterval = setInterval(() => {
+                monitorPayments().catch(err => {
+                    console.error('❌ [FATAL MONITOR ERROR]:', err);
+                    performanceMonitor.logRequest(false);
+                });
+            }, monitorIntervalSeconds * 1000);
+            console.log(`✅ Payment monitor scheduled to start checking every ${monitorIntervalSeconds}s.`);
+
+            // Perform initial run shortly after scheduling
+            setTimeout(() => {
+                console.log("⚙️ Performing initial payment monitor run...");
+                 try {
+                     monitorPayments().catch(err => {
+                         console.error('[FATAL MONITOR ERROR in initial run catch]:', err);
+                         performanceMonitor.logRequest(false);
+                     });
+                 } catch (syncErr) {
+                     console.error('[FATAL MONITOR SYNC ERROR in initial run try/catch]:', syncErr);
+                     performanceMonitor.logRequest(false);
+                 }
+            }, 5000); // 5-second delay for initial run after scheduling
+
+        }, 10000); // 10 seconds delay before scheduling the monitor interval
+
+        isFullyInitialized = true; // Mark as initialized once DB is ready & monitor is scheduled
+        console.log("🎯 Phase 4️⃣ Background initialization complete. Bot is operational!");
+        console.log("🚀🚀🚀 Solana Gambles Bot is up and running! 🚀🚀🚀");
+
+
+        // --- BONUS: Solana Connection Boost after 20s ---
+        setTimeout(() => {
+            if (solanaConnection && solanaConnection.options) {
+                console.log("⚡ Boosting Solana connection concurrency...");
+                solanaConnection.options.maxConcurrent = 5; // Boost after safe startup
+                console.log("✅ Solana maxConcurrent increased to 5");
+            }
+        }, 20000); // 20 seconds after startServer() is called
+        // --- END BONUS ---
+
+    } catch (err) {
+        console.error("❌ Fatal error during server startup phases:", err);
+        // Attempt graceful shutdown on startup error
+        await shutdown('STARTUP_FAILURE').catch(() => process.exit(1));
+        setTimeout(() => { // Ensure exit if shutdown hangs
+             console.error("Shutdown timed out after startup failure. Forcing exit.");
+             process.exit(1);
+        }, 10000).unref();
     }
-    process.exit(1); // Exit on any server startup error
-});
+}
+
+// Start everything
+startServer();
