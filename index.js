@@ -61,26 +61,26 @@ if (!process.env.FEE_MARGIN) {
 console.log(`ℹ️ Using FEE_MARGIN: ${process.env.FEE_MARGIN} lamports`);
 
 // --- Startup State Tracking ---
-let isFullyInitialized = false;
-let server; // Declare server variable for health check
+let isFullyInitialized = false; // Tracks completion of background initialization
+let server; // Declare server variable for health check and graceful shutdown
 
 // --- Initialize Scalable Components ---
 const app = express();
 
-// --- MODIFIED: Railway Health Check Endpoint (Immediate Response) ---
-// Add this near the top, after app initialization, before other routes
+// --- IMMEDIATE Health Check Endpoint (Critical Fix #1) ---
+// This endpoint responds instantly, regardless of background initialization state.
 app.get('/health', (req, res) => {
   res.status(200).json({
-    status: server ? 'ready' : 'starting', // Always respond instantly
+    status: server ? 'ready' : 'starting', // Report 'ready' once server object exists, otherwise 'starting'
     uptime: process.uptime()
   });
 });
-// --- END MODIFIED ---
+// --- END IMMEDIATE Health Check Endpoint ---
 
 // 1. Enhanced Solana Connection with Rate Limiting
 console.log("⚙️ Initializing scalable Solana connection...");
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 3,     // Max parallel requests
+    maxConcurrent: 3,      // Max parallel requests
     retryBaseDelay: 600,   // Initial delay for retries (ms)
     commitment: 'confirmed', // Default commitment level
     httpHeaders: {
@@ -103,9 +103,9 @@ console.log("✅ Message processing queue initialized");
 console.log("⚙️ Setting up optimized PostgreSQL Pool...");
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    max: 15,                     // Max connections in pool
-    min: 5,                      // Min connections maintained
-    idleTimeoutMillis: 30000,    // Close idle connections after 30s
+    max: 15,                       // Max connections in pool
+    min: 5,                        // Min connections maintained
+    idleTimeoutMillis: 30000,      // Close idle connections after 30s
     connectionTimeoutMillis: 5000, // Timeout for acquiring connection
     ssl: process.env.NODE_ENV === 'production' ? {
         rejectUnauthorized: false // Necessary for some cloud providers like Heroku/Railway
@@ -146,31 +146,31 @@ async function initializeDatabase() {
         // Bets Table: Tracks individual game bets
         await client.query(`
             CREATE TABLE IF NOT EXISTS bets (
-                id SERIAL PRIMARY KEY,                   -- Unique bet identifier
-                user_id TEXT NOT NULL,                   -- Telegram User ID
-                chat_id TEXT NOT NULL,                   -- Telegram Chat ID
-                game_type TEXT NOT NULL,                 -- 'coinflip' or 'race'
-                bet_details JSONB,                       -- Game-specific details (choice, horse, odds)
-                expected_lamports BIGINT NOT NULL,       -- Amount user should send (in lamports)
-                memo_id TEXT UNIQUE NOT NULL,            -- Unique memo for payment tracking
-                status TEXT NOT NULL,                    -- Bet status (e.g., 'awaiting_payment', 'completed_win_paid', 'error_...')
+                id SERIAL PRIMARY KEY,                      -- Unique bet identifier
+                user_id TEXT NOT NULL,                      -- Telegram User ID
+                chat_id TEXT NOT NULL,                      -- Telegram Chat ID
+                game_type TEXT NOT NULL,                    -- 'coinflip' or 'race'
+                bet_details JSONB,                          -- Game-specific details (choice, horse, odds)
+                expected_lamports BIGINT NOT NULL,          -- Amount user should send (in lamports)
+                memo_id TEXT UNIQUE NOT NULL,               -- Unique memo for payment tracking
+                status TEXT NOT NULL,                       -- Bet status (e.g., 'awaiting_payment', 'completed_win_paid', 'error_...')
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- When the bet was initiated
-                expires_at TIMESTAMPTZ NOT NULL,         -- When the payment window closes
-                paid_tx_signature TEXT UNIQUE,           -- Signature of the user's payment transaction
-                payout_tx_signature TEXT UNIQUE,         -- Signature of the bot's payout transaction (if win)
-                processed_at TIMESTAMPTZ,                -- When the bet was fully resolved
-                fees_paid BIGINT,                        -- Estimated fees buffer associated with this bet
-                priority INT DEFAULT 0                   -- Priority for processing (higher first)
+                expires_at TIMESTAMPTZ NOT NULL,            -- When the payment window closes
+                paid_tx_signature TEXT UNIQUE,              -- Signature of the user's payment transaction
+                payout_tx_signature TEXT UNIQUE,            -- Signature of the bot's payout transaction (if win)
+                processed_at TIMESTAMPTZ,                   -- When the bet was fully resolved
+                fees_paid BIGINT,                           -- Estimated fees buffer associated with this bet
+                priority INT DEFAULT 0                      -- Priority for processing (higher first)
             );
         `);
 
         // Wallets Table: Links Telegram User ID to their Solana wallet address
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
-                user_id TEXT PRIMARY KEY,                  -- Telegram User ID
-                wallet_address TEXT NOT NULL,              -- User's Solana wallet address
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- When the wallet was first linked
-                last_used_at TIMESTAMPTZ                    -- When the wallet was last used for a bet/payout
+                user_id TEXT PRIMARY KEY,                       -- Telegram User ID
+                wallet_address TEXT NOT NULL,                   -- User's Solana wallet address
+                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),   -- When the wallet was first linked
+                last_used_at TIMESTAMPTZ                        -- When the wallet was last used for a bet/payout
             );
         `);
 
@@ -205,7 +205,7 @@ async function initializeDatabase() {
 console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
     polling: false, // Use webhooks in production (set later in startup)
-    request: {     // Adjust request options for stability
+    request: {      // Adjust request options for stability (Fix #4)
         timeout: 10000, // Request timeout: 10s
         agentOptions: {
             keepAlive: true,   // Reuse connections
@@ -246,14 +246,15 @@ app.use(express.json({
     }
 }));
 
-// Original Health check / Info endpoint (keep for manual checks)
+// Original Health check / Info endpoint (keep for manual checks / detailed status)
+// Modified to include initialization status (Fix #3 - Progress Tracking Info)
 app.get('/', (req, res) => {
     performanceMonitor.logRequest(true);
     res.status(200).json({
         status: 'ok',
-        initialized: isFullyInitialized, // Include initialization status
+        initialized: isFullyInitialized, // Report background initialization status here
         timestamp: new Date().toISOString(),
-        version: '2.0.3', // Bot version (incremented for health check change)
+        version: '2.0.4', // Bot version (incremented for startup changes)
         queueStats: { // Report queue status
             pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
             active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
@@ -1315,11 +1316,8 @@ function adjustMonitorInterval(processedCount) {
         monitorIntervalSeconds = newInterval;
         if (monitorInterval) clearInterval(monitorInterval); // Clear existing interval
 
-        // Reschedule with new interval (logic moved to startPaymentMonitor)
-        // The actual rescheduling happens when startPaymentMonitor is called after init
         console.log(`ℹ️ Adjusted monitor interval to ${monitorIntervalSeconds}s`);
-        // We need to re-apply the interval if it changes *during* runtime
-        // Let's keep the rescheduling logic here
+        // Re-apply the interval if it changes *during* runtime
         monitorInterval = setInterval(() => {
              try {
                  monitorPayments().catch(err => {
@@ -1425,7 +1423,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
                     {
                         commitment: 'confirmed', // Confirm at 'confirmed' level
                         skipPreflight: false,    // Perform preflight checks
-                        maxRetries: 2,       // Retries within sendAndConfirm (lower internal retries)
+                        maxRetries: 2,     // Retries within sendAndConfirm (lower internal retries)
                         preflightCommitment: 'confirmed' // Match commitment
                     }
                 ),
@@ -2176,17 +2174,17 @@ async function handleBetRaceCommand(msg, args) {
 // Handles /help command
 async function handleHelpCommand(msg) {
     const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
-                       `/start - Show welcome message\n` +
-                       `/help - Show this help message\n\n` +
-                       `*Games:*\n` +
-                       `/coinflip - Show Coinflip game info & how to bet\n` +
-                       `/race - Show Horse Race game info & how to bet\n\n` +
-                       `*Betting:*\n` +
-                       `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
-                       `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
-                       `*Wallet:*\n` +
-                       `/wallet - View your linked Solana wallet for payouts\n\n` +
-                       `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
+                           `/start - Show welcome message\n` +
+                           `/help - Show this help message\n\n` +
+                           `*Games:*\n` +
+                           `/coinflip - Show Coinflip game info & how to bet\n` +
+                           `/race - Show Horse Race game info & how to bet\n\n` +
+                           `*Betting:*\n` +
+                           `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
+                           `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
+                           `*Wallet:*\n` +
+                           `/wallet - View your linked Solana wallet for payouts\n\n` +
+                           `*Support:* If you encounter issues, please contact [Admin/Support Link - Placeholder].`; // Replace placeholder
 
     await safeSendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2315,7 +2313,7 @@ const shutdown = async (signal) => {
                  // Add a timeout for server close
                  setTimeout(() => reject(new Error('Server close timeout')), 5000).unref();
              });
-         }
+        }
 
         // Try deleting webhook regardless of env var
         try {
@@ -2389,27 +2387,35 @@ process.on('unhandledRejection', (reason, promise) => {
     // setTimeout(() => process.exit(1), 12000).unref();
 });
 
-// --- Start the Application ---
+// --- Start the Application (MODIFIED Startup Sequence - Fix #2 & #5) ---
 const PORT = process.env.PORT || 3000;
 
 // Start server immediately, listen on 0.0.0.0
 server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 'server'
     console.log(`🚀 Server running on port ${PORT}`);
-    // Delay heavy initialization
+
+    // Start heavy initialization AFTER server is listening, with a short delay
+    // This ensures the /health endpoint is responsive immediately.
     setTimeout(async () => {
+        console.log("⚙️ Starting delayed background initialization...");
         try {
-            console.log("⚙️ Starting delayed initialization...");
+            // Initialization Steps (Progress Tracking - Fix #3 via logs)
+            console.log("  - Initializing Database...");
             await initializeDatabase(); // Initialize DB first
+            console.log("  - Setting up Telegram...");
             const webhookSet = await setupTelegramWebhook(); // Setup webhook (if applicable)
             if (!webhookSet) { // If webhook wasn't set (or failed)
                 await startPollingIfNeeded(); // Attempt to start polling
             }
+            console.log("  - Starting Payment Monitor...");
             startPaymentMonitor(); // Start the monitor loop regardless of webhook/polling
-            isFullyInitialized = true; // Mark as fully initialized *after* setup
-            console.log("✅ Delayed Initialization Complete. Bot is fully ready.");
+
+            isFullyInitialized = true; // Mark as fully initialized *after* setup completes
+            console.log("✅ Delayed Background Initialization Complete. Bot is fully ready.");
             console.log("🚀🚀🚀 Solana Gambles Bot is up and running! 🚀🚀🚀");
+
         } catch (initError) {
-            console.error("🔥🔥🔥 Delayed Initialization Error:", initError);
+            console.error("🔥🔥🔥 Delayed Background Initialization Error:", initError);
             // If initialization fails, the bot might be unusable.
             // Consider a graceful shutdown attempt before exiting.
             console.error("❌ Exiting due to critical initialization failure.");
