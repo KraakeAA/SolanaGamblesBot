@@ -1,16 +1,54 @@
 {
   "build": {
-    "env": {
-      "NODE_ENV": "production"
+    "builder": "nixpacks",
+    "config": {
+      "startCmd": "node index.js",
+      "nixpacks": {
+        "buildCommand": "npm install",
+        "installCommand": "npm install",
+        "startPhase": {
+          "run": "node index.js"
+        }
+      }
     }
   },
   "deploy": {
-    "startCommand": "node index.js",
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 5,
+    "startTimeout": 30000,
+    "restartPolicy": {
+      "maxRetries": 3,
+      "restartTimeout": 30000
+    },
     "healthcheckPath": "/health",
-    "healthcheckTimeout": 15,
-    "healthcheckMaxRetries": 2,
-    "healthcheckDelay": 5
+    "healthcheckTimeout": 5000,
+    "healthcheckInterval": 5000,
+    "healthcheckStartPeriod": 5000
+  },
+  "plugins": {
+    "postgresql": {
+      "enabled": true
+    }
+  },
+  "checks": {
+    "enabled": true,
+    "timeout": 5,
+    "interval": 10,
+    "startPeriod": 5,
+    "retries": 3
+  },
+  "probes": {
+    "liveness": {
+      "path": "/health",
+      "initialDelay": 5,
+      "timeoutSeconds": 5,
+      "periodSeconds": 10,
+      "failureThreshold": 3
+    },
+    "readiness": {
+      "path": "/health",
+      "initialDelay": 5,
+      "timeoutSeconds": 5,
+      "periodSeconds": 10,
+      "failureThreshold": 3
+    }
   }
 }
