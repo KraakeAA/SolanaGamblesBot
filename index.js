@@ -81,7 +81,7 @@ app.get('/health', (req, res) => {
 app.get('/railway-health', (req, res) => {
     res.status(200).json({
         status: isFullyInitialized ? 'ready' : 'starting',
-        version: '2.0.8' // Version Bump for user-provided findMemoInTx
+        version: '2.0.9' // Version Bump for new findMemoInTx + helper
     });
 });
 
@@ -104,7 +104,7 @@ const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
     commitment: 'confirmed',   // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
-        'solana-client': `SolanaGamblesBot/2.0.8 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info (Version Bump)
+        'solana-client': `SolanaGamblesBot/2.0.9 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info (Version Bump)
     },
     rateLimitCooloff: 10000,     // Pause duration after hitting rate limits (ms) - Changed back to 10000ms as per original structure.
     disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
@@ -280,7 +280,7 @@ app.get('/', (req, res) => {
         status: 'ok',
         initialized: isFullyInitialized, // Report background initialization status here
         timestamp: new Date().toISOString(),
-        version: '2.0.8', // Bot version (incremented for user-provided findMemoInTx)
+        version: '2.0.9', // Bot version (incremented for new findMemoInTx)
         queueStats: { // Report queue status
             pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
             active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
@@ -355,6 +355,39 @@ const PRIORITY_FEE_RATE = 0.0001;
 
 
 // --- Helper Functions ---
+
+// <<< START: NEW DEBUG HELPER FUNCTION >>>
+function debugInstruction(inst, accountKeys) {
+    try {
+        const programIdKeyInfo = accountKeys[inst.programIdIndex];
+        // Handle different potential structures for accountKeys
+        const programId = programIdKeyInfo?.pubkey ? new PublicKey(programIdKeyInfo.pubkey) : // VersionedMessage
+                       (typeof programIdKeyInfo === 'string' ? new PublicKey(programIdKeyInfo) : // Legacy string
+                       (programIdKeyInfo instanceof PublicKey ? programIdKeyInfo : null)); // Direct PublicKey
+
+        const accountPubkeys = inst.accounts?.map(idx => {
+             const keyInfo = accountKeys[idx];
+             return keyInfo?.pubkey ? new PublicKey(keyInfo.pubkey) :
+                    (typeof keyInfo === 'string' ? new PublicKey(keyInfo) :
+                    (keyInfo instanceof PublicKey ? keyInfo : null));
+        }).filter(pk => pk !== null) // Filter out nulls if parsing failed
+          .map(pk => pk.toBase58()); // Convert valid PublicKeys to string
+
+        return {
+            programId: programId ? programId.toBase58() : `Invalid Index ${inst.programIdIndex}`,
+            data: inst.data ? Buffer.from(inst.data, 'base64').toString('hex') : null,
+            accounts: accountPubkeys // Array of Base58 strings or empty array
+        };
+    } catch (e) {
+        console.error("[DEBUG INSTR HELPER] Error:", e); // Log the specific error
+        return {
+             error: e.message,
+             programIdIndex: inst.programIdIndex,
+             accountIndices: inst.accounts
+         }; // Return error info
+    }
+}
+// <<< END: NEW DEBUG HELPER FUNCTION >>>
 
 // --- START: Updated Memo Handling System ---
 
@@ -460,141 +493,146 @@ function normalizeMemo(rawMemo) {
     return memo && memo.length > 0 ? memo : null;
 }
 
-// <<< START: NEW findMemoInTx FUNCTION >>>
+// <<< START: LATEST findMemoInTx FUNCTION >>>
 async function findMemoInTx(tx) {
-    if (!tx?.transaction?.message?.instructions) {
-        console.log("[MEMO DEBUG] Invalid transaction structure");
+    if (!tx?.transaction?.message) {
+        console.log("[MEMO DEBUG] Invalid transaction structure (missing message)");
         return null;
     }
 
-    // Helper to get instruction program ID
-    const getProgramId = (inst) => {
+    // Handle different ways account keys might be stored (Versioned vs Legacy)
+    const accountKeys = tx.transaction.message.accountKeys || [];
+    if (accountKeys.length === 0) {
+        console.log("[MEMO DEBUG] Invalid transaction structure (no account keys)");
+        return null;
+    }
+
+    const instructions = tx.transaction.message.instructions || [];
+
+    console.log("[MEMO DEBUG] Starting memo search for tx:", tx.transaction.signatures[0]);
+    // Map account keys to Base58 strings for easier debugging/comparison
+    const accountKeyStrings = accountKeys.map(k => {
         try {
-            const keyInfo = tx.transaction.message.accountKeys[inst.programIdIndex];
-            // Updated handling: Prefer pubkey, fallback to string interpretation
-             return keyInfo?.pubkey ? new PublicKey(keyInfo.pubkey) :
-                   (typeof keyInfo === 'string' ? new PublicKey(keyInfo) : null);
-        } catch (e) {
-             console.error("[MEMO DEBUG] Error getting program ID for index", inst.programIdIndex, e?.message); // Log error
-            return null;
+            return k?.pubkey ? new PublicKey(k.pubkey).toBase58() : // VersionedMessage
+                   (typeof k === 'string' ? new PublicKey(k).toBase58() : // Legacy String
+                   (k instanceof PublicKey ? k.toBase58() : 'InvalidKeyFormat')); // Direct PublicKey or Error
+        } catch {
+             return 'InvalidKeyFormat';
         }
-    };
+    });
+    console.log("[MEMO DEBUG] Account keys:", accountKeyStrings.slice(0, 5).join(', ') + (accountKeyStrings.length > 5 ? '...' : '')); // Log first few keys
 
-    // Check all instructions (V2 first)
-    for (const inst of tx.transaction.message.instructions) {
-        try {
-            const programId = getProgramId(inst);
-            if (!programId) {
-                // console.log("[MEMO DEBUG] Skipping instruction due to missing program ID"); // Reduce noise
-                continue;
+    // 1. Check regular instructions
+    console.log(`[MEMO DEBUG] Checking ${instructions.length} main instructions...`);
+    for (let i = 0; i < instructions.length; i++) {
+        const inst = instructions[i];
+        const debug = debugInstruction(inst, accountKeys); // Use the helper
+        console.log(`[MEMO DEBUG] Main Instruction [${i}]:`, JSON.stringify(debug)); // Log cleaned debug info
+
+        if (debug.error) {
+             console.error(`[MEMO DEBUG] Error debugging main instruction ${i}:`, debug.error);
+             continue; // Skip instruction if debug helper failed
+        }
+
+        // Compare Base58 strings for program IDs
+        if (debug.programId === MEMO_V1_PROGRAM_ID.toBase58() && inst.data) { // Check inst.data directly
+            try {
+                // Note: normalizeMemo expects raw UTF8 string, not hex
+                const memo = normalizeMemo(Buffer.from(inst.data, 'base64').toString('utf8'));
+                if (memo) {
+                    console.log(`[MEMO DEBUG] Found V1 memo in main instruction ${i}: "${memo}"`);
+                    return memo; // Return immediately
+                }
+            } catch (e) {
+                console.error(`[MEMO DEBUG] V1 processing error in main instruction ${i}:`, e?.message);
             }
+        }
 
-            // MEMO V2 - Base64 encoded
-            if (programId.equals(MEMO_V2_PROGRAM_ID)) {
-                if (inst.data && typeof inst.data === 'string') {
+        if (debug.programId === MEMO_V2_PROGRAM_ID.toBase58() && inst.data) { // Check inst.data directly
+            try {
+                const memo = Buffer.from(inst.data, 'base64').toString('utf8').trim();
+                if (memo) {
+                    console.log(`[MEMO DEBUG] Found V2 memo in main instruction ${i}: "${memo}"`);
+                    return memo; // Return immediately
+                }
+            } catch (e) {
+                console.error(`[MEMO DEBUG] V2 processing error in main instruction ${i}:`, e?.message);
+            }
+        }
+    }
+
+    // 2. Check inner instructions
+    const innerInstructions = tx.meta?.innerInstructions || [];
+    if (innerInstructions.length > 0) {
+        console.log(`[MEMO DEBUG] Checking ${innerInstructions.length} sets of inner instructions...`);
+        for (let i = 0; i < innerInstructions.length; i++) {
+            const innerSet = innerInstructions[i];
+            console.log(`[MEMO DEBUG] Inner Set ${i} (Index ${innerSet.index}) has ${innerSet.instructions.length} instructions.`);
+            for (let j = 0; j < innerSet.instructions.length; j++) {
+                const inst = innerSet.instructions[j];
+                const debug = debugInstruction(inst, accountKeys); // Use helper
+                console.log(`[MEMO DEBUG] Inner Instruction [${i}-${j}]:`, JSON.stringify(debug));
+
+                 if (debug.error) {
+                    console.error(`[MEMO DEBUG] Error debugging inner instruction ${i}-${j}:`, debug.error);
+                    continue; // Skip instruction if debug helper failed
+                 }
+
+                // Primarily check for V2 in inner instructions
+                if (debug.programId === MEMO_V2_PROGRAM_ID.toBase58() && inst.data) { // Check inst.data directly
                     try {
-                        // Ensure proper base64 decoding
-                        const decoded = Buffer.from(inst.data, 'base64').toString('utf8').trim();
-                        if (decoded) {
-                            console.log(`[MEMO DEBUG] Found V2 memo in main instructions: "${decoded}"`);
-                            return decoded; // Return as soon as found
-                        } else {
-                             console.log("[MEMO DEBUG] V2 instruction data decodes to empty string.");
+                        const memo = Buffer.from(inst.data, 'base64').toString('utf8').trim();
+                        if (memo) {
+                            console.log(`[MEMO DEBUG] Found V2 memo in inner instruction ${i}-${j}: "${memo}"`);
+                            return memo; // Return immediately
                         }
                     } catch (e) {
-                        console.error("[MEMO DEBUG] V2 base64 decode error in main instructions:", e?.message);
-                        // Log raw data on error
-                        console.error("[MEMO DEBUG] Raw V2 data on error:", inst.data);
+                        console.error(`[MEMO DEBUG] Inner V2 processing error ${i}-${j}:`, e?.message);
                     }
-                } else {
-                     console.log("[MEMO DEBUG] V2 instruction found but data missing or not a string.");
                 }
-                continue; // Check next instruction even if V2 fails
+                 // Optionally add V1 check here if necessary for inner instructions
             }
-
-            // MEMO V1 - Legacy format
-            if (programId.equals(MEMO_V1_PROGRAM_ID)) {
-                if (inst.data && typeof inst.data === 'string') {
-                    try {
-                        const raw = Buffer.from(inst.data, 'base64').toString('utf8');
-                        const normalized = normalizeMemo(raw); // Apply V1 normalization/recovery
-                        if (normalized) {
-                            console.log(`[MEMO DEBUG] Found V1 memo in main instructions: "${normalized}" (Raw: "${raw}")`);
-                            return normalized; // Return as soon as found
-                        } else {
-                             console.log(`[MEMO DEBUG] V1 instruction data normalized to null/empty (Raw: "${raw}")`);
-                        }
-                    } catch (e) {
-                        console.error("[MEMO DEBUG] V1 memo processing error in main instructions:", e?.message);
-                         // Log raw data on error
-                        console.error("[MEMO DEBUG] Raw V1 data on error:", inst.data);
-                    }
-                } else {
-                    console.log("[MEMO DEBUG] V1 instruction found but data missing or not a string.");
-                }
-                continue; // Check next instruction even if V1 fails
-            }
-        } catch (err) {
-            console.error("[MEMO DEBUG] General instruction processing error:", err?.message);
-             // Log the instruction causing issues
-             console.error("[MEMO DEBUG] Failing instruction details:", JSON.stringify(inst));
         }
-    } // End loop through main instructions
-
-    // Check inner instructions (for wrapped transactions like Jupiter swaps)
-    if (tx.meta?.innerInstructions) {
-        console.log("[MEMO DEBUG] Checking inner instructions...");
-        for (const inner of tx.meta.innerInstructions) {
-            for (const inst of inner.instructions) {
-                try {
-                    const programId = getProgramId(inst); // Reuse helper
-                    if (!programId) {
-                         // console.log("[MEMO DEBUG] Skipping inner instruction due to missing program ID"); // Reduce noise
-                         continue;
-                    }
-
-                     // Only check for V2 Memos in inner instructions (common use case)
-                    if (programId.equals(MEMO_V2_PROGRAM_ID)) {
-                        if (inst.data && typeof inst.data === 'string') { // Check data exists and is string
-                            try {
-                                const decoded = Buffer.from(inst.data, 'base64').toString('utf8').trim();
-                                if (decoded) {
-                                    console.log(`[MEMO DEBUG] Found V2 memo in inner instructions: "${decoded}"`);
-                                    return decoded; // Return immediately
-                                } else {
-                                     // console.log("[MEMO DEBUG] Inner V2 instruction data decodes to empty string."); // Reduce noise
-                                }
-                            } catch (e) {
-                                console.error("[MEMO DEBUG] V2 base64 decode error in inner instructions:", e?.message);
-                                // Log raw data on error
-                                console.error("[MEMO DEBUG] Raw Inner V2 data on error:", inst.data);
-                            }
-                        } else {
-                             // console.log("[MEMO DEBUG] Inner V2 instruction found but data missing or not a string."); // Reduce noise
-                        }
-                    }
-                    // Optionally add V1 check here if needed for inner instructions, but less common.
-                     /*
-                     else if (programId.equals(MEMO_V1_PROGRAM_ID)) {
-                         // ... similar V1 handling as above ...
-                     }
-                     */
-
-                } catch (e) {
-                    console.error("[MEMO DEBUG] Inner instruction processing error:", e?.message);
-                     // Log the instruction causing issues
-                    console.error("[MEMO DEBUG] Failing inner instruction details:", JSON.stringify(inst));
-                }
-            } // End loop inner.instructions
-        } // End loop tx.meta.innerInstructions
     } else {
          console.log("[MEMO DEBUG] No inner instructions found in metadata.");
     }
 
-    console.log("[MEMO DEBUG] No valid V1 or V2 memo found after exhaustive search");
-    return null; // Return null only after checking everything
+    // 3. Final fallback - raw instruction scan (Less reliable, use as last resort)
+    console.log("[MEMO DEBUG] Final fallback - scanning all instructions data for known prefixes");
+    const allInstructions = instructions.concat(...innerInstructions.flatMap(i => i.instructions));
+    for (let i = 0; i < allInstructions.length; i++) {
+        const inst = allInstructions[i];
+        if (inst.data) {
+            try {
+                // Try raw UTF-8 decode from base64
+                const memo = Buffer.from(inst.data, 'base64').toString('utf8').trim();
+                // Basic check for expected prefixes
+                if (memo && (memo.startsWith('CF-') || memo.startsWith('RA-') || memo.startsWith('BET-'))) {
+                    // Validate further if needed (e.g., length, format)
+                    if (validateOriginalMemoFormat(memo)) { // Check if it matches our V1 format
+                         console.log(`[MEMO DEBUG] Fallback found valid V1 format memo in instruction ${i}: "${memo}"`);
+                         return memo;
+                    } else {
+                         // If not V1 format, could be a simple V2 memo missed earlier?
+                         console.log(`[MEMO DEBUG] Fallback found potential memo in instruction ${i}: "${memo}" (checking if simple V2)`);
+                         // Basic check: short, printable chars? Adjust as needed.
+                         if (memo.length > 2 && memo.length < 30 && /^[\x20-\x7E]+$/.test(memo)) {
+                              console.log(`[MEMO DEBUG] Accepting potential V2 memo from fallback: "${memo}"`);
+                              return memo;
+                         }
+                    }
+                }
+            } catch (e) {
+                // Ignore decode errors during fallback scan
+                // console.error(`[MEMO DEBUG] Fallback decode error for instruction ${i}:`, e.message);
+            }
+        }
+    }
+
+    console.log("[MEMO DEBUG] Exhausted all search methods, no memo found.");
+    return null;
 }
-// <<< END: NEW findMemoInTx FUNCTION >>>
+// <<< END: LATEST findMemoInTx FUNCTION >>>
 
 // --- END: Updated Memo Handling System ---
 
@@ -1150,6 +1188,26 @@ class PaymentProcessor {
                  throw new Error(`Transaction ${signature} not found (null response)`);
              }
             console.log(`[PAYMENT DEBUG] Fetched transaction for signature: ${signature}`);
+            // --- ADD EXTRA DEBUG LOGGING OF RAW TX DATA ---
+            // console.log('[RAW TX DATA]', JSON.stringify({
+            //      signatures: tx.transaction.signatures,
+            //      message: {
+            //          accountKeys: tx.transaction.message.accountKeys?.slice(0, 5), // Log first few keys
+            //          instructions: tx.transaction.message.instructions?.map(i => ({
+            //              programIdIndex: i.programIdIndex,
+            //              data: i.data?.slice(0, 20) + (i.data?.length > 20 ? '...' : ''), // Log truncated data
+            //              accounts: i.accounts
+            //          })),
+            //          header: tx.transaction.message.header
+            //      },
+            //      meta: {
+            //          err: tx.meta?.err,
+            //          fee: tx.meta?.fee,
+            //          innerInstructions: tx.meta?.innerInstructions?.slice(0,2) // Log first few inner instructions
+            //      }
+            // }, null, 2));
+            // --- END EXTRA DEBUG LOGGING ---
+
         } catch (fetchError) {
             console.error(`Failed to fetch TX ${signature}: ${fetchError.message}`);
             if (isRetryableError(fetchError) && attempt < 3) throw fetchError; // Allow retry
@@ -1167,7 +1225,7 @@ class PaymentProcessor {
 
         // --- Signature successfully fetched and is valid ---
 
-        // 5. Find and validate the memo (Uses updated findMemoInTx logic - the user-provided one)
+        // 5. Find and validate the memo (Uses the latest findMemoInTx)
         const memo = await findMemoInTx(tx); // Use the newly implemented function
         console.log(`[PAYMENT DEBUG] Memo found by findMemoInTx for TX ${signature}: ${memo}`); // Log result
         if (!memo) {
