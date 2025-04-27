@@ -104,7 +104,7 @@ console.log("⚙️ Initializing scalable Solana connection...");
 // TODO: Consider implementing request prioritization (e.g., payouts > monitoring) within RateLimitedConnection.
 // TODO: Consider implementing exponential backoff within RateLimitedConnection for RPC errors.
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 3,       // Initial max parallel requests set to 3
+    maxConcurrent: 3,      // Initial max parallel requests set to 3
     retryBaseDelay: 600,    // Initial delay for retries (ms)
     commitment: 'confirmed',   // Default commitment level
     httpHeaders: {
@@ -128,8 +128,8 @@ console.log("✅ Message processing queue initialized");
 console.log("⚙️ Setting up optimized PostgreSQL Pool...");
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    max: 15,                      // Max connections in pool
-    min: 5,                       // Min connections maintained
+    max: 15,                        // Max connections in pool
+    min: 5,                         // Min connections maintained
     idleTimeoutMillis: 30000,     // Close idle connections after 30s
     connectionTimeoutMillis: 5000, // Timeout for acquiring connection
     ssl: process.env.NODE_ENV === 'production' ? {
@@ -177,7 +177,7 @@ async function initializeDatabase() {
                 game_type TEXT NOT NULL,                     -- 'coinflip' or 'race'
                 bet_details JSONB,                           -- Game-specific details (choice, horse, odds)
                 expected_lamports BIGINT NOT NULL,           -- Amount user should send (in lamports)
-                memo_id TEXT UNIQUE NOT NULL,                -- Unique memo for payment tracking
+                memo_id TEXT UNIQUE NOT NULL,                 -- Unique memo for payment tracking
                 status TEXT NOT NULL,                        -- Bet status (e.g., 'awaiting_payment', 'completed_win_paid', 'error_...')
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- When the bet was initiated
                 expires_at TIMESTAMPTZ NOT NULL,             -- When the payment window closes
@@ -192,10 +192,10 @@ async function initializeDatabase() {
         // Wallets Table: Links Telegram User ID to their Solana wallet address
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
-                user_id TEXT PRIMARY KEY,                            -- Telegram User ID
-                wallet_address TEXT NOT NULL,                        -- User's Solana wallet address
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),        -- When the wallet was first linked
-                last_used_at TIMESTAMPTZ                             -- When the wallet was last used for a bet/payout
+                user_id TEXT PRIMARY KEY,                             -- Telegram User ID
+                wallet_address TEXT NOT NULL,                         -- User's Solana wallet address
+                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),         -- When the wallet was first linked
+                last_used_at TIMESTAMPTZ                                -- When the wallet was last used for a bet/payout
             );
         `);
 
@@ -235,7 +235,7 @@ async function initializeDatabase() {
 console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
     polling: false, // Use webhooks in production (set later in startup)
-    request: {      // Adjust request options for stability (Fix #4)
+    request: {       // Adjust request options for stability (Fix #4)
         timeout: 10000, // Request timeout: 10s
         agentOptions: {
             keepAlive: true,   // Reuse connections
@@ -386,10 +386,10 @@ function debugInstruction(inst, accountKeys) {
     } catch (e) {
         console.error("[DEBUG INSTR HELPER] Error:", e); // Log the specific error
         return {
-             error: e.message,
-             programIdIndex: inst.programIdIndex,
-             accountIndices: inst.accounts
-           }; // Return error info
+                 error: e.message,
+                 programIdIndex: inst.programIdIndex,
+                 accountIndices: inst.accounts
+               }; // Return error info
     }
 }
 // <<< END DEBUG HELPER FUNCTION >>>
@@ -518,9 +518,9 @@ function normalizeMemo(rawMemo) {
             const potentialChecksum = parts.slice(-1)[0]; // Last part
             if (potentialHex.length === 16 && /^[A-F0-9]{16}$/.test(potentialHex) && potentialChecksum.length === 2 && /^[A-F0-9]{2}$/.test(potentialChecksum)) {
                  if (validateMemoChecksum(potentialHex, potentialChecksum)) {
-                      const recoveredMemo = `${prefix}-${potentialHex}-${potentialChecksum}`;
-                      console.warn(`Recovered V1 memo from extra segments "${memo}" to: ${recoveredMemo}`);
-                      return recoveredMemo;
+                     const recoveredMemo = `${prefix}-${potentialHex}-${potentialChecksum}`;
+                     console.warn(`Recovered V1 memo from extra segments "${memo}" to: ${recoveredMemo}`);
+                     return recoveredMemo;
                  }
             }
         }
@@ -531,11 +531,11 @@ function normalizeMemo(rawMemo) {
 }
 
 
-// <<< START: REPLACED findMemoInTx FUNCTION (Final Fix Implementation + Logging) >>>
+// <<< START: MODIFIED findMemoInTx FUNCTION (with Regex Log Scan Fix) >>>
 async function findMemoInTx(tx, signature) { // Added signature for logging
     const startTime = Date.now(); // For MEMO STATS
-    const usedMethods = [];      // For MEMO STATS
-    let scanDepth = 0;          // For MEMO STATS
+    const usedMethods = [];       // For MEMO STATS
+    let scanDepth = 0;           // For MEMO STATS
 
     // Type assertion for tx object expected structure (adjust if using different web3.js types)
     const transactionResponse = tx; // as VersionedTransactionResponse;
@@ -545,30 +545,34 @@ async function findMemoInTx(tx, signature) { // Added signature for logging
         return null;
     }
 
+    // --- START: MODIFIED Log Scan Block ---
     // 1. First try the direct approach using log messages (often includes decoded memo)
     scanDepth = 1;
     if (transactionResponse.meta?.logMessages) {
-        const memoLogPrefix = "Program log: Memo:";
+        // Use Regex to handle variations like "Memo:" or "Memo (len ...):"
+        const memoLogRegex = /Program log: Memo(?: \(len \d+\))?:\s*"?([^"]+)"?/;
         for (const log of transactionResponse.meta.logMessages) {
-            const memoIndex = log.indexOf(memoLogPrefix);
-            if (memoIndex !== -1) {
-                // Extract memo text after the prefix, remove potential quotes and trim
-                const rawMemo = log.substring(memoIndex + memoLogPrefix.length).trim().replace(/^"|"$/g, '');
-                const memo = normalizeMemo(rawMemo); // Normalize even if found in log
+            const match = log.match(memoLogRegex);
+            // Check if regex matched and captured the memo content (group 1)
+            if (match && match[1]) {
+                // Extract captured group, trim whitespace, remove potential trailing newline '\n' from log
+                const rawMemo = match[1].trim().replace(/\n$/, '');
+                const memo = normalizeMemo(rawMemo); // Normalize the extracted memo
                 if (memo) {
-                    usedMethods.push('LogScan'); // Log Method
-                    console.log(`[MEMO DEBUG] Found memo in log: "${memo}" (Raw: "${rawMemo}")`);
+                    usedMethods.push('LogScanRegex'); // Indicate new method used
+                    console.log(`[MEMO DEBUG] Found memo via Regex log scan: "${memo}" (Raw: "${rawMemo}")`);
                     // --- START: MEMO STATS Logging ---
                     console.log(`[MEMO STATS] TX:${signature?.slice(0,8)} | ` +
                         `Methods:${usedMethods.join(',')} | ` +
                         `Depth:${scanDepth} | ` +
                         `Time:${Date.now() - startTime}ms`);
                     // --- END: MEMO STATS Logging ---
-                    return memo;
+                    return memo; // Return the successfully found and normalized memo
                 }
             }
         }
     }
+    // --- END: MODIFIED Log Scan Block ---
 
     // 2. Fallback to instruction parsing if not found in logs
     scanDepth = 2;
@@ -590,7 +594,7 @@ async function findMemoInTx(tx, signature) { // Added signature for logging
         }
         // Handle potential VersionedMessage structure ({ pubkey: string })
         if (typeof k?.pubkey === 'string') {
-              try { return new PublicKey(k.pubkey).toBase58(); } catch { return k.pubkey; } // Return original string if invalid pubkey
+             try { return new PublicKey(k.pubkey).toBase58(); } catch { return k.pubkey; } // Return original string if invalid pubkey
         }
         return null; // Indicate unknown format
     }).filter(Boolean); // Remove nulls
@@ -666,7 +670,7 @@ async function findMemoInTx(tx, signature) { // Added signature for logging
                     if (memo && validateOriginalMemoFormat(memo)) { // Check if it matches our strict V1 format after normalization
                          usedMethods.push('PatternMatchV1'); // Log Method
                          console.log(`[MEMO DEBUG] Pattern-matched and validated V1 memo: "${memo}" (Raw: "${potentialMemo}")`);
-                          // --- START: MEMO STATS Logging ---
+                         // --- START: MEMO STATS Logging ---
                          console.log(`[MEMO STATS] TX:${signature?.slice(0,8)} | ` +
                              `Methods:${usedMethods.join(',')} | ` +
                              `Depth:${scanDepth} | ` +
@@ -727,7 +731,7 @@ async function findMemoInTx(tx, signature) { // Added signature for logging
     console.log(`[MEMO DEBUG] TX ${signature?.slice(0,8)}: Exhausted all search methods, no memo found.`);
     return null;
 }
-// <<< END: REPLACED findMemoInTx FUNCTION >>>
+// <<< END: MODIFIED findMemoInTx FUNCTION >>>
 
 
 // --- START: New deepScanTransaction Function ---
@@ -749,8 +753,8 @@ async function deepScanTransaction(tx, accountKeys, signature) { // Added accoun
              const programId = inst.programIdIndex !== undefined ? accountKeys[inst.programIdIndex] : null;
              // Check if programId is one of the known memo programs
              if (programId && MEMO_PROGRAM_IDS.includes(programId)) {
-                const dataString = decodeInstructionData(inst.data);
-                if (dataString) {
+                 const dataString = decodeInstructionData(inst.data);
+                 if (dataString) {
                      const memo = normalizeMemo(dataString);
                      if (memo) {
                          usedMethods.push('DeepInnerInstr'); // Log Method
@@ -763,7 +767,7 @@ async function deepScanTransaction(tx, accountKeys, signature) { // Added accoun
                          // --- END: MEMO STATS Logging ---
                          return memo;
                      }
-                }
+                 }
              }
         }
 
@@ -809,23 +813,23 @@ async function deepScanTransaction(tx, accountKeys, signature) { // Added accoun
         //         // Attempt to reconstruct V1 memo if possible (heuristic)
         //         const prefixes = ['BET-', 'CF-', 'RA-'];
         //         for (const pfx of prefixes) {
-        //              const potentialMemoStr = `${pfx}${hex}-XX`; // Placeholder checksum
-        //              const potentialMemoNorm = normalizeMemo(potentialMemoStr); // This will calculate checksum
-        //              // Check if this reconstructed memo might exist nearby in the string
-        //              if (potentialMemoNorm && fullTxString.includes(potentialMemoNorm.slice(0,-3))) { // Check prefix-hex part
-        //                  // Validate the reconstructed memo
-        //                  if (validateOriginalMemoFormat(potentialMemoNorm)) {
-        //                      usedMethods.push('DeepHexDump'); // Log Method
-        //                      console.log(`[MEMO DEEP SCAN] Potential V1 memo found via Hex Dump: ${potentialMemoNorm}`);
-        //                      // --- START: MEMO STATS Logging ---
-        //                      console.log(`[MEMO STATS] TX:${signature?.slice(0,8)} | ` +
-        //                          `Methods:${usedMethods.join(',')} | ` +
-        //                          `Depth:${scanDepth} | ` +
-        //                          `Time:${Date.now() - startTime}ms`);
-        //                      // --- END: MEMO STATS Logging ---
-        //                      return potentialMemoNorm;
-        //                  }
-        //              }
+        //             const potentialMemoStr = `${pfx}${hex}-XX`; // Placeholder checksum
+        //             const potentialMemoNorm = normalizeMemo(potentialMemoStr); // This will calculate checksum
+        //             // Check if this reconstructed memo might exist nearby in the string
+        //             if (potentialMemoNorm && fullTxString.includes(potentialMemoNorm.slice(0,-3))) { // Check prefix-hex part
+        //                 // Validate the reconstructed memo
+        //                 if (validateOriginalMemoFormat(potentialMemoNorm)) {
+        //                     usedMethods.push('DeepHexDump'); // Log Method
+        //                     console.log(`[MEMO DEEP SCAN] Potential V1 memo found via Hex Dump: ${potentialMemoNorm}`);
+        //                     // --- START: MEMO STATS Logging ---
+        //                     console.log(`[MEMO STATS] TX:${signature?.slice(0,8)} | ` +
+        //                         `Methods:${usedMethods.join(',')} | ` +
+        //                         `Depth:${scanDepth} | ` +
+        //                         `Time:${Date.now() - startTime}ms`);
+        //                     // --- END: MEMO STATS Logging ---
+        //                     return potentialMemoNorm;
+        //                 }
+        //             }
         //         }
         //     }
         // }
@@ -1220,7 +1224,7 @@ function getPayerFromTransaction(tx) {
         // Check if the account is a signer in the transaction message
         const keyInfo = message.accountKeys[i];
          const isSigner = keyInfo?.signer || // VersionedMessage format
-                          (message.header?.numRequiredSignatures > 0 && i < message.header.numRequiredSignatures); // Legacy format
+                         (message.header?.numRequiredSignatures > 0 && i < message.header.numRequiredSignatures); // Legacy format
 
         if (isSigner) {
             let key;
@@ -1231,9 +1235,9 @@ function getPayerFromTransaction(tx) {
                  } else if (keyInfo?.pubkey instanceof PublicKey) {
                      key = keyInfo.pubkey;
                  } else if (typeof keyInfo?.pubkey === 'string') {
-                      key = new PublicKey(keyInfo.pubkey);
+                     key = new PublicKey(keyInfo.pubkey);
                  } else if (typeof keyInfo === 'string') {
-                      key = new PublicKey(keyInfo);
+                     key = new PublicKey(keyInfo);
                  } else {
                      continue; // Cannot determine key
                  }
@@ -1409,11 +1413,11 @@ class PaymentProcessor {
                     commitment: 'confirmed' // Fetch with 'confirmed' commitment
                 }
             );
-            // Basic check if tx was fetched
-             if (!tx) {
-                 console.warn(`[PAYMENT DEBUG] Transaction ${signature} returned null from RPC.`);
-                 throw new Error(`Transaction ${signature} not found (null response)`);
-             }
+             // Basic check if tx was fetched
+              if (!tx) {
+                  console.warn(`[PAYMENT DEBUG] Transaction ${signature} returned null from RPC.`);
+                  throw new Error(`Transaction ${signature} not found (null response)`);
+              }
             console.log(`[PAYMENT DEBUG] Fetched transaction for signature: ${signature}`);
             // --- ADD EXTRA DEBUG LOGGING OF RAW TX DATA ---
             // console.log('[RAW TX DATA]', JSON.stringify(tx, null, 2)); // Log entire object if needed
@@ -1444,7 +1448,7 @@ class PaymentProcessor {
              if (k?.pubkey instanceof PublicKey) { return k.pubkey.toBase58(); }
              if (typeof k?.pubkey === 'string') { try { return new PublicKey(k.pubkey).toBase58(); } catch { return k.pubkey; } }
              return null;
-         }).filter(Boolean);
+            }).filter(Boolean);
 
         let memo = null;
         if (tx.meta?.innerInstructions && tx.meta.innerInstructions.length > 5) {
@@ -1594,9 +1598,9 @@ async function monitorPayments() {
     try {
         // --- START: Adaptive Rate Limiting Logic (Kept for stability) ---
         const currentLoad = paymentProcessor.highPriorityQueue.pending +
-                              paymentProcessor.normalQueue.pending +
-                              paymentProcessor.highPriorityQueue.size + // Include active items too
-                              paymentProcessor.normalQueue.size;
+                             paymentProcessor.normalQueue.pending +
+                             paymentProcessor.highPriorityQueue.size + // Include active items too
+                             paymentProcessor.normalQueue.size;
         const baseDelay = 500; // Minimum delay between cycles (ms)
         const delayPerItem = 100; // Additional delay per queued/active item (ms)
         const maxThrottleDelay = 10000; // Max delay (10 seconds)
@@ -1832,7 +1836,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
                     {
                         commitment: 'confirmed', // Confirm at 'confirmed' level
                         skipPreflight: false,    // Perform preflight checks
-                        maxRetries: 2,    // Retries within sendAndConfirm (lower internal retries)
+                        maxRetries: 2,  // Retries within sendAndConfirm (lower internal retries)
                         preflightCommitment: 'confirmed' // Match commitment
                     }
                 ),
@@ -2367,10 +2371,10 @@ async function handleStartCommand(msg) {
     const firstName = msg.from.first_name || 'there';
     const sanitizedFirstName = firstName.replace(/</g, '&lt;').replace(/>/g, '&gt;'); // Basic sanitization
     const welcomeText = `👋 Welcome, ${sanitizedFirstName}!\n\n` +
-                        `🎰 *Solana Gambles Bot*\n\n` +
-                        `Use /coinflip or /race to see game options.\n` +
-                        `Use /wallet to view your linked Solana wallet.\n` +
-                        `Use /help to see all commands.`;
+                       `🎰 *Solana Gambles Bot*\n\n` +
+                       `Use /coinflip or /race to see game options.\n` +
+                       `Use /wallet to view your linked Solana wallet.\n` +
+                       `Use /help to see all commands.`;
     const bannerUrl = 'https://i.ibb.co/9vDo58q/banner.gif'; // Keep banner URL
 
     try {
@@ -2613,17 +2617,17 @@ async function handleBetRaceCommand(msg, args) {
 // Handles /help command
 async function handleHelpCommand(msg) {
     const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
-                      `/start - Show welcome message\n` +
-                      `/help - Show this help message\n\n` +
-                      `*Games:*\n` +
-                      `/coinflip - Show Coinflip game info & how to bet\n` +
-                      `/race - Show Horse Race game info & how to bet\n\n` +
-                      `*Betting:*\n` +
-                      `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
-                      `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
-                      `*Wallet:*\n` +
-                      `/wallet - View your linked Solana wallet for payouts\n\n` +
-                      `*Support:* If you encounter issues, please contact support.`; // Replace placeholder
+                     `/start - Show welcome message\n` +
+                     `/help - Show this help message\n\n` +
+                     `*Games:*\n` +
+                     `/coinflip - Show Coinflip game info & how to bet\n` +
+                     `/race - Show Horse Race game info & how to bet\n\n` +
+                     `*Betting:*\n` +
+                     `/bet <amount> <heads|tails> - Place a Coinflip bet\n` +
+                     `/betrace <amount> <horse_name> - Place a Race bet\n\n` +
+                     `*Wallet:*\n` +
+                     `/wallet - View your linked Solana wallet for payouts\n\n` +
+                     `*Support:* If you encounter issues, please contact support.`; // Replace placeholder
 
     await safeSendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
