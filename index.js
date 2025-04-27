@@ -436,19 +436,34 @@ function generateMemoId(prefix = 'BET') {
 }
 
 // *** START: New normalizeMemo function from "Ultimate Fix" ***
+// *** START: New normalizeMemo function from "Ultimate Fix" ***
+// *** MODIFIED WITH DEBUG LOGGING ***
 function normalizeMemo(rawMemo) {
-    if (typeof rawMemo !== 'string') return null;
+    // Add a check for the rawMemo type and log if it's not a string
+    if (typeof rawMemo !== 'string') {
+        console.warn(`[NORMALIZE_MEMO] Received non-string input: ${typeof rawMemo}`, rawMemo);
+        return null;
+    }
 
     // 1. Remove ALL control characters (including newlines, tabs, etc.)
+    // Also remove leading/trailing whitespace immediately
     let memo = rawMemo.replace(/[\x00-\x1F\x7F]/g, '').trim();
+
+    // Log the raw and initially trimmed/control-char-cleaned memo
+    console.log(`[NORMALIZE_MEMO] Input - Raw: "${rawMemo}", Trimmed/Cleaned Control Chars: "${memo}"`);
 
     // 2. Standardize format aggressively
     memo = memo.toUpperCase()
-        .replace(/^MEMO[:=\s]*/i, '')
-        .replace(/^TEXT[:=\s]*/i, '')
-        .replace(/[\u200B-\u200D\uFEFF]/g, '') // Remove zero-width spaces (kept from original)
+        .replace(/^MEMO[:=\s]*/i, '') // Remove potential "MEMO:" prefix variations
+        .replace(/^TEXT[:=\s]*/i, '') // Remove potential "TEXT:" prefix variations
+        .replace(/[\u200B-\u200D\uFEFF]/g, '') // Remove zero-width spaces
         .replace(/\s+/g, '-') // Replace spaces with dashes
-        .replace(/[^A-Z0-9\-]/g, ''); // Remove non-alphanumeric/dash
+        .replace(/[^A-Z0-9\-]/g, ''); // Remove remaining non-alphanumeric/dash characters
+
+    // --- ADDED LOGGING ---
+    // Log the state after full standardization (before V1 check)
+    console.log(`[NORMALIZE_MEMO] Fully Standardized Candidate: "${memo}"`);
+    // --- END ADDED LOGGING ---
 
     // 3. Special handling for V1 format (BET/CF/RA)
     const v1Pattern = /^(BET|CF|RA)-([A-F0-9]{16})-([A-F0-9]{2})$/;
@@ -456,18 +471,47 @@ function normalizeMemo(rawMemo) {
 
     if (v1Match) {
         const [/* full match */, prefix, hex, checksum] = v1Match; // Destructure correctly
-        const expectedChecksum = crypto.createHash('sha256')
-            .update(hex)
-            .digest('hex')
-            .slice(-2)
-            .toUpperCase();
 
-        // Return the format with the CORRECT checksum, regardless of input checksum
-        return `${prefix}-${hex}-${expectedChecksum}`;
+        // --- ADDED LOGGING ---
+        console.log(`[NORMALIZE_MEMO] V1 Pattern Matched. Extracted - Prefix: ${prefix}, Hex: ${hex}, Checksum (from input): ${checksum}`);
+        // --- END ADDED LOGGING ---
+
+        let expectedChecksum;
+        try {
+            expectedChecksum = crypto.createHash('sha256')
+                .update(hex) // Ensure 'hex' is correctly captured and is a string
+                .digest('hex')
+                .slice(-2)
+                .toUpperCase();
+        } catch (hashError) {
+             console.error(`[NORMALIZE_MEMO] CRITICAL ERROR calculating checksum for hex "${hex}":`, hashError);
+             // Decide how to handle - return null? Return uncorrected? For now, log and return null.
+             return null;
+        }
+
+
+        // --- ADDED LOGGING ---
+        console.log(`[NORMALIZE_MEMO] Calculated Expected Checksum: ${expectedChecksum}`);
+        if (checksum !== expectedChecksum) {
+             console.warn(`[NORMALIZE_MEMO] Checksum MISMATCH! Input Checksum: "${checksum}", Expected Checksum: "${expectedChecksum}". Correcting.`);
+        } else {
+             console.log(`[NORMALIZE_MEMO] Checksum MATCH! Input: "${checksum}", Expected: "${expectedChecksum}".`);
+        }
+        // --- END ADDED LOGGING ---
+
+        // Return the format with the CORRECT calculated checksum, regardless of input checksum
+        const finalMemo = `${prefix}-${hex}-${expectedChecksum}`;
+         // --- ADDED LOGGING ---
+        console.log(`[NORMALIZE_MEMO] Returning Corrected V1 Memo: "${finalMemo}"`);
+        // --- END ADDED LOGGING ---
+        return finalMemo;
     }
 
     // If it's not our V1 format, return the aggressively cleaned string
     // (could be V2, could be junk, but control chars are gone)
+    // --- ADDED LOGGING ---
+    console.log(`[NORMALIZE_MEMO] V1 Pattern Did NOT Match "${memo}". Returning cleaned string or null.`);
+    // --- END ADDED LOGGING ---
     return memo || null; // Return null if memo becomes empty after cleaning
 }
 // *** END: New normalizeMemo function ***
