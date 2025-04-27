@@ -102,7 +102,7 @@ console.log("⚙️ Initializing scalable Solana connection...");
 
 
 const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
-    maxConcurrent: 3,
+    maxConcurrent: 2,
     retryBaseDelay: 600,
     commitment: 'confirmed',
     httpHeaders: {
