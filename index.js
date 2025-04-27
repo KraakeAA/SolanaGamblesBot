@@ -81,7 +81,7 @@ app.get('/health', (req, res) => {
 app.get('/railway-health', (req, res) => {
     res.status(200).json({
         status: isFullyInitialized ? 'ready' : 'starting',
-        version: '2.0.9' // Version Bump for new findMemoInTx + helper
+        version: '2.0.9' // Version Bump for new findMemoInTx + helper (Note: Update if version changes)
     });
 });
 
@@ -104,9 +104,9 @@ const solanaConnection = new RateLimitedConnection(process.env.RPC_URL, {
     commitment: 'confirmed',   // Default commitment level
     httpHeaders: {
         'Content-Type': 'application/json',
-        'solana-client': `SolanaGamblesBot/2.0.9 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info (Version Bump)
+        'solana-client': `SolanaGamblesBot/2.0.9 (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Client info (Note: Update version if changed)
     },
-    rateLimitCooloff: 10000,     // Pause duration after hitting rate limits (ms) - Changed back to 10000ms as per original structure.
+    rateLimitCooloff: 10000,    // Pause duration after hitting rate limits (ms) - Changed back to 10000ms as per original structure.
     disableRetryOnRateLimit: false // Rely on RateLimitedConnection's internal handling
 });
 console.log("✅ Scalable Solana connection initialized");
@@ -115,7 +115,7 @@ console.log("✅ Scalable Solana connection initialized");
 // 2. Message Processing Queue (for handling Telegram messages)
 const messageQueue = new PQueue({
     concurrency: 5,   // Max concurrent messages processed
-    timeout: 10000      // Max time per message task (ms)
+    timeout: 10000       // Max time per message task (ms)
 });
 console.log("✅ Message processing queue initialized");
 
@@ -187,10 +187,10 @@ async function initializeDatabase() {
         // Wallets Table: Links Telegram User ID to their Solana wallet address
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
-                user_id TEXT PRIMARY KEY,                             -- Telegram User ID
-                wallet_address TEXT NOT NULL,                         -- User's Solana wallet address
-                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),         -- When the wallet was first linked
-                last_used_at TIMESTAMPTZ                              -- When the wallet was last used for a bet/payout
+                user_id TEXT PRIMARY KEY,                            -- Telegram User ID
+                wallet_address TEXT NOT NULL,                        -- User's Solana wallet address
+                linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),        -- When the wallet was first linked
+                last_used_at TIMESTAMPTZ                             -- When the wallet was last used for a bet/payout
             );
         `);
 
@@ -280,7 +280,7 @@ app.get('/', (req, res) => {
         status: 'ok',
         initialized: isFullyInitialized, // Report background initialization status here
         timestamp: new Date().toISOString(),
-        version: '2.0.9', // Bot version (incremented for new findMemoInTx)
+        version: '2.0.9', // Bot version (incremented for new findMemoInTx) (Note: Update if version changes)
         queueStats: { // Report queue status
             pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
             active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
@@ -356,14 +356,14 @@ const PRIORITY_FEE_RATE = 0.0001;
 
 // --- Helper Functions ---
 
-// <<< START: NEW DEBUG HELPER FUNCTION >>>
+// <<< START: NEW DEBUG HELPER FUNCTION >>> (Left in place, though findMemoInTx no longer uses it)
 function debugInstruction(inst, accountKeys) {
     try {
         const programIdKeyInfo = accountKeys[inst.programIdIndex];
         // Handle different potential structures for accountKeys
         const programId = programIdKeyInfo?.pubkey ? new PublicKey(programIdKeyInfo.pubkey) : // VersionedMessage
-                       (typeof programIdKeyInfo === 'string' ? new PublicKey(programIdKeyInfo) : // Legacy string
-                       (programIdKeyInfo instanceof PublicKey ? programIdKeyInfo : null)); // Direct PublicKey
+                        (typeof programIdKeyInfo === 'string' ? new PublicKey(programIdKeyInfo) : // Legacy string
+                        (programIdKeyInfo instanceof PublicKey ? programIdKeyInfo : null)); // Direct PublicKey
 
         const accountPubkeys = inst.accounts?.map(idx => {
              const keyInfo = accountKeys[idx];
@@ -493,146 +493,113 @@ function normalizeMemo(rawMemo) {
     return memo && memo.length > 0 ? memo : null;
 }
 
-// <<< START: LATEST findMemoInTx FUNCTION >>>
+// <<< START: REPLACED findMemoInTx FUNCTION >>>
 async function findMemoInTx(tx) {
     if (!tx?.transaction?.message) {
-        console.log("[MEMO DEBUG] Invalid transaction structure (missing message)");
+        console.log("[MEMO DEBUG] Invalid transaction structure");
         return null;
     }
 
-    // Handle different ways account keys might be stored (Versioned vs Legacy)
-    const accountKeys = tx.transaction.message.accountKeys || [];
-    if (accountKeys.length === 0) {
-        console.log("[MEMO DEBUG] Invalid transaction structure (no account keys)");
-        return null;
-    }
+    // NEW: Handle different transaction versions
+    const message = tx.transaction.message;
+    const accountKeys = message.accountKeys || [];
+    const instructions = message.instructions || [];
 
-    const instructions = tx.transaction.message.instructions || [];
+    console.log("[MEMO DEBUG] Account keys:", accountKeys.map(k =>
+        // Adjusted to handle PublicKey directly if present, else string or '?'
+        k?.pubkey instanceof PublicKey ? k.pubkey.toBase58() :
+        (k instanceof PublicKey ? k.toBase58() :
+        (typeof k === 'string' ? k :
+        (typeof k?.pubkey === 'string' ? k.pubkey : '?'))) // Handle VersionedMessage pubkey as string
+    ));
 
-    console.log("[MEMO DEBUG] Starting memo search for tx:", tx.transaction.signatures[0]);
-    // Map account keys to Base58 strings for easier debugging/comparison
-    const accountKeyStrings = accountKeys.map(k => {
+    // 1. First try direct instruction scan (for v0 transactions)
+    for (const [i, inst] of instructions.entries()) {
         try {
-            return k?.pubkey ? new PublicKey(k.pubkey).toBase58() : // VersionedMessage
-                   (typeof k === 'string' ? new PublicKey(k).toBase58() : // Legacy String
-                   (k instanceof PublicKey ? k.toBase58() : 'InvalidKeyFormat')); // Direct PublicKey or Error
-        } catch {
-             return 'InvalidKeyFormat';
-        }
-    });
-    console.log("[MEMO DEBUG] Account keys:", accountKeyStrings.slice(0, 5).join(', ') + (accountKeyStrings.length > 5 ? '...' : '')); // Log first few keys
+            // NEW: Handle both compiled and parsed instructions
+            const programIdInfo = accountKeys[inst.programIdIndex];
+            let programKey = null;
+            // Robustly extract program key string
+            if (programIdInfo instanceof PublicKey) {
+                programKey = programIdInfo.toBase58();
+            } else if (programIdInfo?.pubkey instanceof PublicKey) { // VersionedMessage format
+                programKey = programIdInfo.pubkey.toBase58();
+            } else if (typeof programIdInfo === 'string') { // Legacy string format
+                 try { programKey = new PublicKey(programIdInfo).toBase58(); } catch { programKey = programIdInfo; } // Attempt PublicKey conversion
+            } else if (typeof programIdInfo?.pubkey === 'string') { // VersionedMessage pubkey as string
+                 try { programKey = new PublicKey(programIdInfo.pubkey).toBase58(); } catch { programKey = programIdInfo.pubkey; } // Attempt PublicKey conversion
+            }
 
-    // 1. Check regular instructions
-    console.log(`[MEMO DEBUG] Checking ${instructions.length} main instructions...`);
-    for (let i = 0; i < instructions.length; i++) {
-        const inst = instructions[i];
-        const debug = debugInstruction(inst, accountKeys); // Use the helper
-        console.log(`[MEMO DEBUG] Main Instruction [${i}]:`, JSON.stringify(debug)); // Log cleaned debug info
+            console.log(`[MEMO DEBUG] Instruction ${i}:`, {
+                programId: programKey,
+                data: inst.data ? Buffer.from(inst.data, 'base64').toString('hex').slice(0, 40) + '...' : null // Truncate long data for log
+            });
 
-        if (debug.error) {
-             console.error(`[MEMO DEBUG] Error debugging main instruction ${i}:`, debug.error);
-             continue; // Skip instruction if debug helper failed
-        }
-
-        // Compare Base58 strings for program IDs
-        if (debug.programId === MEMO_V1_PROGRAM_ID.toBase58() && inst.data) { // Check inst.data directly
-            try {
-                // Note: normalizeMemo expects raw UTF8 string, not hex
+            // Check for memo programs
+            if (programKey === MEMO_V1_PROGRAM_ID.toBase58() && inst.data) {
                 const memo = normalizeMemo(Buffer.from(inst.data, 'base64').toString('utf8'));
                 if (memo) {
-                    console.log(`[MEMO DEBUG] Found V1 memo in main instruction ${i}: "${memo}"`);
-                    return memo; // Return immediately
+                     console.log(`[MEMO DEBUG] Found V1 memo: "${memo}"`); // Added log
+                     return memo;
                 }
-            } catch (e) {
-                console.error(`[MEMO DEBUG] V1 processing error in main instruction ${i}:`, e?.message);
             }
-        }
 
-        if (debug.programId === MEMO_V2_PROGRAM_ID.toBase58() && inst.data) { // Check inst.data directly
-            try {
+            if (programKey === MEMO_V2_PROGRAM_ID.toBase58() && inst.data) {
                 const memo = Buffer.from(inst.data, 'base64').toString('utf8').trim();
                 if (memo) {
-                    console.log(`[MEMO DEBUG] Found V2 memo in main instruction ${i}: "${memo}"`);
-                    return memo; // Return immediately
+                    console.log(`[MEMO DEBUG] Found V2 memo: "${memo}"`); // Added log
+                    return memo;
                 }
-            } catch (e) {
-                console.error(`[MEMO DEBUG] V2 processing error in main instruction ${i}:`, e?.message);
             }
+        } catch (e) {
+            console.error(`[MEMO DEBUG] Error processing instruction ${i}:`, e?.message || e); // Log error message
         }
     }
 
-    // 2. Check inner instructions
-    const innerInstructions = tx.meta?.innerInstructions || [];
-    if (innerInstructions.length > 0) {
-        console.log(`[MEMO DEBUG] Checking ${innerInstructions.length} sets of inner instructions...`);
-        for (let i = 0; i < innerInstructions.length; i++) {
-            const innerSet = innerInstructions[i];
-            console.log(`[MEMO DEBUG] Inner Set ${i} (Index ${innerSet.index}) has ${innerSet.instructions.length} instructions.`);
-            for (let j = 0; j < innerSet.instructions.length; j++) {
-                const inst = innerSet.instructions[j];
-                const debug = debugInstruction(inst, accountKeys); // Use helper
-                console.log(`[MEMO DEBUG] Inner Instruction [${i}-${j}]:`, JSON.stringify(debug));
-
-                 if (debug.error) {
-                    console.error(`[MEMO DEBUG] Error debugging inner instruction ${i}-${j}:`, debug.error);
-                    continue; // Skip instruction if debug helper failed
-                 }
-
-                // Primarily check for V2 in inner instructions
-                if (debug.programId === MEMO_V2_PROGRAM_ID.toBase58() && inst.data) { // Check inst.data directly
-                    try {
-                        const memo = Buffer.from(inst.data, 'base64').toString('utf8').trim();
-                        if (memo) {
-                            console.log(`[MEMO DEBUG] Found V2 memo in inner instruction ${i}-${j}: "${memo}"`);
-                            return memo; // Return immediately
-                        }
-                    } catch (e) {
-                        console.error(`[MEMO DEBUG] Inner V2 processing error ${i}-${j}:`, e?.message);
-                    }
-                }
-                 // Optionally add V1 check here if necessary for inner instructions
-            }
-        }
-    } else {
-         console.log("[MEMO DEBUG] No inner instructions found in metadata.");
+    // 2. NEW: Handle address lookup tables (v0 transactions)
+    if (message.addressTableLookups?.length > 0) {
+        console.log("[MEMO DEBUG] Transaction uses address lookup tables");
+        // In practice you would need to fetch these accounts and decompile the message,
+        // which is complex and requires additional RPC calls. For this example,
+        // we'll acknowledge it but won't fully handle it here. Return null or
+        // potentially fall through to raw scan if needed, but it might be unreliable.
+        return null; // Returning null as per the provided example logic
     }
 
-    // 3. Final fallback - raw instruction scan (Less reliable, use as last resort)
-    console.log("[MEMO DEBUG] Final fallback - scanning all instructions data for known prefixes");
-    const allInstructions = instructions.concat(...innerInstructions.flatMap(i => i.instructions));
-    for (let i = 0; i < allInstructions.length; i++) {
-        const inst = allInstructions[i];
-        if (inst.data) {
-            try {
-                // Try raw UTF-8 decode from base64
-                const memo = Buffer.from(inst.data, 'base64').toString('utf8').trim();
-                // Basic check for expected prefixes
-                if (memo && (memo.startsWith('CF-') || memo.startsWith('RA-') || memo.startsWith('BET-'))) {
-                    // Validate further if needed (e.g., length, format)
-                    if (validateOriginalMemoFormat(memo)) { // Check if it matches our V1 format
-                         console.log(`[MEMO DEBUG] Fallback found valid V1 format memo in instruction ${i}: "${memo}"`);
+    // 3. Final fallback: Raw data scan
+    console.log("[MEMO DEBUG] Performing raw data scan as fallback");
+    for (const inst of instructions) {
+        if (!inst.data) continue;
+
+        try {
+            const data = Buffer.from(inst.data, 'base64');
+            // Look for memo prefixes (CF-, RA-, BET-)
+            if (data.length > 3 &&
+                ((data[0] === 67 && data[1] === 70 && data[2] === 45) || // CF-
+                 (data[0] === 82 && data[1] === 65 && data[2] === 45) || // RA-
+                 (data[0] === 66 && data[1] === 69 && data[2] === 84))) // BET- (Added BET-)
+            {
+                const potentialMemo = data.toString('utf8').trim();
+                // Basic validation: Check length and printable characters?
+                if (potentialMemo.length > 3 && potentialMemo.length < 40 && /^[\x20-\x7E]+$/.test(potentialMemo)) {
+                     // Maybe try normalizeMemo here too?
+                     const memo = normalizeMemo(potentialMemo);
+                     if (memo) {
+                         console.log(`[MEMO DEBUG] Found potential memo via raw scan: "${memo}"`);
                          return memo;
-                    } else {
-                         // If not V1 format, could be a simple V2 memo missed earlier?
-                         console.log(`[MEMO DEBUG] Fallback found potential memo in instruction ${i}: "${memo}" (checking if simple V2)`);
-                         // Basic check: short, printable chars? Adjust as needed.
-                         if (memo.length > 2 && memo.length < 30 && /^[\x20-\x7E]+$/.test(memo)) {
-                              console.log(`[MEMO DEBUG] Accepting potential V2 memo from fallback: "${memo}"`);
-                              return memo;
-                         }
-                    }
+                     }
                 }
-            } catch (e) {
-                // Ignore decode errors during fallback scan
-                // console.error(`[MEMO DEBUG] Fallback decode error for instruction ${i}:`, e.message);
             }
+        } catch (e) {
+            // Ignore errors during raw scan
+            continue;
         }
     }
 
     console.log("[MEMO DEBUG] Exhausted all search methods, no memo found.");
     return null;
 }
-// <<< END: LATEST findMemoInTx FUNCTION >>>
+// <<< END: REPLACED findMemoInTx FUNCTION >>>
 
 // --- END: Updated Memo Handling System ---
 
@@ -896,7 +863,7 @@ function analyzeTransactionAmounts(tx, walletType) {
                     // Handle different ways signer info might be present
                     const keyInfo = tx.transaction.message.accountKeys[i];
                     const isSigner = keyInfo?.signer || // VersionedMessage format
-                                     (tx.transaction.message.header?.numRequiredSignatures > 0 && i < tx.transaction.message.header.numRequiredSignatures); // Legacy format
+                                    (tx.transaction.message.header?.numRequiredSignatures > 0 && i < tx.transaction.message.header.numRequiredSignatures); // Legacy format
 
                     if (isSigner && payerBalanceChange <= -transferAmount) { // Allow for fees
                         payerAddress = accountKeys[i];
@@ -926,27 +893,27 @@ function analyzeTransactionAmounts(tx, walletType) {
                 if (inst.programIdIndex !== undefined && tx.transaction.message.accountKeys) {
                      const keyInfo = tx.transaction.message.accountKeys[inst.programIdIndex];
                      programId = keyInfo?.pubkey ? new PublicKey(keyInfo.pubkey).toBase58() : // VersionedMessage
-                                 (typeof keyInfo === 'string' ? new PublicKey(keyInfo).toBase58() : // Legacy String
-                                 (keyInfo instanceof PublicKey ? keyInfo.toBase58() : '')); // Direct Pubkey
-                } else if (inst.programId) { // Fallback if programId is directly on instruction (less common for parsed)
-                    programId = inst.programId.toBase58 ? inst.programId.toBase58() : String(inst.programId);
-                }
+                                (typeof keyInfo === 'string' ? new PublicKey(keyInfo).toBase58() : // Legacy String
+                                (keyInfo instanceof PublicKey ? keyInfo.toBase58() : '')); // Direct Pubkey
+                 } else if (inst.programId) { // Fallback if programId is directly on instruction (less common for parsed)
+                     programId = inst.programId.toBase58 ? inst.programId.toBase58() : String(inst.programId);
+                 }
             } catch { /* Ignore errors getting programId */ }
 
 
             // Check for SystemProgram SOL transfers using parsed info
              if (programId === SYSTEM_PROGRAM_ID && inst.parsed?.type === 'transfer') {
-                const transferInfo = inst.parsed.info;
-                // Check if the destination is the bot's target wallet
-                if (transferInfo.destination === targetAddress) {
-                    const instructionAmount = BigInt(transferInfo.lamports || transferInfo.amount || 0);
-                    if (instructionAmount > 0n) {
-                        transferAmount = instructionAmount; // Take the amount from the first relevant transfer instruction
-                        payerAddress = transferInfo.source; // Get payer from instruction
-                        break; // Assume the first direct transfer is the one we care about
-                    }
-                }
-            }
+                 const transferInfo = inst.parsed.info;
+                 // Check if the destination is the bot's target wallet
+                 if (transferInfo.destination === targetAddress) {
+                     const instructionAmount = BigInt(transferInfo.lamports || transferInfo.amount || 0);
+                     if (instructionAmount > 0n) {
+                         transferAmount = instructionAmount; // Take the amount from the first relevant transfer instruction
+                         payerAddress = transferInfo.source; // Get payer from instruction
+                         break; // Assume the first direct transfer is the one we care about
+                     }
+                 }
+             }
         }
     }
 
@@ -965,17 +932,17 @@ function getPayerFromTransaction(tx) {
         let feePayerAddress = null;
          // Handle different structures of accountKeys robustly
          try {
-              if (feePayerKeyInfo instanceof PublicKey) {
+             if (feePayerKeyInfo instanceof PublicKey) {
                  feePayerAddress = feePayerKeyInfo.toBase58();
-              } else if (feePayerKeyInfo?.pubkey instanceof PublicKey) { // VersionedMessage format
+             } else if (feePayerKeyInfo?.pubkey instanceof PublicKey) { // VersionedMessage format
                  feePayerAddress = feePayerKeyInfo.pubkey.toBase58();
-              } else if (typeof feePayerKeyInfo?.pubkey === 'string') { // VersionedMessage pubkey as string
-                  feePayerAddress = new PublicKey(feePayerKeyInfo.pubkey).toBase58();
-              } else if (typeof feePayerKeyInfo === 'string') { // Legacy string format
-                  feePayerAddress = new PublicKey(feePayerKeyInfo).toBase58();
-              }
+             } else if (typeof feePayerKeyInfo?.pubkey === 'string') { // VersionedMessage pubkey as string
+                 feePayerAddress = new PublicKey(feePayerKeyInfo.pubkey).toBase58();
+             } else if (typeof feePayerKeyInfo === 'string') { // Legacy string format
+                 feePayerAddress = new PublicKey(feePayerKeyInfo).toBase58();
+             }
          } catch (e) {
-              console.warn("Could not parse fee payer address:", e.message);
+             console.warn("Could not parse fee payer address:", e.message);
          }
 
 
@@ -995,22 +962,22 @@ function getPayerFromTransaction(tx) {
         // Check if the account is a signer in the transaction message
         const keyInfo = message.accountKeys[i];
          const isSigner = keyInfo?.signer || // VersionedMessage format
-                        (message.header?.numRequiredSignatures > 0 && i < message.header.numRequiredSignatures); // Legacy format
+                         (message.header?.numRequiredSignatures > 0 && i < message.header.numRequiredSignatures); // Legacy format
 
         if (isSigner) {
             let key;
             try {
                 // Extract PublicKey robustly
                  if (keyInfo instanceof PublicKey) {
-                    key = keyInfo;
+                     key = keyInfo;
                  } else if (keyInfo?.pubkey instanceof PublicKey) {
-                    key = keyInfo.pubkey;
+                     key = keyInfo.pubkey;
                  } else if (typeof keyInfo?.pubkey === 'string') {
-                     key = new PublicKey(keyInfo.pubkey);
+                      key = new PublicKey(keyInfo.pubkey);
                  } else if (typeof keyInfo === 'string') {
-                    key = new PublicKey(keyInfo);
+                     key = new PublicKey(keyInfo);
                  } else {
-                    continue; // Cannot determine key
+                     continue; // Cannot determine key
                  }
             } catch (e) { continue; } // Skip if key is invalid
 
@@ -1190,21 +1157,21 @@ class PaymentProcessor {
             console.log(`[PAYMENT DEBUG] Fetched transaction for signature: ${signature}`);
             // --- ADD EXTRA DEBUG LOGGING OF RAW TX DATA ---
             // console.log('[RAW TX DATA]', JSON.stringify({
-            //      signatures: tx.transaction.signatures,
-            //      message: {
-            //          accountKeys: tx.transaction.message.accountKeys?.slice(0, 5), // Log first few keys
-            //          instructions: tx.transaction.message.instructions?.map(i => ({
-            //              programIdIndex: i.programIdIndex,
-            //              data: i.data?.slice(0, 20) + (i.data?.length > 20 ? '...' : ''), // Log truncated data
-            //              accounts: i.accounts
-            //          })),
-            //          header: tx.transaction.message.header
-            //      },
-            //      meta: {
-            //          err: tx.meta?.err,
-            //          fee: tx.meta?.fee,
-            //          innerInstructions: tx.meta?.innerInstructions?.slice(0,2) // Log first few inner instructions
-            //      }
+            //     signatures: tx.transaction.signatures,
+            //     message: {
+            //         accountKeys: tx.transaction.message.accountKeys?.slice(0, 5), // Log first few keys
+            //         instructions: tx.transaction.message.instructions?.map(i => ({
+            //             programIdIndex: i.programIdIndex,
+            //             data: i.data?.slice(0, 20) + (i.data?.length > 20 ? '...' : ''), // Log truncated data
+            //             accounts: i.accounts
+            //         })),
+            //         header: tx.transaction.message.header
+            //     },
+            //     meta: {
+            //         err: tx.meta?.err,
+            //         fee: tx.meta?.fee,
+            //         innerInstructions: tx.meta?.innerInstructions?.slice(0,2) // Log first few inner instructions
+            //     }
             // }, null, 2));
             // --- END EXTRA DEBUG LOGGING ---
 
@@ -1225,7 +1192,7 @@ class PaymentProcessor {
 
         // --- Signature successfully fetched and is valid ---
 
-        // 5. Find and validate the memo (Uses the latest findMemoInTx)
+        // 5. Find and validate the memo (Uses the REPLACED findMemoInTx)
         const memo = await findMemoInTx(tx); // Use the newly implemented function
         console.log(`[PAYMENT DEBUG] Memo found by findMemoInTx for TX ${signature}: ${memo}`); // Log result
         if (!memo) {
@@ -1299,8 +1266,8 @@ class PaymentProcessor {
         // Add signature to session cache AFTER successful DB update
         processedSignaturesThisSession.add(signature);
          if (processedSignaturesThisSession.size > MAX_PROCESSED_SIGNATURES) {
-              console.log('Clearing processed signatures cache (reached max size)');
-              processedSignaturesThisSession.clear();
+             console.log('Clearing processed signatures cache (reached max size)');
+             processedSignaturesThisSession.clear();
          }
 
         // 12. Link wallet address to user ID
@@ -1490,17 +1457,17 @@ async function monitorPayments() {
         performanceMonitor.logRequest(false);
 
          if (err?.message?.includes('429') || err?.code === 429 || err?.statusCode === 429) {
-             // --- Aggressive Backoff Logic (also applied to main block errors) ---
-             console.warn('⚠️ Solana RPC 429 detected in main block. Backing off more aggressively...');
-             monitorIntervalSeconds = Math.min(monitorIntervalSeconds * 2, 300); // Double interval, max 5 minutes (300s)
-             console.log(`ℹ️ New monitor interval after backoff: ${monitorIntervalSeconds}s`);
-             // --- END: Aggressive Backoff Logic ---
+            // --- Aggressive Backoff Logic (also applied to main block errors) ---
+            console.warn('⚠️ Solana RPC 429 detected in main block. Backing off more aggressively...');
+            monitorIntervalSeconds = Math.min(monitorIntervalSeconds * 2, 300); // Double interval, max 5 minutes (300s)
+            console.log(`ℹ️ New monitor interval after backoff: ${monitorIntervalSeconds}s`);
+            // --- END: Aggressive Backoff Logic ---
 
-             if (monitorInterval) clearInterval(monitorInterval);
-             monitorInterval = setInterval(() => {
+            if (monitorInterval) clearInterval(monitorInterval);
+            monitorInterval = setInterval(() => {
                  monitorPayments().catch(err => console.error('❌ [FATAL MONITOR ERROR in setInterval catch]:', err));
-             }, monitorIntervalSeconds * 1000);
-             await new Promise(resolve => setTimeout(resolve, 15000)); // Wait after resetting interval
+            }, monitorIntervalSeconds * 1000);
+            await new Promise(resolve => setTimeout(resolve, 15000)); // Wait after resetting interval
          }
     } finally {
         isMonitorRunning = false; // Release the lock
@@ -1599,7 +1566,7 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
                     [payerWallet], // Signer
                     {
                         commitment: 'confirmed', // Confirm at 'confirmed' level
-                        skipPreflight: false,     // Perform preflight checks
+                        skipPreflight: false,    // Perform preflight checks
                         maxRetries: 2,    // Retries within sendAndConfirm (lower internal retries)
                         preflightCommitment: 'confirmed' // Match commitment
                     }
@@ -2208,13 +2175,13 @@ async function handleRaceCommand(msg) {
 
     const config = GAME_CONFIG.race;
     raceMessage += `\n*How to play:*\n` +
-                       `1. Type \`/betrace amount horse_name\`\n` +
-                       `   (e.g., \`/betrace 0.1 Yellow\`)\n\n` +
-                       `*Rules:*\n` +
-                       `- Min Bet: ${config.minBet} SOL\n` +
-                       `- Max Bet: ${config.maxBet} SOL\n` +
-                       `- House Edge: ${(config.houseEdge * 100).toFixed(1)}% (applied to winnings)\n\n` +
-                       `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`;
+                    `1. Type \`/betrace amount horse_name\`\n` +
+                    `   (e.g., \`/betrace 0.1 Yellow\`)\n\n` +
+                    `*Rules:*\n` +
+                    `- Min Bet: ${config.minBet} SOL\n` +
+                    `- Max Bet: ${config.maxBet} SOL\n` +
+                    `- House Edge: ${(config.houseEdge * 100).toFixed(1)}% (applied to winnings)\n\n` +
+                    `You will be given a wallet address and a *unique Memo ID*. Send the *exact* SOL amount with the memo to place your bet.`;
 
     await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'Markdown' }).catch(e => console.error("TG Send Error:", e.message));
 }
@@ -2435,8 +2402,8 @@ async function startPollingIfNeeded() {
         if (!info || !info.url) { // Start polling only if webhook is not set
              // Added check to prevent polling start if already polling
              if (bot.isPolling()) {
-                  console.log("ℹ️ Bot is already polling.");
-                  return;
+                 console.log("ℹ️ Bot is already polling.");
+                 return;
              }
             console.log("ℹ️ Webhook not set, starting bot polling...");
             await bot.deleteWebHook({ drop_pending_updates: true }); // Ensure no residual webhook
@@ -2446,8 +2413,8 @@ async function startPollingIfNeeded() {
             console.log(`ℹ️ Webhook is set (${info.url}), polling will not be started.`);
              // Ensure polling is stopped if webhook is somehow set later
              if (bot.isPolling()) {
-                  console.log("ℹ️ Stopping polling because webhook is set.");
-                  await bot.stopPolling({ cancel: true });
+                 console.log("ℹ️ Stopping polling because webhook is set.");
+                 await bot.stopPolling({ cancel: true });
              }
         }
     } catch (err) {
@@ -2653,9 +2620,9 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
              // --- BONUS: Solana Connection Boost after 20s (MODIFIED) ---
              setTimeout(() => {
                   if (solanaConnection && solanaConnection.options) {
-                       console.log("⚡ Adjusting Solana connection concurrency...");
-                       solanaConnection.options.maxConcurrent = 3; // Set max parallel requests to 3
-                       console.log("✅ Solana maxConcurrent adjusted to 3");
+                        console.log("⚡ Adjusting Solana connection concurrency...");
+                        solanaConnection.options.maxConcurrent = 3; // Set max parallel requests to 3
+                        console.log("✅ Solana maxConcurrent adjusted to 3");
                   }
              }, 20000); // Adjust after 20 seconds of being fully ready
 
@@ -2671,8 +2638,8 @@ server = app.listen(PORT, "0.0.0.0", () => { // Assign to the globally declared 
             await shutdown('INITIALIZATION_FAILURE', false).catch(() => process.exit(1)); // Attempt full shutdown
             // Ensure exit if shutdown hangs
              setTimeout(() => {
-                  console.error("Shutdown timed out after initialization failure. Forcing exit.");
-                  process.exit(1);
+                 console.error("Shutdown timed out after initialization failure. Forcing exit.");
+                 process.exit(1);
              }, 10000).unref();
         }
     }, 1000); // 1-second delay before starting heavy init
