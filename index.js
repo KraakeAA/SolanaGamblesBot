@@ -1,5 +1,3 @@
-// Part 1 of 2
-
 import 'dotenv/config';
 import { Pool } from 'pg';
 import express from 'express';
