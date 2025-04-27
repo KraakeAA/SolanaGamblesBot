@@ -169,8 +169,7 @@ async function initializeDatabase() {
         client = await pool.connect();
 
         // Bets Table: Tracks individual game bets
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS bets (
+        await client.query(`CREATE TABLE IF NOT EXISTS bets (
                 id SERIAL PRIMARY KEY,                       -- Unique bet identifier
                 user_id TEXT NOT NULL,                       -- Telegram User ID
                 chat_id TEXT NOT NULL,                       -- Telegram Chat ID
@@ -190,8 +189,7 @@ async function initializeDatabase() {
         `);
 
         // Wallets Table: Links Telegram User ID to their Solana wallet address
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS wallets (
+        await client.query(`CREATE TABLE IF NOT EXISTS wallets (
                 user_id TEXT PRIMARY KEY,                             -- Telegram User ID
                 wallet_address TEXT NOT NULL,                         -- User's Solana wallet address
                 linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),         -- When the wallet was first linked
