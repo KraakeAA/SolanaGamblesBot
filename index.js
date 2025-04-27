@@ -1606,7 +1606,7 @@ let isMonitorRunning = false; // Flag to prevent overlapping monitor runs
 
 const botStartupTime = Math.floor(Date.now() / 1000); // Store bot start time
 
-let monitorIntervalSeconds = 45; // Initial check interval
+let monitorIntervalSeconds = 90; // Initial check interval
 let monitorInterval = null; // Holds the setInterval timer
 
 
