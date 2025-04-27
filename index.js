@@ -10,6 +10,7 @@ import {
     SystemProgram,
     sendAndConfirmTransaction,
     ComputeBudgetProgram
+    // Note: TransactionMessage, VersionedTransactionResponse might be needed depending on exact web3.js usage
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 // Ensure crypto is imported if not already globally available in your Node version
@@ -81,7 +82,7 @@ app.get('/health', (req, res) => {
 app.get('/railway-health', (req, res) => {
     res.status(200).json({
         status: isFullyInitialized ? 'ready' : 'starting',
-        version: '2.0.9' // Version Bump for new findMemoInTx + helper (Note: Update if version changes)
+        version: '2.0.9' // Version (Note: Update if version changes)
     });
 });
 
@@ -280,7 +281,7 @@ app.get('/', (req, res) => {
         status: 'ok',
         initialized: isFullyInitialized, // Report background initialization status here
         timestamp: new Date().toISOString(),
-        version: '2.0.9', // Bot version (incremented for new findMemoInTx) (Note: Update if version changes)
+        version: '2.0.9', // Bot version (Note: Update if version changes)
         queueStats: { // Report queue status
             pending: messageQueue.size + paymentProcessor.highPriorityQueue.size + paymentProcessor.normalQueue.size, // Combined pending
             active: messageQueue.pending + paymentProcessor.highPriorityQueue.pending + paymentProcessor.normalQueue.pending // Combined active
@@ -356,7 +357,7 @@ const PRIORITY_FEE_RATE = 0.0001;
 
 // --- Helper Functions ---
 
-// <<< START: NEW DEBUG HELPER FUNCTION >>> (Left in place, though findMemoInTx no longer uses it)
+// <<< DEBUG HELPER FUNCTION - Remains but unused by current findMemoInTx >>>
 function debugInstruction(inst, accountKeys) {
     try {
         const programIdKeyInfo = accountKeys[inst.programIdIndex];
@@ -387,7 +388,7 @@ function debugInstruction(inst, accountKeys) {
          }; // Return error info
     }
 }
-// <<< END: NEW DEBUG HELPER FUNCTION >>>
+// <<< END DEBUG HELPER FUNCTION >>>
 
 // --- START: Updated Memo Handling System ---
 
@@ -449,23 +450,30 @@ function normalizeMemo(rawMemo) {
         .trim()
         .replace(/^memo[:=\s]*/i, '')
         .replace(/^text[:=\s]*/i, '')
-        .replace(/[\u200B-\u200D\uFEFF]/g, '')
-        .replace(/\s+/g, '-')
-        .replace(/[^a-zA-Z0-9\-]/g, '')
-        .toUpperCase();
+        .replace(/[\u200B-\u200D\uFEFF]/g, '') // Remove zero-width spaces
+        .replace(/\s+/g, '-') // Replace spaces with dashes (handle potential user input errors)
+        .replace(/[^a-zA-Z0-9\-]/g, '') // Remove any other non-alphanumeric/dash characters
+        .toUpperCase(); // Standardize to uppercase
+
+    // Try to match the specific V1 format (PREFIX-HEX-CHECKSUM)
     const parts = memo.split('-').filter(p => p.length > 0);
     if (parts.length === 3) {
         const [prefix, hex, checksum] = parts;
         if (['BET', 'CF', 'RA'].includes(prefix) && hex.length === 16 && /^[A-F0-9]{16}$/.test(hex) && checksum.length === 2 && /^[A-F0-9]{2}$/.test(checksum)) {
-            if (validateMemoChecksum(hex, checksum)) return `${prefix}-${hex}-${checksum}`;
-            else {
+            // Validate checksum if it looks like our format
+            if (validateMemoChecksum(hex, checksum)) {
+                return `${prefix}-${hex}-${checksum}`; // Return perfectly formatted V1
+            } else {
+                // Attempt to correct checksum if format matches but checksum is wrong
                 const correctedChecksum = crypto.createHash('sha256').update(hex).digest('hex').slice(-2).toUpperCase();
                 const recoveredMemo = `${prefix}-${hex}-${correctedChecksum}`;
                 console.warn(`⚠️ Memo checksum mismatch for potential V1 format "${memo}". Corrected: ${recoveredMemo}`);
-                return recoveredMemo;
+                return recoveredMemo; // Return the corrected V1 format
             }
         }
     }
+
+    // Attempt recovery if checksum seems missing (PREFIX-HEX)
     if (parts.length === 2) {
         const [prefix, hex] = parts;
         if (['BET', 'CF', 'RA'].includes(prefix) && hex.length === 16 && /^[A-F0-9]{16}$/.test(hex)) {
@@ -473,133 +481,157 @@ function normalizeMemo(rawMemo) {
             const expectedChecksum = crypto.createHash('sha256').update(hex).digest('hex').slice(-2).toUpperCase();
             const recoveredMemo = `${prefix}-${hex}-${expectedChecksum}`;
             console.warn(`Recovered V1 memo as: ${recoveredMemo}`);
-            return recoveredMemo;
+            return recoveredMemo; // Return the recovered V1 format
         }
     }
+
+    // Attempt recovery if extra dashes exist (e.g., PREFIX-PART1-PART2...-CHECKSUM)
     if (parts.length > 3) {
         const prefix = parts[0];
         if (['BET', 'CF', 'RA'].includes(prefix)) {
-            const potentialHex = parts.slice(1, -1).join('');
-            const potentialChecksum = parts.slice(-1)[0];
+            const potentialHex = parts.slice(1, -1).join(''); // Join middle parts
+            const potentialChecksum = parts.slice(-1)[0]; // Last part
             if (potentialHex.length === 16 && /^[A-F0-9]{16}$/.test(potentialHex) && potentialChecksum.length === 2 && /^[A-F0-9]{2}$/.test(potentialChecksum)) {
-                if (validateMemoChecksum(potentialHex, potentialChecksum)) {
-                    const recoveredMemo = `${prefix}-${potentialHex}-${potentialChecksum}`;
-                    console.warn(`Recovered V1 memo from extra segments "${memo}" to: ${recoveredMemo}`);
-                    return recoveredMemo;
-                }
+                 if (validateMemoChecksum(potentialHex, potentialChecksum)) {
+                      const recoveredMemo = `${prefix}-${potentialHex}-${potentialChecksum}`;
+                      console.warn(`Recovered V1 memo from extra segments "${memo}" to: ${recoveredMemo}`);
+                      return recoveredMemo;
+                 }
             }
         }
     }
+
+    // If it doesn't match V1 format after cleaning, return the cleaned string (might be V2 or invalid)
     return memo && memo.length > 0 ? memo : null;
 }
 
-// <<< START: REPLACED findMemoInTx FUNCTION >>>
+
+// <<< START: REPLACED findMemoInTx FUNCTION (Final Fix Implementation) >>>
 async function findMemoInTx(tx) {
-    if (!tx?.transaction?.message) {
-        console.log("[MEMO DEBUG] Invalid transaction structure");
+    // Type assertion for tx object expected structure (adjust if using different web3.js types)
+    const transactionResponse = tx; // as VersionedTransactionResponse;
+
+    if (!transactionResponse?.transaction?.message) {
+        console.log("[MEMO DEBUG] Invalid transaction structure (missing message)");
         return null;
     }
 
-    // NEW: Handle different transaction versions
-    const message = tx.transaction.message;
-    const accountKeys = message.accountKeys || [];
-    const instructions = message.instructions || [];
-
-    console.log("[MEMO DEBUG] Account keys:", accountKeys.map(k =>
-        // Adjusted to handle PublicKey directly if present, else string or '?'
-        k?.pubkey instanceof PublicKey ? k.pubkey.toBase58() :
-        (k instanceof PublicKey ? k.toBase58() :
-        (typeof k === 'string' ? k :
-        (typeof k?.pubkey === 'string' ? k.pubkey : '?'))) // Handle VersionedMessage pubkey as string
-    ));
-
-    // 1. First try direct instruction scan (for v0 transactions)
-    for (const [i, inst] of instructions.entries()) {
-        try {
-            // NEW: Handle both compiled and parsed instructions
-            const programIdInfo = accountKeys[inst.programIdIndex];
-            let programKey = null;
-            // Robustly extract program key string
-            if (programIdInfo instanceof PublicKey) {
-                programKey = programIdInfo.toBase58();
-            } else if (programIdInfo?.pubkey instanceof PublicKey) { // VersionedMessage format
-                programKey = programIdInfo.pubkey.toBase58();
-            } else if (typeof programIdInfo === 'string') { // Legacy string format
-                 try { programKey = new PublicKey(programIdInfo).toBase58(); } catch { programKey = programIdInfo; } // Attempt PublicKey conversion
-            } else if (typeof programIdInfo?.pubkey === 'string') { // VersionedMessage pubkey as string
-                 try { programKey = new PublicKey(programIdInfo.pubkey).toBase58(); } catch { programKey = programIdInfo.pubkey; } // Attempt PublicKey conversion
-            }
-
-            console.log(`[MEMO DEBUG] Instruction ${i}:`, {
-                programId: programKey,
-                data: inst.data ? Buffer.from(inst.data, 'base64').toString('hex').slice(0, 40) + '...' : null // Truncate long data for log
-            });
-
-            // Check for memo programs
-            if (programKey === MEMO_V1_PROGRAM_ID.toBase58() && inst.data) {
-                const memo = normalizeMemo(Buffer.from(inst.data, 'base64').toString('utf8'));
+    // 1. First try the direct approach using log messages (often includes decoded memo)
+    if (transactionResponse.meta?.logMessages) {
+        const memoLogPrefix = "Program log: Memo:";
+        for (const log of transactionResponse.meta.logMessages) {
+            const memoIndex = log.indexOf(memoLogPrefix);
+            if (memoIndex !== -1) {
+                // Extract memo text after the prefix, remove potential quotes and trim
+                const rawMemo = log.substring(memoIndex + memoLogPrefix.length).trim().replace(/^"|"$/g, '');
+                const memo = normalizeMemo(rawMemo); // Normalize even if found in log
                 if (memo) {
-                     console.log(`[MEMO DEBUG] Found V1 memo: "${memo}"`); // Added log
-                     return memo;
-                }
-            }
-
-            if (programKey === MEMO_V2_PROGRAM_ID.toBase58() && inst.data) {
-                const memo = Buffer.from(inst.data, 'base64').toString('utf8').trim();
-                if (memo) {
-                    console.log(`[MEMO DEBUG] Found V2 memo: "${memo}"`); // Added log
+                    console.log(`[MEMO DEBUG] Found memo in log: "${memo}" (Raw: "${rawMemo}")`);
                     return memo;
                 }
             }
-        } catch (e) {
-            console.error(`[MEMO DEBUG] Error processing instruction ${i}:`, e?.message || e); // Log error message
         }
     }
 
-    // 2. NEW: Handle address lookup tables (v0 transactions)
-    if (message.addressTableLookups?.length > 0) {
-        console.log("[MEMO DEBUG] Transaction uses address lookup tables");
-        // In practice you would need to fetch these accounts and decompile the message,
-        // which is complex and requires additional RPC calls. For this example,
-        // we'll acknowledge it but won't fully handle it here. Return null or
-        // potentially fall through to raw scan if needed, but it might be unreliable.
-        return null; // Returning null as per the provided example logic
+    // 2. Fallback to instruction parsing if not found in logs
+    const message = transactionResponse.transaction.message;
+    const accountKeyObjects = message.accountKeys || []; // Array of PublicKey or LoadedAddresses
+
+    // Convert account keys to base58 strings for consistent lookup
+    const accountKeys = accountKeyObjects.map(k => {
+        if (k instanceof PublicKey) {
+             return k.toBase58();
+        }
+        // Handle potential VersionedMessage structure (account key as string)
+        if (typeof k === 'string') {
+            try { return new PublicKey(k).toBase58(); } catch { return k; } // Return original string if invalid pubkey
+        }
+        // Handle potential VersionedMessage structure ({ pubkey: PublicKey })
+        if (k?.pubkey instanceof PublicKey) {
+            return k.pubkey.toBase58();
+        }
+        // Handle potential VersionedMessage structure ({ pubkey: string })
+        if (typeof k?.pubkey === 'string') {
+             try { return new PublicKey(k.pubkey).toBase58(); } catch { return k.pubkey; } // Return original string if invalid pubkey
+        }
+        return null; // Indicate unknown format
+    }).filter(Boolean); // Remove nulls
+
+    console.log("[MEMO DEBUG] Account keys (first 5):", accountKeys.slice(0, 5));
+
+    // Combine regular and inner instructions for parsing
+    const allInstructions = [
+        ...(message.instructions || []),
+        ...(transactionResponse.meta?.innerInstructions || []).flatMap(i => i.instructions || [])
+    ];
+
+    if (allInstructions.length === 0) {
+         console.log("[MEMO DEBUG] No instructions found in message or inner instructions.");
     }
 
-    // 3. Final fallback: Raw data scan
-    console.log("[MEMO DEBUG] Performing raw data scan as fallback");
-    for (const inst of instructions) {
-        if (!inst.data) continue;
-
+    for (const [i, inst] of allInstructions.entries()) {
         try {
-            const data = Buffer.from(inst.data, 'base64');
-            // Look for memo prefixes (CF-, RA-, BET-)
-            if (data.length > 3 &&
-                ((data[0] === 67 && data[1] === 70 && data[2] === 45) || // CF-
-                 (data[0] === 82 && data[1] === 65 && data[2] === 45) || // RA-
-                 (data[0] === 66 && data[1] === 69 && data[2] === 84))) // BET- (Added BET-)
-            {
-                const potentialMemo = data.toString('utf8').trim();
-                // Basic validation: Check length and printable characters?
-                if (potentialMemo.length > 3 && potentialMemo.length < 40 && /^[\x20-\x7E]+$/.test(potentialMemo)) {
-                     // Maybe try normalizeMemo here too?
-                     const memo = normalizeMemo(potentialMemo);
-                     if (memo) {
-                         console.log(`[MEMO DEBUG] Found potential memo via raw scan: "${memo}"`);
+            // Resolve program ID string using the mapped accountKeys array
+            const programId = inst.programIdIndex !== undefined ? accountKeys[inst.programIdIndex] : null;
+            const data = inst.data ? Buffer.from(inst.data, 'base64') : null;
+
+            // Log instruction details (truncated data)
+            console.log(`[MEMO DEBUG] Instruction ${i}:`, {
+                programId: programId || `Unknown Index ${inst.programIdIndex}`,
+                data: data?.toString('hex')?.slice(0, 32) + (data && data.length > 16 ? '...' : '')
+            });
+
+            // Check for memo programs using resolved programId string
+            if (programId === MEMO_V1_PROGRAM_ID.toBase58() && data) {
+                const memo = normalizeMemo(data.toString('utf8'));
+                if (memo) {
+                    console.log(`[MEMO DEBUG] Found V1 memo via instruction parse: "${memo}"`);
+                    return memo; // Return normalized V1 memo
+                }
+            }
+
+            if (programId === MEMO_V2_PROGRAM_ID.toBase58() && data) {
+                const memo = data.toString('utf8').trim(); // V2 memo is usually just the text
+                if (memo) {
+                    console.log(`[MEMO DEBUG] Found V2 memo via instruction parse: "${memo}"`);
+                    return memo; // Return raw V2 memo
+                }
+            }
+
+            // Raw pattern matching fallback *within* the instruction loop
+            if (data && data.length >= 22) { // Check minimum length for "CF-" + hex + "-" + checksum
+                // Look for CF- (0x43 0x46 0x2d) or RA- (0x52 0x41 0x2d) or BET- (0x42 0x45 0x54 0x2d)
+                if ((data[0] === 0x43 && data[1] === 0x46 && data[2] === 0x2d) || // CF-
+                    (data[0] === 0x52 && data[1] === 0x41 && data[2] === 0x2d) || // RA-
+                    (data[0] === 0x42 && data[1] === 0x45 && data[2] === 0x54 && data[3] === 0x2d)) // BET-
+                 {
+                    const potentialMemo = data.toString('utf8');
+                    const memo = normalizeMemo(potentialMemo); // Try to normalize/validate
+                    if (memo && validateOriginalMemoFormat(memo)) { // Check if it matches our strict V1 format after normalization
+                         console.log(`[MEMO DEBUG] Pattern-matched and validated V1 memo: "${memo}" (Raw: "${potentialMemo}")`);
                          return memo;
-                     }
+                    } else if (memo) {
+                         // If normalization produced something but didn't validate as V1, maybe it's V2?
+                         console.log(`[MEMO DEBUG] Pattern-matched potential memo (treated as V2): "${memo}" (Raw: "${potentialMemo}")`);
+                         return memo;
+                    }
                 }
             }
         } catch (e) {
-            // Ignore errors during raw scan
-            continue;
+            console.error(`[MEMO DEBUG] Error processing instruction ${i}:`, e?.message || e);
         }
+    }
+
+    // Final check for address lookup tables (as per previous logic, might indicate complex tx)
+    if (message.addressTableLookups?.length > 0) {
+       console.log("[MEMO DEBUG] Transaction uses address lookup tables (memo finding may be incomplete).");
     }
 
     console.log("[MEMO DEBUG] Exhausted all search methods, no memo found.");
     return null;
 }
-// <<< END: REPLACED findMemoInTx FUNCTION >>>
+// <<< END: REPLACED findMemoInTx FUNCTION (Final Fix Implementation) >>>
+
 
 // --- END: Updated Memo Handling System ---
 
@@ -839,11 +871,20 @@ function analyzeTransactionAmounts(tx, walletType) {
 
     // Check both pre and post balances for direct transfers to the target address
     if (tx?.meta?.preBalances && tx?.meta?.postBalances && tx?.transaction?.message?.accountKeys) {
-        const accountKeys = tx.transaction.message.accountKeys.map(keyInfo =>
-            keyInfo?.pubkey ? new PublicKey(keyInfo.pubkey).toBase58() : // Handle VersionedMessage format
-            (typeof keyInfo === 'string' ? new PublicKey(keyInfo).toBase58() : // Handle legacy string format
-             (keyInfo instanceof PublicKey ? keyInfo.toBase58() : null)) // Handle direct PublicKey format
-        );
+        const accountKeys = tx.transaction.message.accountKeys.map(keyInfo => {
+            // Robust key extraction
+            if (keyInfo instanceof PublicKey) return keyInfo.toBase58();
+            if (keyInfo?.pubkey instanceof PublicKey) return keyInfo.pubkey.toBase58();
+            if (typeof keyInfo?.pubkey === 'string') {
+                 try { return new PublicKey(keyInfo.pubkey).toBase58(); } catch { return null; }
+            }
+            if (typeof keyInfo === 'string') {
+                 try { return new PublicKey(keyInfo).toBase58(); } catch { return null; }
+            }
+            return null;
+         }).filter(Boolean); // Remove nulls
+
+
         const targetIndex = accountKeys.indexOf(targetAddress);
 
         if (targetIndex !== -1 && tx.meta.preBalances[targetIndex] !== undefined && tx.meta.postBalances[targetIndex] !== undefined) {
@@ -852,7 +893,7 @@ function analyzeTransactionAmounts(tx, walletType) {
                 transferAmount = balanceChange;
                 // Try to identify payer based on who lost balance
                 for (let i = 0; i < accountKeys.length; i++) {
-                    if (i === targetIndex || accountKeys[i] === null) continue;
+                    if (i === targetIndex) continue;
                     const payerBalanceChange = BigInt(tx.meta.postBalances[i] || 0) - BigInt(tx.meta.preBalances[i] || 0);
                     // Consider the fee payer (account 0) as the primary suspect if their balance decreased
                     if (i === 0 && payerBalanceChange < 0n) {
@@ -861,7 +902,7 @@ function analyzeTransactionAmounts(tx, walletType) {
                     }
                     // Otherwise, look for a signer whose balance decreased appropriately
                     // Handle different ways signer info might be present
-                    const keyInfo = tx.transaction.message.accountKeys[i];
+                    const keyInfo = tx.transaction.message.accountKeys[i]; // Original keyInfo object
                     const isSigner = keyInfo?.signer || // VersionedMessage format
                                     (tx.transaction.message.header?.numRequiredSignatures > 0 && i < tx.transaction.message.header.numRequiredSignatures); // Legacy format
 
@@ -886,16 +927,27 @@ function analyzeTransactionAmounts(tx, walletType) {
         ];
         const SYSTEM_PROGRAM_ID = SystemProgram.programId.toBase58();
 
+        // Re-map account keys for instruction parsing fallback
+        const accountKeysForInstr = tx.transaction.message.accountKeys.map(keyInfo => {
+            if (keyInfo instanceof PublicKey) return keyInfo.toBase58();
+            if (keyInfo?.pubkey instanceof PublicKey) return keyInfo.pubkey.toBase58();
+            if (typeof keyInfo?.pubkey === 'string') {
+                 try { return new PublicKey(keyInfo.pubkey).toBase58(); } catch { return null; }
+            }
+            if (typeof keyInfo === 'string') {
+                 try { return new PublicKey(keyInfo).toBase58(); } catch { return null; }
+            }
+            return null;
+         });
+
+
         for (const inst of instructions) {
             let programId = '';
-            // Robustly get program ID
+            // Robustly get program ID using re-mapped keys
             try {
-                if (inst.programIdIndex !== undefined && tx.transaction.message.accountKeys) {
-                     const keyInfo = tx.transaction.message.accountKeys[inst.programIdIndex];
-                     programId = keyInfo?.pubkey ? new PublicKey(keyInfo.pubkey).toBase58() : // VersionedMessage
-                                (typeof keyInfo === 'string' ? new PublicKey(keyInfo).toBase58() : // Legacy String
-                                (keyInfo instanceof PublicKey ? keyInfo.toBase58() : '')); // Direct Pubkey
-                 } else if (inst.programId) { // Fallback if programId is directly on instruction (less common for parsed)
+                if (inst.programIdIndex !== undefined && accountKeysForInstr) {
+                     programId = accountKeysForInstr[inst.programIdIndex] || '';
+                 } else if (inst.programId) { // Fallback if programId is directly on instruction
                      programId = inst.programId.toBase58 ? inst.programId.toBase58() : String(inst.programId);
                  }
             } catch { /* Ignore errors getting programId */ }
@@ -1140,39 +1192,25 @@ class PaymentProcessor {
 
         // 3. Fetch the transaction details from Solana
         console.log(`Processing transaction details for signature: ${signature} (Attempt ${attempt + 1})`);
-        let tx;
+        let tx; // Type could be VersionedTransactionResponse | null
         const targetAddress = walletType === 'coinflip' ? process.env.MAIN_WALLET_ADDRESS : process.env.RACE_WALLET_ADDRESS; // Define targetAddress here
         try {
+            // Request transaction with max supported version (0) and verbose JSON parsing
             tx = await solanaConnection.getParsedTransaction(
                 signature,
-                { maxSupportedTransactionVersion: 0 } // Fetch including version 0
+                {
+                    maxSupportedTransactionVersion: 0,
+                    commitment: 'confirmed' // Fetch with 'confirmed' commitment
+                }
             );
             // Basic check if tx was fetched
              if (!tx) {
                  console.warn(`[PAYMENT DEBUG] Transaction ${signature} returned null from RPC.`);
-                 // Don't immediately add to cache, might be temporary RPC issue
-                 // Allow potential retry from job handler if error was retryable
                  throw new Error(`Transaction ${signature} not found (null response)`);
              }
             console.log(`[PAYMENT DEBUG] Fetched transaction for signature: ${signature}`);
             // --- ADD EXTRA DEBUG LOGGING OF RAW TX DATA ---
-            // console.log('[RAW TX DATA]', JSON.stringify({
-            //     signatures: tx.transaction.signatures,
-            //     message: {
-            //         accountKeys: tx.transaction.message.accountKeys?.slice(0, 5), // Log first few keys
-            //         instructions: tx.transaction.message.instructions?.map(i => ({
-            //             programIdIndex: i.programIdIndex,
-            //             data: i.data?.slice(0, 20) + (i.data?.length > 20 ? '...' : ''), // Log truncated data
-            //             accounts: i.accounts
-            //         })),
-            //         header: tx.transaction.message.header
-            //     },
-            //     meta: {
-            //         err: tx.meta?.err,
-            //         fee: tx.meta?.fee,
-            //         innerInstructions: tx.meta?.innerInstructions?.slice(0,2) // Log first few inner instructions
-            //     }
-            // }, null, 2));
+            // console.log('[RAW TX DATA]', JSON.stringify(tx, null, 2)); // Log entire object if needed
             // --- END EXTRA DEBUG LOGGING ---
 
         } catch (fetchError) {
@@ -1192,18 +1230,18 @@ class PaymentProcessor {
 
         // --- Signature successfully fetched and is valid ---
 
-        // 5. Find and validate the memo (Uses the REPLACED findMemoInTx)
-        const memo = await findMemoInTx(tx); // Use the newly implemented function
-        console.log(`[PAYMENT DEBUG] Memo found by findMemoInTx for TX ${signature}: ${memo}`); // Log result
+        // 5. Find and validate the memo (Uses the FINAL REPLACED findMemoInTx)
+        const memo = await findMemoInTx(tx); // Use the latest implemented function
+        console.log(`[PAYMENT DEBUG] Memo found by findMemoInTx for TX ${signature}: "${memo || 'null'}"`); // Log result, handle null
         if (!memo) {
-            // console.log(`Transaction ${signature} does not contain a valid game memo according to findMemoInTx.`); // Reduce noise
+            console.log(`Transaction ${signature} did not contain a usable game memo.`); // Adjusted log
             processedSignaturesThisSession.add(signature); // Mark as processed
             return { processed: false, reason: 'no_valid_memo' };
         }
 
         // 6. Find the corresponding bet in the database using the extracted/normalized memo
         const bet = await findBetByMemo(memo); // findBetByMemo uses the memo string directly
-        console.log(`[PAYMENT DEBUG] Found pending bet ID: ${bet?.id} for memo: ${memo}`);
+        console.log(`[PAYMENT DEBUG] Found pending bet ID: ${bet?.id || 'None'} for memo: ${memo}`); // Log bet ID or none
         if (!bet) {
             console.warn(`No matching pending bet found for memo "${memo}" from TX ${signature}. Could be unrelated or already processed.`);
             processedSignaturesThisSession.add(signature); // Mark as processed
