@@ -11,25 +11,23 @@
   },
   "dependencies": {
     "@solana/web3.js": "^1.93.0",
-    "@solana/spl-token": "^0.4.2",
-    "@solana/spl-memo": "^0.1.1",
-    
+    "@solana/spl-token": "^0.4.2", // Kept for now, assuming it might be used elsewhere or planned. Remove if certain it's unused.
+
     "bs58": "^5.0.0",
-    "base64-js": "^1.5.1",
-    "buffer": "^6.0.3",
-    
+    "base64-js": "^1.5.1", // Needed for updated index.js
+    "buffer": "^6.0.3",    // Needed for updated index.js
+
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "node-telegram-bot-api": "^0.61.0",
-    "node-fetch": "^3.3.2",
-    
-    "pg": "^8.11.5",
-    "pg-pool": "^3.6.1",
-    
+    "node-fetch": "^3.3.2", // Kept for now, remove if certain it's unused.
+
+    "pg": "^8.11.5", // Provides Pool, used in index.js
+
     "p-queue": "^7.3.4",
-    
-    "winston": "^3.11.0",
-    "prom-client": "^14.2.0"
+
+    "winston": "^3.11.0",     // Kept for now, Logger - remove if not used.
+    "prom-client": "^14.2.0" // Kept for now, Metrics - remove if not used.
   },
   "devDependencies": {
     "nodemon": "^3.0.2",
