@@ -571,17 +571,18 @@ async function findMemoInTx(tx, signature) { // Added signature for logging
     if (transactionResponse.meta?.logMessages) {
         // Use Regex to handle variations like "Memo:" or "Memo (len ...):"
         // Updated regex to better capture memo content and avoid trailing junk if present
-        const memoLogRegex = /Program log: Memo(?: \(len \d+\))?:\s*"?([^"\n]+)"?/;
-        for (const log of transactionResponse.meta.logMessages) {
-            const match = log.match(memoLogRegex);
-            // Check if regex matched and captured the memo content (group 1)
-            if (match && match[1]) {
-                // Extract captured group, trim handled by normalizeMemo now
-                const rawMemo = match[1]; // Pass raw match to new normalizeMemo
-                const memo = normalizeMemo(rawMemo); // Use *new* normalizeMemo
-                if (memo) {
-                    usedMethods.push('LogScanRegex'); // Indicate method used
-                    console.log(`[MEMO DEBUG] Found memo via Regex log scan: "${memo}" (Raw: "${rawMemo}")`);
+        // In findMemoInTx function, update the log message regex:
+const memoLogRegex = /Program log: Memo(?: \(len \d+\))?:\s*"?([^"\n]+)"?/; // Explicitly exclude newlines
+
+// And where we extract the memo from logs:
+if (match?.[1]) {
+    const memo = normalizeMemo(match[1].trim().replace(/\n$/, '')); // Explicitly remove trailing newline
+    if (memo) {
+        usedMethods.push('LogScanRegex');
+        console.log(`[MEMO DEBUG] Found memo via LogScanRegex: "${memo}" (Raw: "${rawMemo}")`);
+        return memo;
+    }
+}
                     // --- START: MEMO STATS Logging ---
                     console.log(`[MEMO STATS] TX:${signature?.slice(0,8)} | ` +
                                 `Methods:${usedMethods.join(',')} | ` +
