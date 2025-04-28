@@ -2247,29 +2247,42 @@ async function handleCoinflipGame(bet) {
             // Update bet status before queuing payout
             await updateBetStatus(betId, 'processing_payout');
 
-            // Add payout job to the high priority queue using the paymentProcessor instance
-            await paymentProcessor.addPaymentJob({
-                type: 'payout',
-                betId,
-                recipient: winnerAddress,
-                amount: payoutLamports.toString(), // Pass amount as string to avoid BigInt issues in queue/JSON
-                gameType: 'coinflip',
-                priority: 2, // Higher priority than monitoring/game processing
-                chatId: chat_id,
-                displayName,
-                result
-            });
+            // --- START: Added Debugging Block ---
+            console.log(`[DEBUG] Bet ${betId}: PRE-QUEUE Payout Job. Status updated to processing_payout.`);
+            try {
+                await paymentProcessor.addPaymentJob({
+                    type: 'payout',
+                    betId,
+                    recipient: winnerAddress,
+                    amount: payoutLamports.toString(), // Pass amount as string
+                    gameType: 'coinflip',             // Ensure correct gameType
+                    priority: 2,
+                    chatId: chat_id,
+                    displayName,
+                    result                           // Include coinflip result
+                });
+                console.log(`[DEBUG] Bet ${betId}: POST-QUEUE Payout Job successfully added.`);
+            } catch (queueError) {
+                console.error(`[DEBUG] Bet ${betId}: FAILED TO QUEUE Payout Job! Error:`, queueError);
+                // Optionally update bet status to an error here if queuing fails
+                await updateBetStatus(betId, 'error_payout_queueing_exception');
+            }
+            // --- END: Added Debugging Block ---
 
         } catch (e) {
-            console.error(`❌ Error queuing payout for coinflip bet ${betId}:`, e);
-            await safeSendMessage(chat_id,
-                `⚠️ Error occurred while processing your coinflip win for bet ID ${betId}.\n` +
-                `Please contact support.`,
-                { parse_mode: 'Markdown' }
-            ).catch(e => console.error("TG Send Error:", e.message));
-            await updateBetStatus(betId, 'error_payout_queueing');
+            // This outer catch block handles errors from safeSendMessage or updateBetStatus primarily
+            console.error(`❌ Error preparing payout info or updating status for coinflip bet ${betId}:`, e);
+            // Avoid trying to update status again if the queueing failed and already updated it
+            if (e !== queueError) { // Check if it's not the queueing error we might have already handled
+                 await safeSendMessage(chat_id,
+                     `⚠️ Error occurred while processing your coinflip win for bet ID ${betId}.\n` +
+                     `Please contact support.`,
+                     { parse_mode: 'Markdown' }
+                 ).catch(e => console.error("TG Send Error:", e.message));
+                 await updateBetStatus(betId, 'error_payout_preparation'); // More specific error status
+            }
         }
-
+        
     } else { // Loss
         console.log(`🪙 Coinflip Bet ${betId}: ${displayName} LOST. Choice: ${choice}, Result: ${result}`);
         await safeSendMessage(chat_id,
