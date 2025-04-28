@@ -1,5 +1,3 @@
-// index.js (Updated for Multi-RPC RateLimitedConnection)
-
 import 'dotenv/config';
 import { Pool } from 'pg';
 import express from 'express';
