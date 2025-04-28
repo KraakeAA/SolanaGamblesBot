@@ -117,45 +117,22 @@ app.get('/prestop', (req, res) => {
 // --- END IMMEDIATE Health Check Endpoint ---
 
 
-// --- START: Initialize Multi-RPC Solana Connection (MODIFIED) ---
+// --- Initialize Multi-RPC Solana connection ---
 console.log("⚙️ Initializing Multi-RPC Solana connection...");
 
-// 1. Parse RPC URLs from environment variable
+// Parse RPC URLs
 const rpcUrls = process.env.RPC_URLS.split(',')
     .map(url => url.trim())
     .filter(url => url.length > 0);
 
 if (rpcUrls.length === 0) {
-    // This check might be redundant due to earlier checks, but ensures safety
     console.error("❌ No valid RPC URLs found in RPC_URLS environment variable after filtering. Exiting.");
     process.exit(1);
 }
+
 console.log(`ℹ️ Using RPC Endpoints: ${rpcUrls.join(', ')}`);
 
-// 2. Instantiate the new RateLimitedConnection
-const solanaConnection = new RateLimitedConnection(rpcUrls, {
-    // Options specific to the new class (can be tuned via env vars if needed)
-    maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT || '5', 10),   // Max parallel requests across all endpoints
-    retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY || '700', 10), // Initial delay (ms)
-    maxRetries: parseInt(process.env.RPC_MAX_RETRIES || '5', 10),         // Max attempts per request cycle
-    rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF || '5000', 10), // Min pause after 429 (ms)
-    retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY || '30000', 10), // Max delay for backoff (ms)
-    retryJitter: parseFloat(process.env.RPC_RETRY_JITTER || '0.2'),        // Jitter percentage
-
-    // Standard Connection options
-    commitment: process.env.RPC_COMMITMENT || 'confirmed', // Default commitment level, allow override
-    httpHeaders: {
-        // Client ID is now set inside the RateLimitedConnection constructor using clientId option
-        // Add any OTHER custom headers needed here
-        'User-Agent': `SolanaGamblesBot/2.1-multi-rpc (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Example User-Agent
-    },
-    // wsEndpoint: process.env.WS_ENDPOINT || undefined, // Optionally configure WebSocket endpoint explicitly
-    clientId: `SolanaGamblesBot/2.1-multi-rpc (${process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'})` // Pass client ID for internal header use
-});
-console.log("✅ Multi-RPC Solana connection initialized");
-// --- END: Initialize Multi-RPC Solana Connection ---
-// --- After creating solanaConnection ---
-
+// --- ONLY ONE solanaConnection created here ---
 const solanaConnection = new RateLimitedConnection(rpcUrls, {
     maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT || '5', 10),
     retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY || '700', 10),
@@ -203,7 +180,6 @@ setInterval(() => {
         lastQueueProcessTime = Date.now();
     }
 }, 10000); // Every 10 seconds
-
 // --- (then continue initializing queues and telegram bot as normal)
 
 
