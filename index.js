@@ -1,3 +1,6 @@
+// index.js
+
+// --- All Imports MUST come first ---
 import 'dotenv/config';
 import { Pool } from 'pg';
 import express from 'express';
@@ -10,21 +13,23 @@ import {
     SystemProgram,
     sendAndConfirmTransaction,
     ComputeBudgetProgram
-    // Note: TransactionMessage, VersionedTransactionResponse might be needed depending on exact web3.js usage
 } from '@solana/web3.js';
 import bs58 from 'bs58';
-// Ensure crypto is imported if not already globally available in your Node version
-import * as crypto from 'crypto'; // Import crypto module
+import * as crypto from 'crypto';
 import PQueue from 'p-queue';
-// --- Updated Import Path (assuming it's correct) ---
 import RateLimitedConnection from './lib/solana-connection.js';
-// --- START: Added Imports ---
 import { toByteArray, fromByteArray } from 'base64-js';
 import { Buffer } from 'buffer';
-// --- END: Added Imports ---
+// --- End of Imports ---
+
+// --- CORRECTED PLACEMENT for Deployment Check Log ---
+console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} ---`);
+// --- END CORRECTED PLACEMENT ---
 
 
 console.log("⏳ Starting Solana Gambles Bot (Multi-RPC)... Checking environment variables...");
+
+// ... (rest of your index.js ---
 
 // --- START: Enhanced Environment Variable Checks (MODIFIED for RPC_URLS) ---
 const REQUIRED_ENV_VARS = [
