@@ -590,10 +590,7 @@ if (match?.[1]) {
                                 `Time:${Date.now() - startTime}ms`);
                     // --- END: MEMO STATS Logging ---
                     return memo; // Return the successfully found and normalized memo
-                }
-            }
     }
-
     // 2. Fallback to instruction parsing if not found in logs
     scanDepth = 2;
     const message = transactionResponse.transaction.message;
