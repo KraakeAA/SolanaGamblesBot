@@ -1972,62 +1972,77 @@ async function monitorPayments() {
 
 
 // --- SOL Sending Function ---
-// (Remains structurally the same)
+// MODIFIED WITH DETAILED LOGGING
 async function sendSol(recipientPublicKey, amountLamports, gameType) {
+    // Log entry point with essential details
+    console.log(`[SEND_SOL] Initiating sendSol. GameType: ${gameType}, Recipient: ${recipientPublicKey}, AmountLamports: ${amountLamports}`);
+
     // Select the correct private key based on the game/wallet being paid from
+    console.log(`[SEND_SOL] Selecting private key for game type: ${gameType}`);
     const privateKey = gameType === 'coinflip'
         ? process.env.BOT_PRIVATE_KEY
         : process.env.RACE_BOT_PRIVATE_KEY;
 
     if (!privateKey) {
-        console.error(`❌ Cannot send SOL: Missing private key for game type ${gameType}`);
+        console.error(`[SEND_SOL] ❌ ERROR: Missing private key for game type ${gameType}. Cannot proceed.`);
         return { success: false, error: `Missing private key for ${gameType}` };
     }
+    console.log(`[SEND_SOL] Private key selected (presence check passed).`);
 
+    // Validate recipient address format
     let recipientPubKey;
     try {
+        // Ensure conversion from string if needed, and check instance type
         recipientPubKey = (typeof recipientPublicKey === 'string')
             ? new PublicKey(recipientPublicKey)
             : recipientPublicKey;
-        if (!(recipientPubKey instanceof PublicKey)) throw new Error("Invalid recipient public key type");
+        if (!(recipientPubKey instanceof PublicKey)) throw new Error("Invalid recipient public key type after processing");
+        console.log(`[SEND_SOL] Recipient address validated: ${recipientPubKey.toBase58()}`);
     } catch (e) {
-        console.error(`❌ Invalid recipient address format: ${recipientPublicKey}`);
+        console.error(`[SEND_SOL] ❌ ERROR: Invalid recipient address format: "${recipientPublicKey}". Error: ${e.message}`);
         return { success: false, error: `Invalid recipient address: ${e.message}` };
     }
 
-
     const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL;
-    console.log(`💸 Attempting to send ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()} for ${gameType}`);
+    console.log(`[SEND_SOL] Calculated amount in SOL: ${amountSOL.toFixed(6)}`);
 
-    // Calculate dynamic priority fee based on payout amount (adjust rate as needed)
+    // Calculate dynamic priority fee
     const basePriorityFee = 1000; // Minimum fee in microLamports
     const maxPriorityFee = 1000000; // Max fee in microLamports (0.001 SOL)
     const calculatedFee = Math.floor(Number(amountLamports) * PRIORITY_FEE_RATE);
     const priorityFeeMicroLamports = Math.max(basePriorityFee, Math.min(calculatedFee, maxPriorityFee));
-
+    console.log(`[SEND_SOL] Calculated priority fee: ${priorityFeeMicroLamports} microLamports`);
 
     // Ensure amount is positive BigInt
     const amountToSend = BigInt(amountLamports);
     if (amountToSend <= 0n) {
-        console.error(`❌ Calculated payout amount ${amountLamports} is zero or negative. Cannot send.`);
+        console.error(`[SEND_SOL] ❌ ERROR: Calculated payout amount ${amountLamports} is zero or negative. Cannot send.`);
         return { success: false, error: 'Calculated payout amount is zero or negative' };
     }
-
+    console.log(`[SEND_SOL] Amount to send (lamports): ${amountToSend}`);
 
     // Retry logic for sending transaction
     for (let attempt = 1; attempt <= 3; attempt++) {
+         console.log(`[SEND_SOL] -------- Attempt ${attempt}/3 --------`);
         try {
+            console.log(`[SEND_SOL] Attempt ${attempt}: Loading payer wallet...`);
             const payerWallet = Keypair.fromSecretKey(bs58.decode(privateKey));
+            console.log(`[SEND_SOL] Attempt ${attempt}: Payer wallet loaded: ${payerWallet.publicKey.toBase58()}`);
 
             // Get latest blockhash before building transaction
+            console.log(`[SEND_SOL] Attempt ${attempt}: Fetching latest blockhash (commitment: confirmed)...`);
             const latestBlockhash = await solanaConnection.getLatestBlockhash(
-                { commitment: 'confirmed' } // Use confirmed blockhash for sending
+                { commitment: 'confirmed' }
             );
 
+            // Check if blockhash response is valid
             if (!latestBlockhash || !latestBlockhash.blockhash) {
-                throw new Error('Failed to get latest blockhash');
+                // Throw error to trigger retry or final failure if response is malformed
+                throw new Error('Failed to get latest blockhash (returned null or missing blockhash property)');
             }
+            console.log(`[SEND_SOL] Attempt ${attempt}: Got blockhash: ${latestBlockhash.blockhash}, Last Valid Block Height: ${latestBlockhash.lastValidBlockHeight}`);
 
+            console.log(`[SEND_SOL] Attempt ${attempt}: Building transaction...`);
             const transaction = new Transaction({
                 recentBlockhash: latestBlockhash.blockhash,
                 feePayer: payerWallet.publicKey
@@ -2045,63 +2060,78 @@ async function sendSol(recipientPublicKey, amountLamports, gameType) {
                 SystemProgram.transfer({
                     fromPubkey: payerWallet.publicKey,
                     toPubkey: recipientPubKey,
-                    lamports: amountToSend // Send the exact calculated amount
+                    lamports: amountToSend
                 })
             );
-
-            console.log(`Sending TX (Attempt ${attempt})... Amount: ${amountToSend}, Priority Fee: ${priorityFeeMicroLamports} microLamports`);
+            console.log(`[SEND_SOL] Attempt ${attempt}: Transaction built successfully.`);
 
             // Send and confirm transaction with timeout
-            const confirmationTimeoutMs = 45000; // Increased timeout to 45s
+            console.log(`[SEND_SOL] Attempt ${attempt}: Calling sendAndConfirmTransaction (Timeout: 45s)...`);
+            const confirmationTimeoutMs = 45000;
             const signature = await Promise.race([
                 sendAndConfirmTransaction(
                     solanaConnection, // Use the rate-limited connection
                     transaction,
                     [payerWallet], // Signer
                     {
-                        commitment: 'confirmed', // Confirm at 'confirmed' level
-                        skipPreflight: false,    // Perform preflight checks
-                        maxRetries: 2,  // Retries within sendAndConfirm (lower internal retries)
-                        preflightCommitment: 'confirmed' // Match commitment
+                        commitment: 'confirmed',        // Wait for 'confirmed'
+                        skipPreflight: false,           // Perform preflight checks
+                        maxRetries: 2,                 // Internal retries within sendAndConfirm
+                        preflightCommitment: 'confirmed' // Match commitment for preflight
                     }
                 ),
-                // Add a timeout for the confirmation process
+                // Add a timeout for the entire confirmation process
                 new Promise((_, reject) => {
-                    setTimeout(() => {
+                    const timeoutId = setTimeout(() => {
+                        console.warn(`[SEND_SOL] Attempt ${attempt}: Transaction confirmation TIMEOUT after ${confirmationTimeoutMs/1000}s.`);
                         reject(new Error(`Transaction confirmation timeout after ${confirmationTimeoutMs/1000}s (Attempt ${attempt})`));
                     }, confirmationTimeoutMs);
+                    // Use unref() for Node.js environments so timeout doesn't keep process alive unnecessarily
+                    if (timeoutId && typeof timeoutId.unref === 'function') {
+                        timeoutId.unref();
+                    }
                 })
             ]);
 
-            console.log(`✅ Payout successful! Sent ${Number(amountToSend)/LAMPORTS_PER_SOL} SOL to ${recipientPubKey.toBase58()}. TX: ${signature}`);
+            // If sendAndConfirmTransaction succeeded
+            console.log(`[SEND_SOL] Attempt ${attempt}: SUCCESS! ✅ Payout confirmed! Sent ${Number(amountToSend)/LAMPORTS_PER_SOL} SOL to ${recipientPubKey.toBase58()}. TX Signature: ${signature}`);
             return { success: true, signature };
 
         } catch (error) {
-            console.error(`❌ Payout TX failed (Attempt ${attempt}/3):`, error.message);
-            // Log full error object for more details if available
-            // console.error(error);
+            // Log failure for this attempt
+            console.error(`[SEND_SOL] ❌ Attempt ${attempt}/3 FAILED. Error:`, error.message);
+            // Optionally log stack trace for complex errors: console.error(error.stack);
 
             // Check for specific non-retryable errors
             const errorMsg = error.message.toLowerCase();
-            if (errorMsg.includes('invalid param') ||
-                errorMsg.includes('insufficient funds') || // Bot might be out of SOL
-                errorMsg.includes('blockhash not found') || // Treat as non-retryable after sendAndConfirm fails
-                errorMsg.includes('custom program error') ||
-                errorMsg.includes('account not found') || // e.g., recipient address wrong
-                errorMsg.includes('invalid recipient')) { // If our validation missed something
-                console.error("❌ Non-retryable error encountered. Aborting payout.");
-                return { success: false, error: `Non-retryable error: ${error.message}` }; // Exit retry loop
+            const isNonRetryable = errorMsg.includes('invalid param') ||
+                                  errorMsg.includes('insufficient funds') ||
+                                  errorMsg.includes('blockhash not found') || // Treat as non-retryable if confirmation fails with this
+                                  errorMsg.includes('custom program error') ||
+                                  errorMsg.includes('account not found') ||
+                                  errorMsg.includes('invalid recipient');
+
+            if (isNonRetryable) {
+                console.error(`[SEND_SOL] Attempt ${attempt}: Non-retryable error detected ('${error.message}'). Aborting payout attempts.`);
+                // Return specific error message including the attempt number
+                return { success: false, error: `Non-retryable error on attempt ${attempt}: ${error.message}` };
             }
 
-            // If retryable error and not last attempt, wait before retrying
+            // If retryable error and not the last attempt, prepare for next attempt
             if (attempt < 3) {
-                await new Promise(resolve => setTimeout(resolve, 2000 * attempt)); // Wait longer each attempt
+                const delay = 2000 * attempt; // Increasing delay: 2s, 4s
+                console.log(`[SEND_SOL] Attempt ${attempt}: Error seems retryable. Retrying after ${delay}ms delay...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+                 // Log failure after the final attempt
+                 console.error(`[SEND_SOL] ❌ Final attempt (${attempt}/3) failed. Error: ${error.message}`);
             }
         }
     } // End retry loop
 
-    // If all attempts failed
-    console.error(`❌ Payout failed after 3 attempts for ${recipientPubKey.toBase58()}`);
+    // If loop finishes after all attempts failed
+    console.error(`[SEND_SOL] ❌ Payout FAILED after 3 attempts for recipient ${recipientPubKey.toBase58()}`);
+    // Consider returning the last error message encountered if available
     return { success: false, error: `Payout failed after 3 attempts` };
 }
 
