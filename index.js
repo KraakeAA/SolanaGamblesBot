@@ -2699,7 +2699,6 @@ async function handleBetCommand(msg, args) {
      // Format amount precisely
         const betAmountString = betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length));
         // Escape necessary characters for MarkdownV2
-        const escapeMarkdown = (text) => String(text).replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
 
         // --- CORRECTED MESSAGE STRING ---
         const message = `✅ Coinflip bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` + // Removed \\ before \n
@@ -2780,7 +2779,6 @@ async function handleBetRaceCommand(msg, args) {
     // Calculate potential payout for display
         const potentialPayoutLamports = calculatePayout(expectedLamports, 'race', chosenHorse);
         // Escape necessary characters for MarkdownV2
-        const escapeMarkdown = (text) => String(text).replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
         const potentialPayoutSOL = escapeMarkdown((Number(potentialPayoutLamports) / LAMPORTS_PER_SOL).toFixed(6));
         const betAmountString = escapeMarkdown(betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length)));
 
