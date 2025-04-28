@@ -2434,6 +2434,7 @@ async function handleRaceGame(bet) {
 
 // Handles the actual payout transaction after a win is confirmed
 async function handlePayoutJob(job) {
+    console.log(`[DEBUG] handlePayoutJob: ENTERED for Bet ID ${job.betId}`); // Add this FIRST line
     const { betId, recipient, amount, gameType, chatId, displayName, result, horseName, winningHorse } = job;
     const payoutAmountLamports = BigInt(amount); // Ensure amount is BigInt (convert back from string)
 
