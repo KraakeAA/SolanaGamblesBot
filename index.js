@@ -592,7 +592,6 @@ if (match?.[1]) {
                     return memo; // Return the successfully found and normalized memo
                 }
             }
-        }
     }
 
     // 2. Fallback to instruction parsing if not found in logs
