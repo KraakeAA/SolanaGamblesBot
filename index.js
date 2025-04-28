@@ -154,6 +154,57 @@ const solanaConnection = new RateLimitedConnection(rpcUrls, {
 });
 console.log("✅ Multi-RPC Solana connection initialized");
 // --- END: Initialize Multi-RPC Solana Connection ---
+// --- After creating solanaConnection ---
+
+const solanaConnection = new RateLimitedConnection(rpcUrls, {
+    maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT || '5', 10),
+    retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY || '700', 10),
+    maxRetries: parseInt(process.env.RPC_MAX_RETRIES || '5', 10),
+    rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF || '5000', 10),
+    retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY || '30000', 10),
+    retryJitter: parseFloat(process.env.RPC_RETRY_JITTER || '0.2'),
+    commitment: process.env.RPC_COMMITMENT || 'confirmed',
+    httpHeaders: {
+        'User-Agent': `SolanaGamblesBot/2.1-multi-rpc`
+    },
+    clientId: `SolanaGamblesBot/2.1-multi-rpc`
+});
+console.log("✅ Multi-RPC Solana connection initialized");
+
+// --- LIVE QUEUE MONITOR ---
+setInterval(() => {
+    if (!solanaConnection) return;
+
+    const { totalRequestsEnqueued, totalRequestsSucceeded, totalRequestsFailed, endpointRotations } = solanaConnection.stats;
+    const queueSize = solanaConnection.requestQueue.length;
+    const activeRequests = solanaConnection.activeRequests;
+    const successRate = totalRequestsEnqueued > 0 ? (100 * totalRequestsSucceeded / totalRequestsEnqueued).toFixed(1) : "N/A";
+
+    console.log(`[Queue Monitor] Active: ${activeRequests}, Pending: ${queueSize}, Success Rate: ${successRate}%, Rotations: ${endpointRotations}`);
+}, 60000); // Every 60 seconds
+
+// --- EMERGENCY AUTO-ROTATE ---
+let lastQueueProcessTime = Date.now();
+
+const originalProcessQueue = solanaConnection._processQueue.bind(solanaConnection);
+
+solanaConnection._processQueue = async function patchedProcessQueue() {
+    lastQueueProcessTime = Date.now();
+    await originalProcessQueue();
+};
+
+setInterval(() => {
+    const now = Date.now();
+    const stuckDuration = now - lastQueueProcessTime;
+
+    if (stuckDuration > 30000) { // If no progress for 30 seconds
+        console.warn(`[Emergency Rotate] No queue movement detected for ${stuckDuration}ms. Forcing endpoint rotation...`);
+        solanaConnection._rotateEndpoint();
+        lastQueueProcessTime = Date.now();
+    }
+}, 10000); // Every 10 seconds
+
+// --- (then continue initializing queues and telegram bot as normal)
 
 
 // 2. Message Processing Queue (for handling Telegram messages)
