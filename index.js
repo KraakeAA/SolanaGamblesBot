@@ -181,7 +181,14 @@ setInterval(() => {
     }
 }, 10000); // Every 10 seconds
 // --- (then continue initializing queues and telegram bot as normal)
-
+setTimeout(async () => {
+  try {
+    const currentSlot = await solanaConnection.getSlot();
+    console.log(`✅ [Startup Test] RPC call successful! Current Solana Slot: ${currentSlot}`);
+  } catch (err) {
+    console.error(`❌ [Startup Test] RPC call failed:`, err.message);
+  }
+}, 5000);
 
 // 2. Message Processing Queue (for handling Telegram messages)
 const messageQueue = new PQueue({
