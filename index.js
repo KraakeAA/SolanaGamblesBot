@@ -2409,7 +2409,9 @@ async function handlePayoutJob(job) {
 
     try {
         // Attempt to send the SOL payout
+        console.log(`[PAYOUT_JOB] START - Processing job for Bet ID: ${job.betId}, Recipient: ${job.recipient}, Amount: ${job.amount}`);
         const sendResult = await sendSol(recipient, payoutAmountLamports, gameType);
+        console.log(`[PAYOUT_JOB] sendSol completed for Bet ID: ${betId}. Success: ${sendResult.success}`);
 
         if (sendResult.success) {
             console.log(`💸 Payout successful for bet ${betId}, TX: ${sendResult.signature}`);
