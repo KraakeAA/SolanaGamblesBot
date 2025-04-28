@@ -2097,6 +2097,7 @@ async function processPaidBet(bet) {
 // Handles the Coinflip game logic
 async function handleCoinflipGame(bet) {
     const { id: betId, user_id, chat_id, bet_details, expected_lamports, memo_id } = bet;
+    const memoId = memo_id;
     const choice = bet_details.choice; // 'heads' or 'tails'
     const config = GAME_CONFIG.coinflip;
 
