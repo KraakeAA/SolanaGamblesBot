@@ -435,6 +435,7 @@ function generateMemoId(prefix = 'BET') {
     return `${prefix}-${hexString}-${checksum}`;
 }
 
+// *** START: normalizeMemo function with EXPLICIT TRAILING NEWLINE REMOVAL & STEP LOGGING ***
 function normalizeMemo(rawMemo) {
     // Add a check for the rawMemo type and log if it's not a string
     if (typeof rawMemo !== 'string') {
@@ -442,80 +443,66 @@ function normalizeMemo(rawMemo) {
         return null;
     }
 
-    // 1. Remove ALL control characters (including newlines, tabs, etc.)
-    // Also remove leading/trailing whitespace immediately
-    let memo = rawMemo.replace(/[\x00-\x1F\x7F]/g, '').trim();
+    console.log(`[NORMALIZE_MEMO] STEP 0 - Input Raw: "${rawMemo}"`);
 
-    // Log the raw and initially trimmed/control-char-cleaned memo
-    console.log(`[NORMALIZE_MEMO] Input - Raw: "${rawMemo}", Trimmed/Cleaned Control Chars: "${memo}"`);
+    // STEP 1: Explicitly remove potential SINGLE trailing newline FIRST
+    // This targets the specific issue seen in logs like "...-8A\n"
+    let memo = rawMemo.replace(/\n$/, '');
+    console.log(`[NORMALIZE_MEMO] STEP 1 - After replace(/\\n$/, ''): "${memo}"`);
 
-    // 2. Standardize format aggressively
+    // STEP 2: Remove ALL control characters and trim remaining whitespace
+    // This handles other potential hidden chars and spaces
+    memo = memo.replace(/[\x00-\x1F\x7F]/g, '').trim();
+    console.log(`[NORMALIZE_MEMO] STEP 2 - After control char replace & trim: "${memo}"`);
+
+    // STEP 3: Standardize format aggressively (case, prefixes, spaces, invalid chars)
     memo = memo.toUpperCase()
-        .replace(/^MEMO[:=\s]*/i, '') // Remove potential "MEMO:" prefix variations
-        .replace(/^TEXT[:=\s]*/i, '') // Remove potential "TEXT:" prefix variations
+        .replace(/^MEMO[:=\s]*/i, '')
+        .replace(/^TEXT[:=\s]*/i, '')
         .replace(/[\u200B-\u200D\uFEFF]/g, '') // Remove zero-width spaces
         .replace(/\s+/g, '-') // Replace spaces with dashes
         .replace(/[^A-Z0-9\-]/g, ''); // Remove remaining non-alphanumeric/dash characters
+    console.log(`[NORMALIZE_MEMO] STEP 3 - Fully Standardized Candidate: "${memo}"`);
 
-    // --- ADDED: Explicit newline handling ---
-    // Remove any remaining newlines that might have slipped through
-    memo = memo.replace(/\n/g, '').replace(/\r/g, '');
-
-    // --- START: MEMO STATS Logging ---
-    // Log the state after full standardization (before V1 check)
-    console.log(`[NORMALIZE_MEMO] Fully Standardized Candidate: "${memo}"`);
-    // --- END ADDED LOGGING ---
-
-    // Rest of the function remains the same...
-    // 3. Special handling for V1 format (BET/CF/RA)-HEX(16)-CHECKSUM(2)
+    // STEP 4: V1 Pattern Match and Checksum logic
     const v1Pattern = /^(BET|CF|RA)-([A-F0-9]{16})-([A-F0-9]{2})$/;
     const v1Match = memo.match(v1Pattern);
 
     if (v1Match) {
+        console.log(`[NORMALIZE_MEMO] STEP 4 - V1 Pattern Matched.`);
         const [/* full match */, prefix, hex, checksum] = v1Match; // Destructure correctly
-
-        // --- ADDED LOGGING ---
-        console.log(`[NORMALIZE_MEMO] V1 Pattern Matched. Extracted - Prefix: ${prefix}, Hex: ${hex}, Checksum (from input): ${checksum}`);
-        // --- END ADDED LOGGING ---
+        console.log(`[NORMALIZE_MEMO] Extracted - Prefix: ${prefix}, Hex: ${hex}, Checksum (from input): ${checksum}`);
 
         let expectedChecksum;
         try {
             expectedChecksum = crypto.createHash('sha256')
-                .update(hex) // Ensure 'hex' is correctly captured and is a string
+                .update(hex)
                 .digest('hex')
                 .slice(-2)
                 .toUpperCase();
         } catch (hashError) {
              console.error(`[NORMALIZE_MEMO] CRITICAL ERROR calculating checksum for hex "${hex}":`, hashError);
-             // Decide how to handle - return null? Return uncorrected? For now, log and return null.
-             return null;
+             return null; // Exit if hashing fails
         }
 
-        // --- ADDED LOGGING ---
         console.log(`[NORMALIZE_MEMO] Calculated Expected Checksum: ${expectedChecksum}`);
         if (checksum !== expectedChecksum) {
-             console.warn(`[NORMALIZE_MEMO] Checksum MISMATCH! Input Checksum: "${checksum}", Expected Checksum: "${expectedChecksum}". Correcting.`);
+             console.warn(`[NORMALIZE_MEMO] Checksum MISMATCH! Input: "${checksum}", Expected: "${expectedChecksum}". Correcting.`);
         } else {
              console.log(`[NORMALIZE_MEMO] Checksum MATCH! Input: "${checksum}", Expected: "${expectedChecksum}".`);
         }
-        // --- END ADDED LOGGING ---
 
-        // Return the format with the CORRECT calculated checksum, regardless of input checksum
+        // Return the format with the CORRECT calculated checksum
         const finalMemo = `${prefix}-${hex}-${expectedChecksum}`;
-         // --- ADDED LOGGING ---
         console.log(`[NORMALIZE_MEMO] Returning Corrected V1 Memo: "${finalMemo}"`);
-        // --- END ADDED LOGGING ---
         return finalMemo;
     }
 
-    // If it's not our V1 format, return the aggressively cleaned string
-    // (could be V2, could be junk, but control chars are gone)
-    // --- ADDED LOGGING ---
-    console.log(`[NORMALIZE_MEMO] V1 Pattern Did NOT Match "${memo}". Returning cleaned string or null.`);
-    // --- END ADDED LOGGING ---
+    // STEP 4 - Fallback if V1 Pattern Did NOT Match
+    console.log(`[NORMALIZE_MEMO] STEP 4 - V1 Pattern Did NOT Match candidate "${memo}". Returning cleaned string or null.`);
     return memo || null; // Return null if memo becomes empty after cleaning
 }
-
+// *** END: normalizeMemo function ***
 // 2. Strict Memo Validation with Checksum Verification (Used only for validating OUR generated V1 format)
 // (This function remains structurally the same as the original)
 function validateOriginalMemoFormat(memo) {
