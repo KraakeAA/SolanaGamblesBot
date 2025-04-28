@@ -9,6 +9,7 @@
     "docker:run": "docker run -it --env-file .env --rm solana-bot"
   },
   "dependencies": {
+    "@solana/rpc-errors": "^0.2.0",
     "@solana/web3.js": "^1.93.0",
     "base64-js": "^1.5.1",
     "bs58": "^5.0.0",
