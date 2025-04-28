@@ -435,9 +435,6 @@ function generateMemoId(prefix = 'BET') {
     return `${prefix}-${hexString}-${checksum}`;
 }
 
-// *** START: New normalizeMemo function from "Ultimate Fix" ***
-// *** START: New normalizeMemo function from "Ultimate Fix" ***
-// *** MODIFIED WITH DEBUG LOGGING ***
 function normalizeMemo(rawMemo) {
     // Add a check for the rawMemo type and log if it's not a string
     if (typeof rawMemo !== 'string') {
@@ -460,12 +457,17 @@ function normalizeMemo(rawMemo) {
         .replace(/\s+/g, '-') // Replace spaces with dashes
         .replace(/[^A-Z0-9\-]/g, ''); // Remove remaining non-alphanumeric/dash characters
 
-    // --- ADDED LOGGING ---
+    // --- ADDED: Explicit newline handling ---
+    // Remove any remaining newlines that might have slipped through
+    memo = memo.replace(/\n/g, '').replace(/\r/g, '');
+
+    // --- START: MEMO STATS Logging ---
     // Log the state after full standardization (before V1 check)
     console.log(`[NORMALIZE_MEMO] Fully Standardized Candidate: "${memo}"`);
     // --- END ADDED LOGGING ---
 
-    // 3. Special handling for V1 format (BET/CF/RA)
+    // Rest of the function remains the same...
+    // 3. Special handling for V1 format (BET/CF/RA)-HEX(16)-CHECKSUM(2)
     const v1Pattern = /^(BET|CF|RA)-([A-F0-9]{16})-([A-F0-9]{2})$/;
     const v1Match = memo.match(v1Pattern);
 
@@ -488,7 +490,6 @@ function normalizeMemo(rawMemo) {
              // Decide how to handle - return null? Return uncorrected? For now, log and return null.
              return null;
         }
-
 
         // --- ADDED LOGGING ---
         console.log(`[NORMALIZE_MEMO] Calculated Expected Checksum: ${expectedChecksum}`);
@@ -514,8 +515,6 @@ function normalizeMemo(rawMemo) {
     // --- END ADDED LOGGING ---
     return memo || null; // Return null if memo becomes empty after cleaning
 }
-// *** END: New normalizeMemo function ***
-
 
 // 2. Strict Memo Validation with Checksum Verification (Used only for validating OUR generated V1 format)
 // (This function remains structurally the same as the original)
