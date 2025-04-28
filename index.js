@@ -464,8 +464,22 @@ function normalizeMemo(rawMemo) {
         .replace(/[^A-Z0-9\-]/g, ''); // Remove remaining non-alphanumeric/dash characters
     console.log(`[NORMALIZE_MEMO] STEP 3 - Fully Standardized Candidate: "${memo}"`);
 
-    // STEP 4: V1 Pattern Match and Checksum logic
+  // --- ADDED: STEP 3.5 - Explicitly handle potential trailing 'N' after checksum-like part ---
+    // This targets the specific "...-XXN" pattern observed in logs
+    const trailingNPattern = /^(BET|CF|RA)-([A-F0-9]{16})-([A-F0-9]{2})N$/;
+    const trailingNMatch = memo.match(trailingNPattern);
+
+    if (trailingNMatch) {
+        console.warn(`[NORMALIZE_MEMO] STEP 3.5 - Detected V1-like memo with trailing 'N': "${memo}". Attempting correction by removing 'N'.`);
+        // Correct the memo by removing the trailing 'N'
+        memo = memo.slice(0, -1); // Remove the last character ('N')
+        console.log(`[NORMALIZE_MEMO] STEP 3.5 - Corrected candidate for V1 Check: "${memo}"`);
+    }
+    // --- END ADDED: STEP 3.5 ---
+
+    // STEP 4: V1 Pattern Match and Checksum logic... (now uses potentially corrected 'memo' from step 3.5)
     const v1Pattern = /^(BET|CF|RA)-([A-F0-9]{16})-([A-F0-9]{2})$/;
+    // ... rest of the function remains the same ...
     const v1Match = memo.match(v1Pattern);
 
     if (v1Match) {
