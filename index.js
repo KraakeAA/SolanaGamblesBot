@@ -2697,17 +2697,21 @@ async function handleBetCommand(msg, args) {
      }
 
      // Format amount precisely
-     const betAmountString = betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length));
-     const message = `✅ Coinflip bet registered\\! \\(ID: \`${memoId}\`\\)\\n\\n` +
-                     `You chose: *${escapeMarkdown(userChoice)}*\\n` +
-                     `Amount: *${escapeMarkdown(betAmountString)} SOL*\\n\\n` +
-                     `➡️ Send *exactly ${escapeMarkdown(betAmountString)} SOL* to:\\n` +
-                     `\`${escapeMarkdown(process.env.MAIN_WALLET_ADDRESS)}\`\\n\\n` +
-                     `📎 *Include MEMO:* \`${memoId}\`\\n\\n` + // memoId is safe, no need to escape
-                     `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\\n\\n` +
-                     `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
+        const betAmountString = betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length));
+        // Escape necessary characters for MarkdownV2
+        const escapeMarkdown = (text) => String(text).replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
 
-     await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
+        // --- CORRECTED MESSAGE STRING ---
+        const message = `✅ Coinflip bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` + // Removed \\ before \n
+                        `You chose: *${escapeMarkdown(userChoice)}*\n` + // Removed \\ before \n
+                        `Amount: *${escapeMarkdown(betAmountString)} SOL*\n\n` + // Removed \\ before \n\n
+                        `➡️ Send *exactly ${escapeMarkdown(betAmountString)} SOL* to:\n` + // Removed \\ before \n
+                        `\`${escapeMarkdown(process.env.MAIN_WALLET_ADDRESS)}\`\n\n` + // Removed \\ before \n\n
+                        `📎 *Include MEMO:* \`${memoId}\`\n\n` + // Removed \\ before \n\n (memoId is safe)
+                        `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` + // Removed \\ before \n\n (Escaped .)
+                        `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`; // Escaped () and .
+
+        await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
 
@@ -2774,21 +2778,25 @@ async function handleBetRaceCommand(msg, args) {
     }
 
     // Calculate potential payout for display
-    const potentialPayoutLamports = calculatePayout(expectedLamports, 'race', chosenHorse);
-    const potentialPayoutSOL = escapeMarkdown((Number(potentialPayoutLamports) / LAMPORTS_PER_SOL).toFixed(6));
-    const betAmountString = escapeMarkdown(betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length)));
+        const potentialPayoutLamports = calculatePayout(expectedLamports, 'race', chosenHorse);
+        // Escape necessary characters for MarkdownV2
+        const escapeMarkdown = (text) => String(text).replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+        const potentialPayoutSOL = escapeMarkdown((Number(potentialPayoutLamports) / LAMPORTS_PER_SOL).toFixed(6));
+        const betAmountString = escapeMarkdown(betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length)));
 
-    const message = `✅ Race bet registered\\! \\(ID: \`${memoId}\`\\)\\n\\n` +
-                    `You chose: ${chosenHorse.emoji} *${escapeMarkdown(chosenHorse.name)}*\\n` +
-                    `Amount: *${betAmountString} SOL*\\n` +
-                    `Potential Payout: \\~${potentialPayoutSOL} SOL\\n\\n`+
-                    `➡️ Send *exactly ${betAmountString} SOL* to:\\n` +
-                    `\`${escapeMarkdown(process.env.RACE_WALLET_ADDRESS)}\`\\n\\n` +
-                    `📎 *Include MEMO:* \`${memoId}\`\\n\\n` +
-                    `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\\n\\n` +
-                    `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
 
-    await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
+        // --- CORRECTED MESSAGE STRING ---
+        const message = `✅ Race bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` + // Removed \\ before \n
+                        `You chose: ${chosenHorse.emoji} *${escapeMarkdown(chosenHorse.name)}*\n` + // Removed \\ before \n
+                        `Amount: *${betAmountString} SOL*\n` + // Removed \\ before \n
+                        `Potential Payout: \\~${potentialPayoutSOL} SOL\n\n`+ // Removed \\ before \n\n (Keep \~ escaped)
+                        `➡️ Send *exactly ${betAmountString} SOL* to:\n` + // Removed \\ before \n
+                        `\`${escapeMarkdown(process.env.RACE_WALLET_ADDRESS)}\`\n\n` + // Removed \\ before \n\n
+                        `📎 *Include MEMO:* \`${memoId}\`\n\n` + // Removed \\ before \n\n (memoId is safe)
+                        `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` + // Removed \\ before \n\n (Escaped .)
+                        `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`; // Escaped () and .
+
+        await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
 // Handles /help command
