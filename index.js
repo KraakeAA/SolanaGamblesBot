@@ -1363,7 +1363,7 @@ class GuaranteedPaymentProcessor {
         try {
             let result;
             if (job.type === 'monitor_payment') {
-                result = await this._processIncomingPayment(job.signature, job.walletType);
+                result = await this.processIncomingPayment(job.signature, job.walletType);
             } else if (job.type === 'process_bet') {
                 const bet = await pool.query('SELECT * FROM bets WHERE id = $1', [job.betId]).then(res => res.rows[0]);
                 if (bet) {
@@ -1441,8 +1441,8 @@ class GuaranteedPaymentProcessor {
         return retryable;
     }
 
-    // Example of the _processIncomingPayment method (if it's required for your use case)
-    async _processIncomingPayment(signature, walletType) {
+    // Renamed to processIncomingPayment to avoid syntax error
+    async processIncomingPayment(signature, walletType) {
         // Simulated process for incoming payment, replace with your actual logic
         console.log(`Processing payment with signature: ${signature} for wallet type: ${walletType}`);
         return { success: true, message: "Payment processed successfully." }; // Sample return
