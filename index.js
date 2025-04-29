@@ -2832,47 +2832,120 @@ async function handleSlotsCommand(msg) {
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2' });
 }
 
-// --- Corrected /roulette command (MarkdownV2) ---
-async function handleRouletteCommand(msg) {
+// --- CORRECTED /betroulette command (MarkdownV2) ---
+async function handleBetRouletteCommand(msg, args) {
+    const userId = String(msg.from.id);
+    const chatId = String(msg.chat.id);
     const config = GAME_CONFIG.roulette;
-    // Note: Ensure escapeMarkdownV2 is defined earlier in your file as provided before
-    const payouts = [
-        `Straight \\(1 number\\): 35\\:1`,           // Escaped () :
-        `Red / Black: 1\\:1`,                      // Escaped :
-        `Even / Odd: 1\\:1`,                       // Escaped :
-        `Low \\(1\\-18\\) / High \\(19\\-36\\): 1\\:1`, // Escaped () - - :
-        `Dozen \\(1st, 2nd, 3rd 12\\): 2\\:1`,        // Escaped () :
-        `Column \\(1st, 2nd, 3rd\\): 2\\:1`          // Escaped () :
-    ];
-     // Define bet types for instructions - Escaping needed within the backticks too for literal display
-     const betTypes = [
-         '`S <number>` \\(Straight Up, e\\.g\\., `S 17`\\)',                // Escaped () . , .
-         '`R` \\(Red\\)', '`B` \\(Black\\)',                                   // Escaped () ()
-         '`E` \\(Even\\)', '`O` \\(Odd\\)',                                    // Escaped () ()
-         '`L` \\(Low 1\\-18\\)', '`H` \\(High 19\\-36\\)',                     // Escaped () - () -
-         '`D1` \\(Dozen 1\\-12\\)', '`D2` \\(Dozen 13\\-24\\)', '`D3` \\(Dozen 25\\-36\\)', // Escaped () - () - () -
-         '`C1` \\(Column 1\\)', '`C2` \\(Column 2\\)', '`C3` \\(Column 3\\)'      // Escaped () () ()
-     ];
 
-    const message = `⚪️ *European Roulette Game* ⚪️ \\(Single Zero\\)\n\n`+ // Escaped ()
-                    `Place your bets and spin the wheel\\!\n\n`+ // Escaped !
-                    `*Available Bet Types & Payouts \\(Odds\\:1\\):*\n` + // Escaped () :
-                    payouts.map(p => `\\- ${p}`).join('\n') + `\n\n` + // Added escape for list hyphen -
-                    `*How to Play \\(One Bet Type per Command\\):*\n`+ // Escaped ()
-                    `\\- Type \`/betroulette amount bet\\_type [value]\`\n`+ // Escaped - _
-                    `   \\(e\\.g\\., \`/betroulette 0\\.1 R\` to bet 0\\.1 SOL on Red\\)\n`+ // Escaped () . , . .
-                    `   \\(e\\.g\\., \`/betroulette 0\\.02 S 17\` to bet 0\\.02 SOL on Straight 17\\)\n\n` + // Escaped () . , . .
-                    `*Bet Type Codes:*\n`+
-                    betTypes.map(t => `\\- ${t}`).join('\n') + `\n\n` + // Added escape for list hyphen -
-                    `*Rules:*\n` +
-                    `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL \\(per bet type placed\\)\n` + // Escaped - ()
-                    `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL \\(total allowed per spin request\\)\n` + // Escaped - ()
-                    `\\- House Edge: ${escapeMarkdownV2((config.houseEdge * 100).toFixed(1))}% \\(applied to winnings\\)\n\n`+ // Escaped - . % ()
-                    `You will be given a wallet address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to place your bet\\.`; // Escaped . .
+    // --- New Parsing Logic ---
+    const parts = args.trim().split(/\s+/); // Split arguments by space
+    let betAmount = NaN;
+    let betType = '';
+    let betValue = undefined;
+    let betKey = ''; // e.g., 'S17', 'R', 'D1'
 
-    await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2' });
+    // Validate basic structure (amount + type, or amount + type + value)
+    if (parts.length < 2 || parts.length > 3) {
+        await safeSendMessage(chatId, `⚠️ Invalid format\\. Use: \`/betroulette <amount> <type> [number]\`\\. See /roulette for examples\\.`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
+
+    // Validate Amount
+    betAmount = parseFloat(parts[0]);
+    if (isNaN(betAmount) || betAmount <= 0) { // Check > 0
+        await safeSendMessage(chatId, `⚠️ Invalid bet amount specified: "${escapeMarkdownV2(parts[0])}"\\.`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
+    if (betAmount < config.minBet || betAmount > config.maxBet) {
+         await safeSendMessage(chatId, `⚠️ Bet amount out of range\\. Please bet between ${escapeMarkdownV2(config.minBet)} and ${escapeMarkdownV2(config.maxBet)} SOL total\\.`, { parse_mode: 'MarkdownV2' });
+         return;
+    }
+
+    // Validate Type and Value based on number of parts
+    betType = parts[1].toUpperCase();
+
+    if (parts.length === 2) {
+        // Expect types without a value: R, B, E, O, L, H
+        const validTypesNoValue = ['R', 'B', 'E', 'O', 'L', 'H'];
+        if (!validTypesNoValue.includes(betType)) {
+            await safeSendMessage(chatId, `⚠️ Invalid bet type: \`${escapeMarkdownV2(betType)}\`\\. This type might require a number, or is invalid\\. See /roulette\\.`, { parse_mode: 'MarkdownV2' });
+            return;
+        }
+        betKey = betType; // e.g., 'R'
+    } else { // parts.length === 3
+        // Expect types WITH a value: S, D, C
+        betValue = parts[2]; // Value is the third part
+
+        if (betType === 'S') { // Straight up
+            const num = parseInt(betValue, 10);
+            if (isNaN(num) || num < 0 || num > 36) {
+                await safeSendMessage(chatId, `⚠️ Invalid Straight Up number: "${escapeMarkdownV2(betValue)}"\\. Please use 0\\-36\\.`, { parse_mode: 'MarkdownV2' });
+                return;
+            }
+            betValue = num.toString(); // Use validated number as string
+            betKey = `S${betValue}`; // e.g., 'S17', 'S0'
+        } else if (betType === 'D') { // Dozen
+            const dozen = parseInt(betValue, 10);
+            if (![1, 2, 3].includes(dozen)) {
+                 await safeSendMessage(chatId, `⚠️ Invalid Dozen number: "${escapeMarkdownV2(betValue)}"\\. Use 1, 2, or 3\\.`, { parse_mode: 'MarkdownV2' });
+                 return;
+            }
+            betValue = dozen.toString();
+            betKey = `D${betValue}`; // e.g., 'D1'
+        } else if (betType === 'C') { // Column
+            const column = parseInt(betValue, 10);
+            if (![1, 2, 3].includes(column)) {
+                 await safeSendMessage(chatId, `⚠️ Invalid Column number: "${escapeMarkdownV2(betValue)}"\\. Use 1, 2, or 3\\.`, { parse_mode: 'MarkdownV2' });
+                 return;
+            }
+            betValue = column.toString();
+            betKey = `C${betValue}`; // e.g., 'C1'
+        } else {
+            // Had 3 parts, but type wasn't S, D, or C
+             await safeSendMessage(chatId, `⚠️ Invalid bet type: \`${escapeMarkdownV2(betType)}\` does not take a value\\. See /roulette\\.`, { parse_mode: 'MarkdownV2' });
+             return;
+        }
+    }
+    // --- End New Parsing Logic ---
+
+
+    // Proceed if parsing was successful
+    const memoId = generateMemoId('RL'); // Roulette memo prefix
+    const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
+    const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
+
+    // Store the single bet details
+    const betDetails = {
+         betAmountSOL: betAmount,
+         bets: { // Store bets with lamports as string
+             [betKey]: expectedLamports.toString()
+         }
+    };
+
+    // Save the bet
+    const saveResult = await savePendingBet(
+        userId, chatId, 'roulette', betDetails, expectedLamports, memoId, expiresAt
+    );
+
+    if (!saveResult.success) {
+        await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown error')}\\. Please try the command again\\.`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
+
+    // Send instructions
+    const betAmountString = escapeMarkdownV2(betAmount.toFixed(Math.max(2, (betAmount.toString().split('.')[1] || '').length)));
+    const message = `✅ Roulette bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
+                    `Bet Placed: *${escapeMarkdownV2(betKey)}*\n` + // Use the generated betKey
+                    `Amount: *${betAmountString} SOL*\n\n` +
+                    `➡️ Send *exactly ${betAmountString} SOL* to:\n` +
+                    `\`${escapeMarkdownV2(process.env.MAIN_WALLET_ADDRESS)}\` \\(Shared Deposit Address\\)\n\n` +
+                    `📎 *Include MEMO:* \`${memoId}\`\n\n` +
+                    `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
+                    `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
+
+    await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
-
 
 // /wallet command (MarkdownV2)
 async function handleWalletCommand(msg) {
