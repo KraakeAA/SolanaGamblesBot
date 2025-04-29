@@ -1349,105 +1349,97 @@ class GuaranteedPaymentProcessor {
         });
     }
 
-    // Adds a job to the appropriate queue based on priority
-async addPaymentJob(job) {
-    const queue = (job.priority && job.priority > 0) ? this.highPriorityQueue : this.normalQueue;
-    queue.add(() => this.processJob(job)).catch(queueError => {
-        console.error(`Queue error processing job ${job.type} (${job.signature || job.betId || 'N/A'}):`, queueError.message);
-        performanceMonitor.logRequest(false);
-    });
-}
+    // Wrapper to handle job execution, retries, and error logging
+    async processJob(job) {
+        const jobIdentifier = job.signature || job.betId;
+        const jobKey = `${job.type}:${jobIdentifier}`; // Unique key per job type + identifier
 
-// Wrapper to handle job execution, retries, and error logging
-async processJob(job) {
-    const jobIdentifier = job.signature || job.betId;
-    const jobKey = `${job.type}:${jobIdentifier}`; // Unique key per job type + identifier
+        if (this.activeProcesses.has(jobKey)) {
+            console.warn(`[PROCESS_JOB] Skipped duplicate job: ${jobKey}`);
+            return;
+        }
+        this.activeProcesses.add(jobKey);
 
-    if (this.activeProcesses.has(jobKey)) {
-        console.warn(`[PROCESS_JOB] Skipped duplicate job: ${jobKey}`);
-        return;
-    }
-    this.activeProcesses.add(jobKey);
-
-    try {
-        let result;
-        if (job.type === 'monitor_payment') {
-            result = await this._processIncomingPayment(job.signature, job.walletType);
-        } else if (job.type === 'process_bet') {
-            const bet = await pool.query('SELECT * FROM bets WHERE id = $1', [job.betId]).then(res => res.rows[0]);
-            if (bet) {
-                await processPaidBet(bet);
-                result = { processed: true };
-            } else {
-                console.error(`Cannot process bet: Bet ID ${job.betId} not found.`);
-                result = { processed: false, reason: 'bet_not_found' };
-            }
-        } else if (job.type === 'payout') {
-            // --- Smart retry logic for payout jobs ---
-            let retries = 3;
-            while (retries > 0) {
-                try {
-                    await handlePayoutJob(job);
-                    console.log(`[PAYOUT_SUCCESS] Bet ${job.betId} payout completed.`);
+        try {
+            let result;
+            if (job.type === 'monitor_payment') {
+                result = await this._processIncomingPayment(job.signature, job.walletType);
+            } else if (job.type === 'process_bet') {
+                const bet = await pool.query('SELECT * FROM bets WHERE id = $1', [job.betId]).then(res => res.rows[0]);
+                if (bet) {
+                    await processPaidBet(bet);
                     result = { processed: true };
-                    break;
-                } catch (err) {
-                    retries--;
-                    const message = err?.message || '';
-                    console.warn(`[PAYOUT_RETRY] Attempt ${3 - retries} failed for bet ${job.betId}. Retries left: ${retries}. Error: ${message}`);
+                } else {
+                    console.error(`Cannot process bet: Bet ID ${job.betId} not found.`);
+                    result = { processed: false, reason: 'bet_not_found' };
+                }
+            } else if (job.type === 'payout') {
+                // --- Smart retry logic for payout jobs ---
+                let retries = 3;
+                while (retries > 0) {
+                    try {
+                        await handlePayoutJob(job);
+                        console.log(`[PAYOUT_SUCCESS] Bet ${job.betId} payout completed.`);
+                        result = { processed: true };
+                        break;
+                    } catch (err) {
+                        retries--;
+                        const message = err?.message || '';
+                        console.warn(`[PAYOUT_RETRY] Attempt ${3 - retries} failed for bet ${job.betId}. Retries left: ${retries}. Error: ${message}`);
 
-                    // Log isRetryableError decision
-                    if (!isRetryableError(err)) {
-                        console.warn(`[PAYOUT_RETRY] Error not retryable for bet ${job.betId}. Aborting retries.`);
-                        throw err;
-                    }
+                        // Log isRetryableError decision
+                        if (!this.isRetryableError(err)) {
+                            console.warn(`[PAYOUT_RETRY] Error not retryable for bet ${job.betId}. Aborting retries.`);
+                            throw err;
+                        }
 
-                    if (retries > 0) {
-                        await new Promise(resolve => setTimeout(resolve, 8000)); // Retry delay of 8 seconds
-                    } else {
-                        console.error(`[PAYOUT_RETRY] Final retry failed for bet ${job.betId}.`);
-                        throw err;
+                        if (retries > 0) {
+                            await new Promise(resolve => setTimeout(resolve, 8000)); // Retry delay of 8 seconds
+                        } else {
+                            console.error(`[PAYOUT_RETRY] Final retry failed for bet ${job.betId}.`);
+                            throw err;
+                        }
                     }
                 }
+                // --- End retry logic ---
+            } else {
+                console.error(`Unknown job type: ${job.type}`);
+                result = { processed: false, reason: 'unknown_job_type' };
             }
-            // --- End retry logic ---
-        } else {
-            console.error(`Unknown job type: ${job.type}`);
-            result = { processed: false, reason: 'unknown_job_type' };
+
+            performanceMonitor.logRequest(true);
+            return result;
+        } catch (error) {
+            performanceMonitor.logRequest(false);
+            console.error(`Error processing job type ${job.type} for identifier ${jobIdentifier || 'N/A'} in processJob:`, error.message, error.stack);
+            console.error(`Job failed permanently for identifier: ${jobIdentifier}`, error);
+
+            if (job.betId && job.type !== 'monitor_payment' && !(error?.reason?.includes('already_processed'))) {
+                const errorStatus = `error_${job.type}_failed`;
+                await updateBetStatus(job.betId, errorStatus);
+                console.log(`Set bet ${job.betId} status to ${errorStatus} due to job failure.`);
+            }
+
+            return { processed: false, reason: error.message };
+        } finally {
+            this.activeProcesses.delete(jobKey);
         }
-
-        performanceMonitor.logRequest(true);
-        return result;
-    } catch (error) {
-        performanceMonitor.logRequest(false);
-        console.error(`Error processing job type ${job.type} for identifier ${jobIdentifier || 'N/A'} in processJob:`, error.message, error.stack);
-        console.error(`Job failed permanently for identifier: ${jobIdentifier}`, error);
-
-        if (job.betId && job.type !== 'monitor_payment' && !(error?.reason?.includes('already_processed'))) {
-            const errorStatus = `error_${job.type}_failed`;
-            await updateBetStatus(job.betId, errorStatus);
-            console.log(`Set bet ${job.betId} status to ${errorStatus} due to job failure.`);
-        }
-
-        return { processed: false, reason: error.message };
-    } finally {
-        this.activeProcesses.delete(jobKey);
     }
-}
 
-// Utility function to check retryable errors
-function isRetryableError(error) {
-    const msg = error?.message?.toLowerCase() || '';
-    const status = error?.response?.status || error?.statusCode;
+    // Utility function to check retryable errors
+    isRetryableError(error) {
+        const msg = error?.message?.toLowerCase() || '';
+        const status = error?.response?.status || error?.statusCode;
 
-    const retryable =
-        msg.includes('timeout') ||
-        msg.includes('blockhash') ||
-        msg.includes('rate limit') ||
-        status === 429;
+        const retryable =
+            msg.includes('timeout') ||
+            msg.includes('blockhash') ||
+            msg.includes('rate limit') ||
+            status === 429;
 
-    console.log(`[RETRY_CHECK] Error: "${msg}", Status: ${status} => Retryable: ${retryable}`);
-    return retryable;
+        console.log(`[RETRY_CHECK] Error: "${msg}", Status: ${status} => Retryable: ${retryable}`);
+        return retryable;
+    }
 }
     // --- New Helper Methods from "Ultimate Fix" ---
 
