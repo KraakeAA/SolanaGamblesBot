@@ -2794,14 +2794,14 @@ async function handleRaceCommand(msg) {
 async function handleSlotsCommand(msg) {
     const config = GAME_CONFIG.slots;
     // Note: Ensure escapeMarkdownV2 is defined earlier in your file as provided before
+    // Corrected paylines array inside handleSlotsCommand
     const paylines = [
-        // Escape the payout numbers as well, just in case they generate decimals unexpectedly later
-        `🍒 Cherry \\| 🍒 Cherry \\| \\(Any\\) = ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[2])}\\:1`, // Escaped () and :
-        `7️⃣ Seven \\| \\(Any\\) \\| \\(Any\\) = 4\\:1`, // Escaped () and :
-        `🍒 Cherry \\| 🍒 Cherry \\| 🍒 Cherry = ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[3])}\\:1`, // Escaped :
-        `🍊 Orange \\| 🍊 Orange \\| 🍊 Orange = ${escapeMarkdownV2(SLOTS_SYMBOLS.ORANGE.payout[3])}\\:1`, // Escaped :
-        `🍫 BAR \\| 🍫 BAR \\| 🍫 BAR = ${escapeMarkdownV2(SLOTS_SYMBOLS.BAR.payout[3])}\\:1`,       // Escaped :
-        `🎰 777 \\| 🎰 777 \\| 🎰 777 = ${escapeMarkdownV2(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}\\:1` // Escaped :
+        `🍒 Cherry \\| 🍒 Cherry \\| \\(Any\\) \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[2])}\\:1`, // Escaped =
+        `7️⃣ Seven \\| \\(Any\\) \\| \\(Any\\) \\= 4\\:1`, // Escaped =
+        `🍒 Cherry \\| 🍒 Cherry \\| 🍒 Cherry \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[3])}\\:1`, // Escaped =
+        `🍊 Orange \\| 🍊 Orange \\| 🍊 Orange \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.ORANGE.payout[3])}\\:1`, // Escaped =
+        `🍫 BAR \\| 🍫 BAR \\| 🍫 BAR \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.BAR.payout[3])}\\:1`, // Escaped =
+        `🎰 777 \\| 🎰 777 \\| 🎰 777 \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}\\:1` // Escaped =
     ];
 
     const message = `🎰 *777 Slots Game* 🎰\n\n` +
