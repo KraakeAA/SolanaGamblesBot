@@ -1440,6 +1440,13 @@ class GuaranteedPaymentProcessor {
         console.log(`[RETRY_CHECK] Error: "${msg}", Status: ${status} => Retryable: ${retryable}`);
         return retryable;
     }
+
+    // Example of the _processIncomingPayment method (if it's required for your use case)
+    async _processIncomingPayment(signature, walletType) {
+        // Simulated process for incoming payment, replace with your actual logic
+        console.log(`Processing payment with signature: ${signature} for wallet type: ${walletType}`);
+        return { success: true, message: "Payment processed successfully." }; // Sample return
+    }
 }
     // --- New Helper Methods from "Ultimate Fix" ---
 
