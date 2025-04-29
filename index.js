@@ -2102,22 +2102,102 @@ async function processPaidBet(bet) {
 
 // Calculates payout amount, applying house edge. Returns BigInt lamports.
 function calculatePayout(betLamports, gameType, gameDetails = {}) {
-    // ... (implementation remains unchanged) ...
-     betLamports = BigInt(betLamports);
-     let payoutLamports = 0n;
+    // Ensure input is BigInt - Note: If called internally, might already be BigInt
+    // Adding defensive BigInt conversion anyway.
+    try {
+         betLamports = BigInt(betLamports);
+    } catch (e) {
+         // Log error if input cannot be converted (e.g., NULL, non-numeric string)
+         console.error(`DEBUG_PAYOUT: Error converting betLamports input '${betLamports}' to BigInt: ${e.message}`);
+         return 0n; // Cannot proceed if input is invalid
+    }
 
-     if (gameType === 'coinflip') {
-         const multiplier = 2.0 - GAME_CONFIG.coinflip.houseEdge;
-         payoutLamports = BigInt(Math.floor(Number(betLamports) * multiplier));
-     } else if (gameType === 'race' && gameDetails.odds) {
-         const multiplier = gameDetails.odds * (1.0 - GAME_CONFIG.race.houseEdge);
-         payoutLamports = BigInt(Math.floor(Number(betLamports) * multiplier));
-     } else {
-         console.error(`Cannot calculate payout: Unknown game type "${gameType}" or missing race odds.`);
-         return 0n; // Return 0 if calculation fails
-     }
-     // Ensure payout is not negative
-     return payoutLamports > 0n ? payoutLamports : 0n;
+    let payoutLamports = 0n;
+    let multiplier = NaN; // Initialize multiplier defensively
+
+    // --- Log Inputs ---
+    console.log(`DEBUG_PAYOUT: calculatePayout started. betLamports=${betLamports} (Type: ${typeof betLamports}), gameType=${gameType}`);
+    // --- End Log Inputs ---
+
+    if (gameType === 'coinflip') {
+        // Calculate multiplier based on config
+        multiplier = 2.0 - GAME_CONFIG.coinflip.houseEdge;
+
+        // --- Log Multiplier Info ---
+        // Log the calculated multiplier and the house edge value it used
+        console.log(`DEBUG_PAYOUT: Coinflip multiplier calculated as ${multiplier} (using houseEdge=${GAME_CONFIG.coinflip.houseEdge}, Type: ${typeof GAME_CONFIG.coinflip.houseEdge})`);
+        // --- End Log Multiplier Info ---
+
+        // Use try-catch specifically around calculations that might produce NaN
+        try {
+            // Ensure multiplier is a valid number before proceeding
+            if (isNaN(multiplier)) {
+                console.error(`DEBUG_PAYOUT: Coinflip multiplier is NaN! Check GAME_CONFIG.coinflip.houseEdge.`);
+                throw new Error("Multiplier is NaN"); // Throw to prevent BigInt(NaN)
+            }
+
+            // Perform calculation steps
+            const betLamportsAsNumber = Number(betLamports); // Convert BigInt to Number for multiplication
+            const intermediate = betLamportsAsNumber * multiplier;
+            const floored = Math.floor(intermediate);
+
+            // --- Log Intermediate Steps ---
+            console.log(`DEBUG_PAYOUT: Coinflip Calculation Steps: Number(betLamports)=${betLamportsAsNumber}, intermediate=${intermediate}, floored=${floored}`);
+            // --- End Log Intermediate Steps ---
+
+            // Explicitly check if the result is NaN before BigInt conversion
+            if (isNaN(floored)) {
+                console.error(`DEBUG_PAYOUT: Calculated 'floored' value is NaN! Inputs: betLamportsAsNumber=${betLamportsAsNumber}, multiplier=${multiplier}`);
+                 payoutLamports = 0n; // Assign 0n if NaN occurs, preventing BigInt(NaN)
+            } else {
+                payoutLamports = BigInt(floored); // Convert final number to BigInt
+            }
+        } catch (calcError) {
+            console.error(`DEBUG_PAYOUT: Error during coinflip calculation: ${calcError.message}`);
+            payoutLamports = 0n; // Assign 0n on any calculation error
+        }
+
+    } else if (gameType === 'race' && gameDetails.odds) {
+        // Calculate multiplier for race
+         multiplier = gameDetails.odds * (1.0 - GAME_CONFIG.race.houseEdge);
+        // --- Log Multiplier Info ---
+         console.log(`DEBUG_PAYOUT: Race multiplier calculated as ${multiplier} (using odds=${gameDetails.odds}, houseEdge=${GAME_CONFIG.race.houseEdge}, Type: ${typeof GAME_CONFIG.race.houseEdge})`);
+        // --- End Log Multiplier Info ---
+         try {
+              if (isNaN(multiplier)) {
+                  console.error(`DEBUG_PAYOUT: Race multiplier is NaN! Check GAME_CONFIG.race.houseEdge or gameDetails.odds.`);
+                  throw new Error("Race Multiplier is NaN");
+              }
+              const betLamportsAsNumber = Number(betLamports);
+              const intermediate = betLamportsAsNumber * multiplier;
+              const floored = Math.floor(intermediate);
+              // --- Log Intermediate Steps ---
+              console.log(`DEBUG_PAYOUT: Race Calculation Steps: Number(betLamports)=${betLamportsAsNumber}, intermediate=${intermediate}, floored=${floored}`);
+              // --- End Log Intermediate Steps ---
+              if (isNaN(floored)) {
+                   console.error(`DEBUG_PAYOUT: Calculated 'floored' value for race is NaN!`);
+                   payoutLamports = 0n;
+              } else {
+                   payoutLamports = BigInt(floored);
+              }
+         } catch (calcError) {
+              console.error(`DEBUG_PAYOUT: Error during race calculation: ${calcError.message}`);
+              payoutLamports = 0n;
+         }
+
+    } else {
+        console.error(`Cannot calculate payout: Unknown game type "${gameType}" or missing race odds.`);
+        // payoutLamports remains 0n (initial value)
+        return 0n; // Return 0 explicitly if type is unknown
+    }
+
+    // Ensure final payout is not negative
+    const finalResult = payoutLamports > 0n ? payoutLamports : 0n;
+
+    // --- Log Final Result ---
+    console.log(`DEBUG_PAYOUT: calculatePayout returning: ${finalResult} (Type: ${typeof finalResult})`);
+    // --- End Log Final Result ---
+    return finalResult;
 }
 
 // Fetches user's display name (username or first name) from Telegram
@@ -2234,22 +2314,30 @@ async function handleCoinflipGame(bet) {
                 { parse_mode: 'MarkdownV2' }
             );
 
-            // Queue the payout job
-            console.log(`${logPrefix}: Queueing payout job.`);
-            await paymentProcessor.addPaymentJob({
-                type: 'payout',
-                betId,
-                recipient: winnerAddress,
-                amount: payoutLamports.toString(), // Pass amount as string for consistency
-                gameType: 'coinflip',
-                priority: 2, // Higher priority for payouts
-                // Context for handlePayoutJob message formatting:
-                chatId: chat_id,
-                displayName: displayName, // Pass the escaped name
-                memoId: memo_id, // Pass memoId for reference in messages/logs
-                result: result // Pass coinflip result if needed in payout message
-            });
-             console.log(`${logPrefix}: Payout job queued successfully.`);
+            // Inside handleCoinflipGame -> if (win) block -> try block:
+
+         // Inside handleCoinflipGame -> if (win) block -> try block:
+
+         // Queue the payout job
+         console.log(`${logPrefix}: Queueing payout job.`);
+         // --- ADD LOGGING HERE ---
+         const amountString = payoutLamports.toString();
+         console.log(`DEBUG_PAYOUT: Queuing payout job. betId=<span class="math-inline">\{betId\}, amountString\='</span>{amountString}', originalPayoutLamports=${payoutLamports}`);
+         // --- END LOGGING ---
+         await paymentProcessor.addPaymentJob({
+             type: 'payout',
+             betId,
+             recipient: winnerAddress,
+             //amount: payoutLamports.toString(), // Use the logged string
+             amount: amountString, // Use the logged string
+             gameType: 'coinflip',
+             priority: 2,
+             chatId: chat_id,
+             displayName: displayName,
+             memoId: memo_id,
+             result: result
+         });
+         console.log(`${logPrefix}: Payout job queued successfully.`);
 
         } catch (e) { // Catch errors during the pre-queue process (DB update, TG message)
             console.error(`${logPrefix}: Error preparing/queueing payout info:`, e);
@@ -2449,6 +2537,7 @@ async function handlePayoutJob(job) {
     const { betId, recipient, amount, gameType, chatId, displayName, memoId } = job; // Destructure needed info
     const logPrefix = `Payout Job Bet ${betId} (${memoId?.slice(0, 6)}...)`;
 
+    console.log(`DEBUG_PAYOUT: handlePayoutJob received job. amount='<span class="math-inline">\{amount\}', type\=</span>{typeof amount}`);
     const payoutAmountLamports = BigInt(amount);
     if (payoutAmountLamports <= 0n) {
         console.error(`${logPrefix}: ❌ Payout amount is zero or negative (${payoutAmountLamports}). Skipping.`);
