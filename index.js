@@ -2098,44 +2098,6 @@ async function processPaidBet(bet) {
     }
 }
 
-
-// --- Stubs for Game Handlers (Full implementation in Part 3) ---
-// These are called by processPaidBet
-
-async function handleCoinflipGame(bet) {
-    console.error("handleCoinflipGame function needs to be implemented (in Part 3)");
-    // TODO: Implement actual game logic, payout queuing etc. in Part 3
-    await updateBetStatus(bet.id, 'error_logic_missing'); // Placeholder error
-}
-
-async function handleRaceGame(bet) {
-     console.error("handleRaceGame function needs to be implemented (in Part 3)");
-     // TODO: Implement actual game logic, payout queuing etc. in Part 3
-     await updateBetStatus(bet.id, 'error_logic_missing'); // Placeholder error
-}
-
-// --- Payout Job Handler ---
-// This function is called by the paymentProcessor queue for 'payout' jobs
-// It calls sendSol and handles the result (DB updates, user messages)
-async function handlePayoutJob(job) {
-     console.error("handlePayoutJob function needs to be implemented (in Part 3)");
-     // TODO: Implement payout logic (call sendSol, recordPayout, safeSendMessage) in Part 3
-     // Needs access to job details: betId, recipient, amount, gameType, chatId, displayName, memoId
-     await updateBetStatus(job.betId, 'error_logic_missing'); // Placeholder error
-     // NOTE: Need to re-throw error here if payout fails within this function
-     // so that the processJob retry logic can catch it.
-     // Example:
-     // const sendResult = await sendSol(...);
-     // if (!sendResult.success) {
-     //    await updateBetStatus(...)
-     //    await safeSendMessage(...)
-     //    throw new Error(sendResult.error || 'Payout failed'); // Re-throw for retry mechanism
-     // }
-     // await recordPayout(...);
-     // await safeSendMessage(...);
-}
-
-
 // --- Utility Functions ---
 
 // Calculates payout amount, applying house edge. Returns BigInt lamports.
