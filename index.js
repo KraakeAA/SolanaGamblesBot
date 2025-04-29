@@ -1363,7 +1363,7 @@ class GuaranteedPaymentProcessor {
         try {
             let result;
             if (job.type === 'monitor_payment') {
-                result = await this.processIncomingPayment(job.signature, job.walletType);
+                result = await this.processIncomingPayment(job.signature, job.walletType); // Updated to use the correct method
             } else if (job.type === 'process_bet') {
                 const bet = await pool.query('SELECT * FROM bets WHERE id = $1', [job.betId]).then(res => res.rows[0]);
                 if (bet) {
