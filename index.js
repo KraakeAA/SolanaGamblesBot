@@ -2259,9 +2259,19 @@ async function handleSlotsGame(bet) {
     for (let i = 0; i < SLOTS_REEL_LENGTH; i++) {
         results.push(spinReel(reelStrip)); // Get 3 symbol keys
     }
-    const resultEmojis = results.map(key => SLOTS_SYMBOLS[key].emoji).join(' | '); // e.g., 🍒 | 7️⃣ | ➖
-    console.log(`${logPrefix}: Spin result: ${resultEmojis} (${results.join(',')})`);
 
+      // --- CORRECTED SECTION ---
+    // 1. Create the initial result string with pipe separators using 'let'
+    let resultEmojis = results.map(key => SLOTS_SYMBOLS[key].emoji).join(' | ');
+
+    // 2. NOW escape the pipe characters in that string for MarkdownV2
+    resultEmojis = resultEmojis.replace(/\|/g, '\\|');
+
+    // 3. Log the result (optional: log the escaped version for display confirmation)
+    // console.log(`${logPrefix}: Spin result symbols: ${results.join(',')}`); // Log raw symbols if preferred
+    console.log(`${logPrefix}: Spin result display: ${resultEmojis}`); // Log escaped string
+    // --- END CORRECTED SECTION ---
+   
     // --- Determine Win ---
     let winMultiplier = 0; // Base payout multiplier (0 = loss)
     let winDescription = "No Win";
@@ -2312,7 +2322,8 @@ async function handleSlotsGame(bet) {
 
     // --- Send Result Message ---
      let resultMessage = `🎰 *Slots Result* for ${displayName} \\!\n\n` +
-                         `*Result:* ${resultEmojis}\n\n`;
+                         `*Result:* ${resultEmojis}\n\n`; // This now uses the string with escaped pipes
+
 
     if (win) {
         resultMessage += `🎉 *${escapeMarkdownV2(winDescription)}* You won ${escapeMarkdownV2(payoutSOL.toFixed(6))} SOL\\!`;
