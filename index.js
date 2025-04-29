@@ -1041,168 +1041,168 @@ async function recordPayout(betId, status, signature) {
 
 /**
  * Analyzes a transaction to find SOL transfers to the target bot wallet.
- * @param {import('@solana/web3.js').ParsedTransactionWithMeta | import('@solana/web3.js').VersionedTransactionResponse | null} tx - The transaction object.
+ * CORRECTED: Checks both top-level and inner instructions for transfers.
+ * @param {import('@solana/web3.js').ParsedTransactionWithMeta | import('@solana/web3.js').VersionedTransactionResponse | null} tx - The transaction object from getParsedTransaction.
  * @param {'coinflip' | 'race'} walletType - The type of wallet to check against (determines target address).
  * @returns {{ transferAmount: bigint, payerAddress: string | null }} The transfer amount in lamports and the detected payer address.
  */
 function analyzeTransactionAmounts(tx, walletType) {
-    // ... (implementation remains unchanged - uses balance diffs, instruction parsing fallback) ...
-    let transferAmount = 0n; // Use BigInt for lamports
+    let transferAmount = 0n;
     let payerAddress = null;
     const targetAddress = walletType === 'coinflip'
         ? process.env.MAIN_WALLET_ADDRESS
         : process.env.RACE_WALLET_ADDRESS;
 
-    if (!tx || tx.meta?.err) {
-        return { transferAmount: 0n, payerAddress: null }; // Ignore failed/missing transactions
+    // Basic validation: Ensure we have a successful transaction and target address
+    if (!tx || tx.meta?.err || !targetAddress) {
+        return { transferAmount: 0n, payerAddress: null };
     }
 
-    // Function to safely get account keys as Base58 strings
+    // Helper to safely get account keys as Base58 strings from message
     const getAccountKeys = (message) => {
         try {
-            if (message.getAccountKeys) { // VersionedMessage
+            if (!message) return [];
+            if (message.getAccountKeys) { // VersionedMessage v0
                 const accounts = message.getAccountKeys();
+                // Note: For full analysis involving Address Lookup Tables (ALTs),
+                // you would need the 'loadedAddresses' from getTransaction response.
+                // For finding simple transfers, static keys are usually sufficient.
                 return accounts.staticAccountKeys.map(k => k.toBase58());
-                 // Potentially add resolved lookup keys if needed later
-            } else if (message.accountKeys) { // Legacy Message
+            } else if (message.accountKeys) { // Legacy Message or VersionedMessage without ALTs
                 return message.accountKeys.map(k => k.toBase58 ? k.toBase58() : String(k));
             }
-        } catch (e) { console.error("Error parsing account keys in analyzeTransactionAmounts:", e.message); }
+        } catch (e) {
+            console.error("[analyzeAmounts] Error parsing account keys:", e.message);
+        }
         return [];
     };
 
-    // Check both pre and post balances for direct transfers
+    // --- 1. Try using balance changes (often reliable for direct transfers) ---
+    let balanceChange = 0n; // Store balance change separately
     if (tx.meta?.preBalances && tx.meta?.postBalances && tx.transaction?.message) {
         const accountKeys = getAccountKeys(tx.transaction.message);
         const targetIndex = accountKeys.indexOf(targetAddress);
 
         if (targetIndex !== -1 && tx.meta.preBalances[targetIndex] !== undefined && tx.meta.postBalances[targetIndex] !== undefined) {
-            const balanceChange = BigInt(tx.meta.postBalances[targetIndex]) - BigInt(tx.meta.preBalances[targetIndex]);
+            balanceChange = BigInt(tx.meta.postBalances[targetIndex]) - BigInt(tx.meta.preBalances[targetIndex]);
             if (balanceChange > 0n) {
-                transferAmount = balanceChange;
-                // Try to identify payer (fee payer is primary suspect)
-                 const feePayerIndex = 0; // Fee payer is always the first account
-                 if (accountKeys[feePayerIndex]) {
-                     const preFeePayerBalance = tx.meta.preBalances[feePayerIndex];
-                     const postFeePayerBalance = tx.meta.postBalances[feePayerIndex];
-                     if (preFeePayerBalance !== undefined && postFeePayerBalance !== undefined) {
-                         const feePayerChange = BigInt(postFeePayerBalance) - BigInt(preFeePayerBalance);
-                         // Check if fee payer lost roughly the amount + fee
-                          const fee = tx.meta.fee || 5000n; // Use actual fee or default
-                          if (feePayerChange <= -(transferAmount - BigInt(fee))) { // More accurate check
-                              payerAddress = accountKeys[feePayerIndex];
-                          }
-                     }
-                 }
+                transferAmount = balanceChange; // Assume this is the transfer amount initially
+                // console.log(`[analyzeAmounts] Detected balance change: +${transferAmount} lamports for ${targetAddress}`); // Debug log
 
-                // Fallback: Look for other signers if fee payer wasn't identified
-                // Note: This is less reliable as signers might just be approving other actions
+                // Try to identify payer using balance changes (heuristic)
+                const feePayerIndex = 0; // Fee payer is always the first account
+                if (accountKeys[feePayerIndex]) {
+                    const preFeePayerBalance = tx.meta.preBalances[feePayerIndex];
+                    const postFeePayerBalance = tx.meta.postBalances[feePayerIndex];
+                    if (preFeePayerBalance !== undefined && postFeePayerBalance !== undefined) {
+                        const feePayerChange = BigInt(postFeePayerBalance) - BigInt(preFeePayerBalance);
+                        const fee = BigInt(tx.meta.fee || 5000n); // Use actual fee or default estimate
+                        // Check if fee payer lost *at least* the transferred amount (allowing for fee)
+                        if (feePayerChange <= -(transferAmount - fee)) {
+                            payerAddress = accountKeys[feePayerIndex];
+                        }
+                    }
+                }
+                // Fallback: Look for other signers if fee payer wasn't identified (less reliable)
                 if (!payerAddress && tx.transaction?.message?.header?.numRequiredSignatures > 1) {
-                    for (let i = 1; i < tx.transaction.message.header.numRequiredSignatures; i++) { // Start from 1 to skip fee payer
-                         if (!accountKeys[i]) continue;
-                         const preBalance = tx.meta.preBalances[i];
-                         const postBalance = tx.meta.postBalances[i];
-                         if (preBalance === undefined || postBalance === undefined) continue;
-                         const signerBalanceChange = BigInt(postBalance) - BigInt(preBalance);
-                         // Simple check: Did this signer lose at least the transfer amount?
-                          if (signerBalanceChange <= -transferAmount) {
-                              payerAddress = accountKeys[i];
-                              break;
-                          }
+                    for (let i = 1; i < tx.transaction.message.header.numRequiredSignatures; i++) {
+                        if (!accountKeys[i]) continue;
+                        const preBalance = tx.meta.preBalances[i];
+                        const postBalance = tx.meta.postBalances[i];
+                        if (preBalance === undefined || postBalance === undefined) continue;
+                        const signerBalanceChange = BigInt(postBalance) - BigInt(preBalance);
+                        // Simple check: did this signer lose at least the amount transferred?
+                        if (signerBalanceChange <= -transferAmount) {
+                            payerAddress = accountKeys[i];
+                            break; // Assume first signer found losing enough is the payer
+                        }
                     }
                 }
             }
         }
-    }
+    } // End balance check
 
-    // Fallback or supplement with instruction parsing (less reliable for exact amount)
-     if (transferAmount === 0n && tx.meta?.innerInstructions) { // Check inner instructions more reliably
-         const SYSTEM_PROGRAM_ID = SystemProgram.programId.toBase58();
-         const accountKeys = getAccountKeys(tx.transaction.message); // Get keys again if needed
+    // --- 2. Check instructions (top-level and inner) for SystemProgram transfers ---
+    // This acts as confirmation or primary source if balance diff was zero/ambiguous.
+    if (tx.transaction?.message) {
+        const accountKeys = getAccountKeys(tx.transaction.message); // Get account keys again if needed
+        const SYSTEM_PROGRAM_ID = SystemProgram.programId.toBase58();
 
-         for(const innerInstructionSet of tx.meta.innerInstructions) {
-            for (const inst of innerInstructionSet.instructions) {
-                 let programId = '';
-                 try {
-                     if (inst.programIdIndex !== undefined && accountKeys[inst.programIdIndex]) {
-                         programId = accountKeys[inst.programIdIndex];
-                     } else if (inst.programId) { // Handle ParsedInstruction format
-                          programId = typeof inst.programId === 'string' ? inst.programId : inst.programId.toBase58();
-                     }
-                 } catch { /* Ignore errors getting programId */ }
+        // Combine instructions for unified checking
+        const topLevelInstructions = tx.transaction.message.instructions || [];
+        const innerInstructionsNested = tx.meta?.innerInstructions || [];
 
-                 // Check for SystemProgram SOL transfers using parsed info
-                 if (programId === SYSTEM_PROGRAM_ID && inst.parsed?.type === 'transfer' && inst.parsed?.info) {
-                     const transferInfo = inst.parsed.info;
-                     if (transferInfo.destination === targetAddress) {
-                         const instructionAmount = BigInt(transferInfo.lamports || transferInfo.amount || 0);
-                         if (instructionAmount > 0n) {
-                             transferAmount = instructionAmount; // Prioritize instruction amount if balance diff was zero
-                             payerAddress = transferInfo.source; // Get payer from instruction
-                             // console.log(`[analyzeAmounts] Found transfer via instruction parse: ${transferAmount} from ${payerAddress}`);
-                             // Exit loops once found via instruction parse
-                             return { transferAmount, payerAddress };
-                         }
-                     }
-                 }
+        // Flatten inner instructions, adding index context if needed later
+        const allInstructions = [
+            ...topLevelInstructions.map(inst => ({ ...inst, type: 'topLevel' })), // Mark type
+            ...innerInstructionsNested.flatMap(innerSet =>
+                (innerSet.instructions || []).map(inst => ({ ...inst, type: 'inner', parentIndex: innerSet.index })) // Mark type
+            )
+        ];
+
+        for (const instWrapper of allInstructions) {
+            const inst = instWrapper; // The actual instruction object
+            let programId = '';
+            let parsedInfo = null;
+            let isParsedTransfer = false;
+
+            try {
+                // Get programId robustly
+                if ('programId' in inst) { // Typically ParsedInstruction or PartiallyDecodedInstruction (inner)
+                    programId = typeof inst.programId === 'string' ? inst.programId : inst.programId.toBase58();
+                } else if ('programIdIndex' in inst && accountKeys.length > inst.programIdIndex) { // TransactionInstruction (top-level)
+                    programId = accountKeys[inst.programIdIndex];
+                }
+
+                // Check if it's a SystemProgram transfer (check programId first)
+                if (programId === SYSTEM_PROGRAM_ID) {
+                    // Check if the instruction is already parsed by getParsedTransaction
+                    if ('parsed' in inst && inst.parsed?.type === 'transfer') {
+                        isParsedTransfer = true;
+                        parsedInfo = inst.parsed.info;
+                    }
+                    // Add manual decoding here ONLY IF necessary (if parsed info is often missing)
+                    // else if ('data' in inst && instWrapper.type === 'topLevel') {
+                    //     // Manual decode logic for SystemProgram.transfer from inst.data buffer
+                    // }
+                }
+
+                // If it's a parsed transfer instruction to our target address
+                if (isParsedTransfer && parsedInfo?.destination === targetAddress) {
+                    const instructionAmount = BigInt(parsedInfo.lamports || parsedInfo.amount || 0);
+
+                    if (instructionAmount > 0n) {
+                        // If balance diff was zero, OR if instruction amount matches balance diff,
+                        // trust the instruction details.
+                        if (transferAmount === 0n || instructionAmount === balanceChange) {
+                            transferAmount = instructionAmount; // Use instruction amount
+                            payerAddress = parsedInfo.source; // Trust instruction source as payer
+                            // console.log(`[analyzeAmounts] Confirmed transfer via INSTRUCTION: ${transferAmount} from ${payerAddress}`);
+                            // Found definitive transfer via instruction, can stop searching
+                            return { transferAmount, payerAddress };
+                        } else if (transferAmount > 0n && instructionAmount !== balanceChange) {
+                            // Ambiguous case: Balance change found different amount than instruction.
+                            // This is unusual. Log a warning. Typically balance change reflects the NET effect better.
+                            console.warn(`[analyzeAmounts] Ambiguous amounts found for target ${targetAddress}. Balance change: ${balanceChange}, Instruction amount: ${instructionAmount}. Using balance change amount.`);
+                            // Keep amount from balance change, but update payer if instruction found one and balance check didn't.
+                            if (!payerAddress && parsedInfo.source) {
+                                payerAddress = parsedInfo.source;
+                            }
+                            // Return the potentially ambiguous result (amount from balance, payer maybe from instruction)
+                            return { transferAmount, payerAddress };
+                        }
+                    }
+                } // end if parsed transfer to target
+            } catch(parseError) {
+                console.error(`[analyzeAmounts] Error processing instruction: ${parseError.message}`);
+                // Continue to next instruction
             }
-         }
-     }
+        } // End instruction loop
+    } // End instruction check block
 
-    // console.log(`Analyzed TX: Found ${transferAmount} lamports transfer from ${payerAddress || 'Unknown'} to ${targetAddress}`);
+    // Return final results after checking balances and instructions
+    // console.log(`Analyzed TX: Final result - Amount: ${transferAmount}, Payer: ${payerAddress || 'Unknown'}`);
     return { transferAmount, payerAddress };
-}
-
-// Tries to identify the primary payer of a transaction (heuristic)
-function getPayerFromTransaction(tx) {
-    // ... (implementation remains unchanged - uses fee payer, fallback to signers/balance change) ...
-    if (!tx || !tx.transaction?.message?.accountKeys || tx.transaction.message.accountKeys.length === 0) return null;
-
-    const message = tx.transaction.message;
-    // Helper to robustly extract PublicKey string
-     const getKeyString = (keyInfo) => {
-         try {
-              if (!keyInfo) return null;
-              if (keyInfo instanceof PublicKey) return keyInfo.toBase58();
-              if (keyInfo.pubkey instanceof PublicKey) return keyInfo.pubkey.toBase58();
-              if (typeof keyInfo.pubkey === 'string') return new PublicKey(keyInfo.pubkey).toBase58();
-              if (typeof keyInfo === 'string') return new PublicKey(keyInfo).toBase58();
-         } catch (e) { /* ignore invalid keys */ }
-         return null;
-     };
-
-     // Fee payer is always the first account listed
-     const feePayerAddress = getKeyString(message.accountKeys[0]);
-
-    if (feePayerAddress) {
-        try { return new PublicKey(feePayerAddress); } catch { /* ignore */ }
-    }
-
-    // Fallback logic (less reliable) - check signers and balance changes if meta is available
-     if (!tx.meta?.preBalances || !tx.meta?.postBalances) {
-         return null; // Cannot perform fallback without balances
-     }
-     const preBalances = tx.meta.preBalances;
-     const postBalances = tx.meta.postBalances;
-     const numRequiredSignatures = message.header?.numRequiredSignatures || 1;
-
-     for (let i = 0; i < Math.min(numRequiredSignatures, message.accountKeys.length); i++) {
-         if (i === 0 && feePayerAddress) continue; // Skip fee payer if already identified
-
-         const keyString = getKeyString(message.accountKeys[i]);
-         if (!keyString) continue;
-
-         // Check if balance decreased significantly
-         if (preBalances[i] !== undefined && postBalances[i] !== undefined) {
-             const balanceDiff = BigInt(preBalances[i]) - BigInt(postBalances[i]);
-              const fee = tx.meta.fee || 5000n; // Estimate fee
-              if (balanceDiff > fee) { // If balance decreased by more than the fee, likely a payer
-                  // console.log(`Identified potential payer by balance change: ${keyString}`);
-                  try { return new PublicKey(keyString); } catch { /* ignore */ }
-              }
-         }
-     }
-    return null; // Could not determine payer
 }
 
 
