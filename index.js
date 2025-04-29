@@ -1388,22 +1388,25 @@ async processJob(job) {
             while (retries > 0) {
                 try {
                     await handlePayoutJob(job);
+                    console.log(`[PAYOUT_SUCCESS] Bet ${job.betId} payout completed.`);
                     result = { processed: true };
-                    break; // Success, exit retry loop
+                    break;
                 } catch (err) {
                     retries--;
-                    console.error(`Payout attempt failed for bet ${job.betId}. Retries left: ${retries}. Error: ${err.message}`);
+                    const message = err?.message || '';
+                    console.warn(`[PAYOUT_RETRY] Attempt ${3 - retries} failed for bet ${job.betId}. Retries left: ${retries}. Error: ${message}`);
 
-                    // If error is NOT retryable, stop retrying immediately
+                    // Log isRetryableError decision
                     if (!isRetryableError(err)) {
-                        console.error(`Payout error not retryable. Skipping remaining retries for bet ${job.betId}.`);
+                        console.warn(`[PAYOUT_RETRY] Error not retryable for bet ${job.betId}. Aborting retries.`);
                         throw err;
                     }
 
                     if (retries > 0) {
-                        await new Promise(resolve => setTimeout(resolve, 8000)); // Wait 8 seconds before retry
+                        await new Promise(resolve => setTimeout(resolve, 8000)); // Retry delay of 8 seconds
                     } else {
-                        throw err; // Rethrow after all retries exhausted
+                        console.error(`[PAYOUT_RETRY] Final retry failed for bet ${job.betId}.`);
+                        throw err;
                     }
                 }
             }
@@ -1430,6 +1433,21 @@ async processJob(job) {
     } finally {
         this.activeProcesses.delete(jobKey);
     }
+}
+
+// Utility function to check retryable errors
+function isRetryableError(error) {
+    const msg = error?.message?.toLowerCase() || '';
+    const status = error?.response?.status || error?.statusCode;
+
+    const retryable =
+        msg.includes('timeout') ||
+        msg.includes('blockhash') ||
+        msg.includes('rate limit') ||
+        status === 429;
+
+    console.log(`[RETRY_CHECK] Error: "${msg}", Status: ${status} => Retryable: ${retryable}`);
+    return retryable;
 }
     // --- New Helper Methods from "Ultimate Fix" ---
 
