@@ -2790,71 +2790,74 @@ async function handleRaceCommand(msg) {
 }
 
 // --- NEW: /slots command (MarkdownV2) ---
+// --- Corrected /slots command (MarkdownV2) ---
 async function handleSlotsCommand(msg) {
     const config = GAME_CONFIG.slots;
-    const paylines = [ // Define paylines - using emojis for symbols
-        `🍒 Cherry \\| 🍒 Cherry \\| \\(Any\\) = ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[2])}:1`,
-        `7️⃣ Seven \\| \\(Any\\) \\| \\(Any\\) = 4:1`,
-        `🍒 Cherry \\| 🍒 Cherry \\| 🍒 Cherry = ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[3])}:1`,
-        `🍊 Orange \\| 🍊 Orange \\| 🍊 Orange = ${escapeMarkdownV2(SLOTS_SYMBOLS.ORANGE.payout[3])}:1`,
-        `🍫 BAR \\| 🍫 BAR \\| 🍫 BAR = ${escapeMarkdownV2(SLOTS_SYMBOLS.BAR.payout[3])}:1`,
-        `🎰 777 \\| 🎰 777 \\| 🎰 777 = ${escapeMarkdownV2(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}:1`
+    // Note: Ensure escapeMarkdownV2 is defined earlier in your file as provided before
+    const paylines = [
+        // Escape the payout numbers as well, just in case they generate decimals unexpectedly later
+        `🍒 Cherry \\| 🍒 Cherry \\| \\(Any\\) = ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[2])}\\:1`, // Escaped () and :
+        `7️⃣ Seven \\| \\(Any\\) \\| \\(Any\\) = 4\\:1`, // Escaped () and :
+        `🍒 Cherry \\| 🍒 Cherry \\| 🍒 Cherry = ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[3])}\\:1`, // Escaped :
+        `🍊 Orange \\| 🍊 Orange \\| 🍊 Orange = ${escapeMarkdownV2(SLOTS_SYMBOLS.ORANGE.payout[3])}\\:1`, // Escaped :
+        `🍫 BAR \\| 🍫 BAR \\| 🍫 BAR = ${escapeMarkdownV2(SLOTS_SYMBOLS.BAR.payout[3])}\\:1`,       // Escaped :
+        `🎰 777 \\| 🎰 777 \\| 🎰 777 = ${escapeMarkdownV2(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}\\:1` // Escaped :
     ];
 
     const message = `🎰 *777 Slots Game* 🎰\n\n` +
-                    `Spin the 3 reels and match symbols on the center line\\!\n\n`+
+                    `Spin the 3 reels and match symbols on the center line\\!\n\n`+ // Escaped !
                     `*Symbols:*\n`+
                     `🍒 Cherry, 🍊 Orange, 🍫 BAR, 7️⃣ Seven, 🎰 777, ➖ Blank\n\n` +
-                    `*Payouts (Odds:1):*\n` +
-                    paylines.map(line => `\\- ${line}`).join('\n') + `\n\n` + // Use map for payouts
+                    `*Payouts \\(Odds\\:1\\):*\n` + // Escaped () and :
+                    paylines.map(line => `\\- ${line}`).join('\n') + `\n\n` + // Added escape for list hyphen -
                     `*How to Play:*\n` +
-                    `\\- Type \`/betslots amount\` \\(e\\.g\\., \`/betslots 0\\.05\`\\)\n\n` + // Simplified bet command
+                    `\\- Type \`/betslots amount\` \\(e\\.g\\., \`/betslots 0\\.05\`\\)\n\n` + // Escaped - () . , .
                     `*Rules:*\n` +
-                    `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` +
-                    `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` +
-                    `\\- House Edge: ${escapeMarkdownV2((config.houseEdge * 100).toFixed(1))}% \\(applied to winnings\\)\n\n`+
-                    `You will be given a wallet address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to spin\\.`;
+                    `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` + // Escaped -
+                    `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` + // Escaped -
+                    `\\- House Edge: ${escapeMarkdownV2((config.houseEdge * 100).toFixed(1))}% \\(applied to winnings\\)\n\n`+ // Escaped - . % ()
+                    `You will be given a wallet address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to spin\\.`; // Escaped . .
 
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2' });
 }
 
-// --- NEW: /roulette command (MarkdownV2) ---
+// --- Corrected /roulette command (MarkdownV2) ---
 async function handleRouletteCommand(msg) {
     const config = GAME_CONFIG.roulette;
-    // Define payouts clearly (X:1 format)
+    // Note: Ensure escapeMarkdownV2 is defined earlier in your file as provided before
     const payouts = [
-        `Straight \\(1 number\\): 35:1`,
-        `Red / Black: 1:1`,
-        `Even / Odd: 1:1`,
-        `Low \\(1\\-18\\) / High \\(19\\-36\\): 1:1`,
-        `Dozen \\(1st, 2nd, 3rd 12\\): 2:1`,
-        `Column \\(1st, 2nd, 3rd\\): 2:1`
+        `Straight \\(1 number\\): 35\\:1`,           // Escaped () :
+        `Red / Black: 1\\:1`,                      // Escaped :
+        `Even / Odd: 1\\:1`,                       // Escaped :
+        `Low \\(1\\-18\\) / High \\(19\\-36\\): 1\\:1`, // Escaped () - - :
+        `Dozen \\(1st, 2nd, 3rd 12\\): 2\\:1`,        // Escaped () :
+        `Column \\(1st, 2nd, 3rd\\): 2\\:1`          // Escaped () :
     ];
-     // Define bet types for instructions
+     // Define bet types for instructions - Escaping needed within the backticks too for literal display
      const betTypes = [
-         '`S <number>` \\(Straight Up, e\\.g\\., `S 17`\\)',
-         '`R` \\(Red\\)', '`B` \\(Black\\)',
-         '`E` \\(Even\\)', '`O` \\(Odd\\)',
-         '`L` \\(Low 1\\-18\\)', '`H` \\(High 19\\-36\\)',
-         '`D1` \\(Dozen 1\\-12\\)', '`D2` \\(Dozen 13\\-24\\)', '`D3` \\(Dozen 25\\-36\\)',
-         '`C1` \\(Column 1\\)', '`C2` \\(Column 2\\)', '`C3` \\(Column 3\\)'
+         '`S <number>` \\(Straight Up, e\\.g\\., `S 17`\\)',                // Escaped () . , .
+         '`R` \\(Red\\)', '`B` \\(Black\\)',                                   // Escaped () ()
+         '`E` \\(Even\\)', '`O` \\(Odd\\)',                                    // Escaped () ()
+         '`L` \\(Low 1\\-18\\)', '`H` \\(High 19\\-36\\)',                     // Escaped () - () -
+         '`D1` \\(Dozen 1\\-12\\)', '`D2` \\(Dozen 13\\-24\\)', '`D3` \\(Dozen 25\\-36\\)', // Escaped () - () - () -
+         '`C1` \\(Column 1\\)', '`C2` \\(Column 2\\)', '`C3` \\(Column 3\\)'      // Escaped () () ()
      ];
 
-    const message = `⚪️ *European Roulette Game* ⚪️ \\(Single Zero\\)\n\n`+
-                    `Place your bets and spin the wheel\\!\n\n`+
-                    `*Available Bet Types & Payouts (Odds:1):*\n` +
-                    payouts.map(p => `\\- ${p}`).join('\n') + `\n\n` +
-                    `*How to Play (One Bet Type per Command):*\n`+
-                    `\\- Type \`/betroulette amount bet_type [value]\`\n`+
-                    `   \\(e\\.g\\., \`/betroulette 0\\.1 R\` to bet 0\\.1 SOL on Red\\)\n`+
-                    `   \\(e\\.g\\., \`/betroulette 0\\.02 S 17\` to bet 0\\.02 SOL on Straight 17\\)\n\n` +
+    const message = `⚪️ *European Roulette Game* ⚪️ \\(Single Zero\\)\n\n`+ // Escaped ()
+                    `Place your bets and spin the wheel\\!\n\n`+ // Escaped !
+                    `*Available Bet Types & Payouts \\(Odds\\:1\\):*\n` + // Escaped () :
+                    payouts.map(p => `\\- ${p}`).join('\n') + `\n\n` + // Added escape for list hyphen -
+                    `*How to Play \\(One Bet Type per Command\\):*\n`+ // Escaped ()
+                    `\\- Type \`/betroulette amount bet\\_type [value]\`\n`+ // Escaped - _
+                    `   \\(e\\.g\\., \`/betroulette 0\\.1 R\` to bet 0\\.1 SOL on Red\\)\n`+ // Escaped () . , . .
+                    `   \\(e\\.g\\., \`/betroulette 0\\.02 S 17\` to bet 0\\.02 SOL on Straight 17\\)\n\n` + // Escaped () . , . .
                     `*Bet Type Codes:*\n`+
-                    betTypes.map(t => `\\- ${t}`).join('\n') + `\n\n` +
+                    betTypes.map(t => `\\- ${t}`).join('\n') + `\n\n` + // Added escape for list hyphen -
                     `*Rules:*\n` +
-                    `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL \\(per bet type placed\\)\n` +
-                    `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL \\(total allowed per spin request\\)\n` +
-                    `\\- House Edge: ${escapeMarkdownV2((config.houseEdge * 100).toFixed(1))}% \\(applied to winnings\\)\n\n`+
-                    `You will be given a wallet address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to place your bet\\.`;
+                    `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL \\(per bet type placed\\)\n` + // Escaped - ()
+                    `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL \\(total allowed per spin request\\)\n` + // Escaped - ()
+                    `\\- House Edge: ${escapeMarkdownV2((config.houseEdge * 100).toFixed(1))}% \\(applied to winnings\\)\n\n`+ // Escaped - . % ()
+                    `You will be given a wallet address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to place your bet\\.`; // Escaped . .
 
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2' });
 }
