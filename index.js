@@ -1907,144 +1907,154 @@ async function monitorPayments() {
 /**
  * Sends SOL to a recipient, handling priority fees and confirmation.
  * Relies on RateLimitedConnection for underlying RPC calls.
+ * Includes added DEBUG logging.
  * @param {string | PublicKey} recipientPublicKey - The recipient's address.
- * @param {bigint} amountLamports - The amount to send in lamports.
+ * @param {bigint} amountLamports - The amount to send in lamports (SHOULD be BigInt).
  * @param {'coinflip' | 'race'} gameType - Determines which private key to use for sending.
  * @returns {Promise<{success: boolean, signature?: string, error?: string}>} Result object.
  */
 async function sendSol(recipientPublicKey, amountLamports, gameType) {
-    // ... (implementation remains largely unchanged - uses Keypair, builds TX, adds priority fee, uses sendAndConfirmTransaction) ...
-    // Key changes: Ensure robust error handling and logging.
     const operationId = `sendSol-${gameType}-${Date.now().toString().slice(-6)}`;
-    // console.log(`[${operationId}] Initiating. Recipient: ${recipientPublicKey}, Amount: ${amountLamports}`); // Reduce noise
+    console.log(`DEBUG_SENDSOL: ${operationId} - Entering function.`); // Log entry
+
+    // --- Log Input Parameter ---
+    console.log(`DEBUG_SENDSOL: ${operationId} - Received amountLamports = ${amountLamports} (Type: ${typeof amountLamports})`);
+    // ---
 
     const privateKeyEnvVar = gameType === 'coinflip' ? 'BOT_PRIVATE_KEY' : 'RACE_BOT_PRIVATE_KEY';
     const privateKey = process.env[privateKeyEnvVar];
+    // ... (checks for privateKey, recipientPublicKey validation - keep these) ...
     if (!privateKey) {
         console.error(`[${operationId}] ❌ ERROR: Missing private key env var ${privateKeyEnvVar}.`);
         return { success: false, error: `Missing private key for ${gameType}` };
     }
-
     let recipientPubKey;
     try {
-        recipientPubKey = (typeof recipientPublicKey === 'string')
-            ? new PublicKey(recipientPublicKey)
-            : recipientPublicKey;
+        recipientPubKey = (typeof recipientPublicKey === 'string') ? new PublicKey(recipientPublicKey) : recipientPublicKey;
         if (!(recipientPubKey instanceof PublicKey)) throw new Error("Invalid recipient public key type");
     } catch (e) {
         console.error(`[${operationId}] ❌ ERROR: Invalid recipient address format: "${recipientPublicKey}". Error: ${e.message}`);
         return { success: false, error: `Invalid recipient address: ${e.message}` };
     }
+    // ---
 
-    const amountToSend = BigInt(amountLamports);
-    if (amountToSend <= 0n) {
-        console.error(`[${operationId}] ❌ ERROR: Payout amount ${amountLamports} is zero or negative.`);
-        return { success: false, error: 'Payout amount is zero or negative' };
+    // --- Convert and Validate Amount ---
+    let amountToSend;
+    try {
+        amountToSend = BigInt(amountLamports); // Convert parameter just in case it wasn't BigInt
+        console.log(`DEBUG_SENDSOL: ${operationId} - Converted amountToSend = ${amountToSend} (Type: ${typeof amountToSend})`);
+        if (amountToSend <= 0n) {
+            console.error(`[${operationId}] ❌ ERROR: Payout amount ${amountToSend} is zero or negative.`);
+            return { success: false, error: 'Payout amount is zero or negative' };
+        }
+    } catch (e) {
+        // Catch error converting amountLamports parameter specifically
+        console.error(`[${operationId}] ❌ ERROR: Failed to convert input amountLamports '${amountLamports}' to BigInt. Error: ${e.message}`);
+        // Is THIS where the NaN error actually happens?
+        if (e instanceof SyntaxError && e.message.includes("Cannot convert NaN to a BigInt")) {
+             console.error(`DEBUG_SENDSOL: ${operationId} - CONFIRMED NaN to BigInt error during initial amount conversion!`);
+        }
+        return { success: false, error: `Invalid payout amount format: ${e.message}` };
     }
-    const amountSOL = Number(amountToSend) / LAMPORTS_PER_SOL;
-    // console.log(`[${operationId}] Amount: ${amountToSend} lamports (${amountSOL.toFixed(6)} SOL)`); // Reduce noise
+    // ---
 
-    // Calculate dynamic priority fee
+    const amountSOL = Number(amountToSend) / LAMPORTS_PER_SOL;
+
+    // --- Calculate and Log Priority Fee Components ---
     const basePriorityFee = parseInt(process.env.PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS || '1000', 10);
     const maxPriorityFee = parseInt(process.env.PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS || '1000000', 10);
-    const priorityFeeRate = parseFloat(process.env.PAYOUT_PRIORITY_FEE_RATE); // Already parsed/validated
-    const calculatedFee = Math.floor(Number(amountToSend) * priorityFeeRate);
+    // PRIORITY_FEE_RATE constant is defined globally, assume it's correct (0.0001)
+    const calculatedFee = Math.floor(Number(amountToSend) * PRIORITY_FEE_RATE);
     const priorityFeeMicroLamports = Math.max(basePriorityFee, Math.min(calculatedFee, maxPriorityFee));
-    // console.log(`[${operationId}] Calculated priority fee: ${priorityFeeMicroLamports} microLamports`); // Reduce noise
+
+    console.log(`DEBUG_SENDSOL: ${operationId} - Fee Params: base=${basePriorityFee}, max=${maxPriorityFee}, rate=${PRIORITY_FEE_RATE}`);
+    console.log(`DEBUG_SENDSOL: ${operationId} - Fee Calcs: calculated=${calculatedFee}, finalMicroLamports=${priorityFeeMicroLamports}`);
+
+    // Check if any fee component resulted in NaN
+    if (isNaN(basePriorityFee) || isNaN(maxPriorityFee) || isNaN(calculatedFee) || isNaN(priorityFeeMicroLamports)) {
+        console.error(`[${operationId}] ❌ ERROR: NaN detected during priority fee calculation! base=${basePriorityFee}, max=${maxPriorityFee}, calc=${calculatedFee}, final=${priorityFeeMicroLamports}`);
+        return { success: false, error: 'Failed to calculate priority fee (NaN result)' };
+    }
+    // --- End Fee Calculation/Logging ---
 
     try {
+        console.log(`DEBUG_SENDSOL: ${operationId} - Entering transaction build/send block...`); // Log before try
         const payerWallet = Keypair.fromSecretKey(bs58.decode(privateKey));
-        // console.log(`[${operationId}] Payer wallet loaded: ${payerWallet.publicKey.toBase58()}`); // Reduce noise
 
-        // Get latest blockhash (uses RateLimitedConnection internally)
-        // console.log(`[${operationId}] Fetching latest blockhash ('confirmed')...`); // Reduce noise
         const latestBlockhash = await solanaConnection.getLatestBlockhash('confirmed');
         if (!latestBlockhash || !latestBlockhash.blockhash || !latestBlockhash.lastValidBlockHeight) {
             throw new Error('Failed to get valid latest blockhash object from RPC.');
         }
-        // console.log(`[${operationId}] Got blockhash: ${latestBlockhash.blockhash}, Last Valid Block Height: ${latestBlockhash.lastValidBlockHeight}`); // Reduce noise
 
         // Build transaction
         const transaction = new Transaction({
             recentBlockhash: latestBlockhash.blockhash,
             feePayer: payerWallet.publicKey
         });
-        transaction.add(
-            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports })
-        );
-        // Optional: Add compute limit if needed, though usually not for simple transfers
-        // const computeUnits = parseInt(process.env.PAYOUT_COMPUTE_UNITS || '200000', 10); // Default 200k for safety
-        // transaction.add(ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }));
 
+        console.log(`DEBUG_SENDSOL: ${operationId} - Adding ComputeUnitPrice: ${priorityFeeMicroLamports}`); // Log value being added
+        transaction.add(
+            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports }) // Pass number
+        );
+
+        console.log(`DEBUG_SENDSOL: ${operationId} - Adding Transfer: Recipient=${recipientPubKey.toBase58()}, Lamports=${amountToSend}`); // Log values being added
         transaction.add(
             SystemProgram.transfer({
                 fromPubkey: payerWallet.publicKey,
                 toPubkey: recipientPubKey,
-                lamports: amountToSend
+                lamports: amountToSend // Pass BigInt
             })
         );
-        // console.log(`[${operationId}] Transaction built.`); // Reduce noise
 
-        // Send and confirm transaction with timeout
-        const confirmationTimeoutMs = parseInt(process.env.PAYOUT_CONFIRM_TIMEOUT_MS || '60000', 10); // 60s timeout default
-        // console.log(`[${operationId}] Calling sendAndConfirmTransaction (Timeout: ${confirmationTimeoutMs / 1000}s)...`); // Reduce noise
+        const confirmationTimeoutMs = parseInt(process.env.PAYOUT_CONFIRM_TIMEOUT_MS || '60000', 10);
+        console.log(`DEBUG_SENDSOL: ${operationId} - Calling sendAndConfirmTransaction...`); // Log before send
 
         const signature = await sendAndConfirmTransaction(
-            solanaConnection, // Use the rate-limited connection
+            solanaConnection,
             transaction,
             [payerWallet],
             {
-                commitment: 'confirmed', // Wait for 'confirmed'
-                skipPreflight: false,    // Perform preflight checks
-                // maxRetries for sendAndConfirm relates to resending/status checks, not initial RPC call retries (handled by connection)
+                commitment: 'confirmed',
+                skipPreflight: false,
                 maxRetries: parseInt(process.env.SCT_MAX_RETRIES || '3', 10),
-                preflightCommitment: 'confirmed', // Match commitment
-                lastValidBlockHeight: latestBlockhash.lastValidBlockHeight, // Provide block height
-                confirmTransactionInitialTimeout: confirmationTimeoutMs // Set timeout directly if library supports it (check version)
+                preflightCommitment: 'confirmed',
+                lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+                // confirmTransactionInitialTimeout: confirmationTimeoutMs // Use if supported, otherwise rely on default/outer timeout
             }
         );
-        // Note: If confirmTransactionInitialTimeout isn't supported, use Promise.race as before.
-        // Assuming it is supported for simplicity here.
 
-        // If it succeeds:
         console.log(`[${operationId}] SUCCESS! ✅ Sent ${amountSOL.toFixed(6)} SOL to ${recipientPubKey.toBase58()}. TX: ${signature.slice(0,10)}...`);
         return { success: true, signature };
 
-    } catch (error) {
-        console.error(`[${operationId}] ❌ SEND FAILED. Error:`, error.message);
-        // Log simulation logs if available
+    } catch (error) { // Catch errors during TX build or send/confirm
+        // Log the error *here* where it's caught inside sendSol
+        console.error(`DEBUG_SENDSOL: ${operationId} - Error caught inside try block:`, error); // Log the full error object if possible
+        console.error(`[${operationId}] ❌ SEND FAILED. Error message:`, error.message); // Log the specific message
+
+        // Check if THIS is where the BigInt/NaN error occurs
+        if (error instanceof Error && error.message.includes("Cannot convert NaN to a BigInt")) {
+             console.error(`DEBUG_SENDSOL: ${operationId} - CONFIRMED NaN to BigInt error caught within sendSol try block!`);
+        }
+
+        // ... (rest of error handling logic: simulation logs, classifying error type) ...
          if (error.logs) {
              console.error(`[${operationId}] Simulation Logs:`);
-             error.logs.slice(-10).forEach(log => console.error(`   -> ${log}`)); // Log last 10 lines
-         } else if (error.toString().includes("Transaction simulation failed")) {
-             // Try to fetch transaction to get logs if simulation failed but error object lacks logs
-             // (This is complex and may not always work)
+             error.logs.slice(-10).forEach(log => console.error(`   -> ${log}`));
          }
-
-        // Determine more specific error cause if possible
         const errorMsg = error.message.toLowerCase();
-        let returnError = error.message; // Default to original message
+        let returnError = error.message;
+        // Classify error... (same logic as before)
+        if (errorMsg.includes('insufficient funds')) { returnError = 'Insufficient funds in payout wallet.'; }
+        else if (errorMsg.includes('blockhash not found') || errorMsg.includes('blockhash expired')) { returnError = 'Transaction expired (blockhash not found). Retryable.'; }
+        else if (errorMsg.includes('transaction was not confirmed') || errorMsg.includes('timed out')) { returnError = `Transaction confirmation timeout (${confirmationTimeoutMs / 1000}s). May succeed later.`;}
+        else if (errorMsg.includes('custom program error') || errorMsg.includes('invalid account data')) { returnError = `Permanent chain error: ${error.message}`; }
+        else if (isRetryableError(error)) { returnError = `Temporary network/RPC error: ${error.message}`; }
+        else { returnError = `Send/Confirm error: ${error.message}`; }
 
-        if (errorMsg.includes('insufficient funds')) {
-            returnError = 'Insufficient funds in payout wallet.';
-            // TODO: Add admin notification for low balance
-        } else if (errorMsg.includes('blockhash not found') || errorMsg.includes('blockhash expired')) {
-            returnError = 'Transaction expired (blockhash not found). Retryable.';
-        } else if (errorMsg.includes('transaction was not confirmed') || errorMsg.includes('timed out')) {
-            returnError = `Transaction confirmation timeout (${confirmationTimeoutMs / 1000}s). May succeed later.`;
-            // Don't assume permanent failure here, might need manual check or reconciliation later
-        } else if (errorMsg.includes('custom program error') || errorMsg.includes('invalid account data')) {
-            returnError = `Permanent chain error: ${error.message}`;
-        } else if (isRetryableError(error)) { // Check against general retryable network/RPC errors
-             returnError = `Temporary network/RPC error: ${error.message}`;
-        } else {
-            returnError = `Send/Confirm error: ${error.message}`; // Generic fallback
-        }
 
         return { success: false, error: returnError };
     }
 }
-
 
 // --- Game Processing Logic ---
 
