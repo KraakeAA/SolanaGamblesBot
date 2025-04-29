@@ -1349,60 +1349,88 @@ class GuaranteedPaymentProcessor {
         });
     }
 
-    // Wrapper to handle job execution, retries, and error logging
-    async processJob(job) {
-        const jobIdentifier = job.signature || job.betId;
-        if (jobIdentifier && this.activeProcesses.has(jobIdentifier)) {
-            // console.warn(`Job for identifier ${jobIdentifier} already active, skipping duplicate.`); // Reduce noise
-            return;
-        }
-        if (jobIdentifier) this.activeProcesses.add(jobIdentifier);
+    // Adds a job to the appropriate queue based on priority
+async addPaymentJob(job) {
+    const queue = (job.priority && job.priority > 0) ? this.highPriorityQueue : this.normalQueue;
+    queue.add(() => this.processJob(job)).catch(queueError => {
+        console.error(`Queue error processing job ${job.type} (${job.signature || job.betId || 'N/A'}):`, queueError.message);
+        performanceMonitor.logRequest(false);
+    });
+}
 
-        try {
-            let result;
-            if (job.type === 'monitor_payment') {
-                result = await this._processIncomingPayment(job.signature, job.walletType);
-            } else if (job.type === 'process_bet') {
-                // Game processing logic remains separate
-                // Ensure we fetch the bet row needed by processPaidBet
-                const bet = await pool.query('SELECT * FROM bets WHERE id = $1', [job.betId]).then(res => res.rows[0]);
-                if (bet) {
-                    await processPaidBet(bet); // Trigger game logic processing
-                    result = { processed: true };
-                } else {
-                    console.error(`Cannot process bet: Bet ID ${job.betId} not found.`);
-                    result = { processed: false, reason: 'bet_not_found' };
-                }
-            } else if (job.type === 'payout') {
-                // Payout logic remains separate
-                await handlePayoutJob(job); // Trigger payout logic
+// Wrapper to handle job execution, retries, and error logging
+async processJob(job) {
+    const jobIdentifier = job.signature || job.betId;
+    const jobKey = `${job.type}:${jobIdentifier}`; // Unique key per job type + identifier
+
+    if (this.activeProcesses.has(jobKey)) {
+        console.warn(`[PROCESS_JOB] Skipped duplicate job: ${jobKey}`);
+        return;
+    }
+    this.activeProcesses.add(jobKey);
+
+    try {
+        let result;
+        if (job.type === 'monitor_payment') {
+            result = await this._processIncomingPayment(job.signature, job.walletType);
+        } else if (job.type === 'process_bet') {
+            const bet = await pool.query('SELECT * FROM bets WHERE id = $1', [job.betId]).then(res => res.rows[0]);
+            if (bet) {
+                await processPaidBet(bet);
                 result = { processed: true };
             } else {
-                console.error(`Unknown job type: ${job.type}`);
-                result = { processed: false, reason: 'unknown_job_type'};
+                console.error(`Cannot process bet: Bet ID ${job.betId} not found.`);
+                result = { processed: false, reason: 'bet_not_found' };
             }
-            performanceMonitor.logRequest(true);
-            return result;
-        } catch (error) {
-            performanceMonitor.logRequest(false);
-            console.error(`Error processing job type ${job.type} for identifier ${jobIdentifier || 'N/A'} in processJob:`, error.message, error.stack);
-            // Retries handled internally by _methods
-            console.error(`Job failed permanently for identifier: ${jobIdentifier}`, error);
-             // Update bet status to an error state if applicable
-             if(job.betId && job.type !== 'monitor_payment' && !(error?.reason?.includes('already_processed'))) { // Avoid overwriting status if already handled
-                 const errorStatus = `error_${job.type}_failed`;
-                 await updateBetStatus(job.betId, errorStatus);
-                 console.log(`Set bet ${job.betId} status to ${errorStatus} due to job failure.`);
-             }
-             return { processed: false, reason: error.message }; // Return failure reason
+        } else if (job.type === 'payout') {
+            // --- Smart retry logic for payout jobs ---
+            let retries = 3;
+            while (retries > 0) {
+                try {
+                    await handlePayoutJob(job);
+                    result = { processed: true };
+                    break; // Success, exit retry loop
+                } catch (err) {
+                    retries--;
+                    console.error(`Payout attempt failed for bet ${job.betId}. Retries left: ${retries}. Error: ${err.message}`);
 
-        } finally {
-            if (jobIdentifier) {
-                this.activeProcesses.delete(jobIdentifier);
+                    // If error is NOT retryable, stop retrying immediately
+                    if (!isRetryableError(err)) {
+                        console.error(`Payout error not retryable. Skipping remaining retries for bet ${job.betId}.`);
+                        throw err;
+                    }
+
+                    if (retries > 0) {
+                        await new Promise(resolve => setTimeout(resolve, 8000)); // Wait 8 seconds before retry
+                    } else {
+                        throw err; // Rethrow after all retries exhausted
+                    }
+                }
             }
+            // --- End retry logic ---
+        } else {
+            console.error(`Unknown job type: ${job.type}`);
+            result = { processed: false, reason: 'unknown_job_type' };
         }
-    }
 
+        performanceMonitor.logRequest(true);
+        return result;
+    } catch (error) {
+        performanceMonitor.logRequest(false);
+        console.error(`Error processing job type ${job.type} for identifier ${jobIdentifier || 'N/A'} in processJob:`, error.message, error.stack);
+        console.error(`Job failed permanently for identifier: ${jobIdentifier}`, error);
+
+        if (job.betId && job.type !== 'monitor_payment' && !(error?.reason?.includes('already_processed'))) {
+            const errorStatus = `error_${job.type}_failed`;
+            await updateBetStatus(job.betId, errorStatus);
+            console.log(`Set bet ${job.betId} status to ${errorStatus} due to job failure.`);
+        }
+
+        return { processed: false, reason: error.message };
+    } finally {
+        this.activeProcesses.delete(jobKey);
+    }
+}
     // --- New Helper Methods from "Ultimate Fix" ---
 
     // Main entry point for processing a detected signature
