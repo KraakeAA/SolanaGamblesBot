@@ -3145,6 +3145,22 @@ async function handleBetSlotsCommand(msg, args) {
     await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
+// --- NEW: /betroulette command (MarkdownV2) ---
+async function handleBetRouletteCommand(msg, args) {
+    // Expects: amount type [value] e.g. "0.1 R", "0.05 S 17", "0.2 D1"
+    const match = args.trim().match(/^(\d+\.?\d*)\s+([A-Z])(?:([1-3])|(?:([1-9]|[12]\d|3[0-6])))?$/i); // Complex regex to capture type and optional value
+    // Groups: 1: amount, 2: type (S,R,B,E,O,L,H,D,C), 3: dozen/column value (1-3), 4: straight up value (1-36, group 4 used for S)
+
+    if (!match) {
+        await safeSendMessage(msg.chat.id,
+            `⚠️ Invalid format\\. Use: \`/betroulette <amount> <type> [number]\`\n` +
+            `Type Codes: \`R\`, \`B\`, \`E\`, \`O\`, \`L\`, \`H\`, \`D1\`/\`D2\`/\`D3\`, \`C1\`/\`C2\`/\`C3\`, \`S <0-36>\`\n`+
+            `Examples: \`/betroulette 0\\.1 R\` \\| \`/betroulette 0\\.02 S 17\` \\| \`/betroulette 0\\.2 D1\``,
+            { parse_mode: 'MarkdownV2', disable_web_page_preview: true }
+        );
+        return;
+    }
+
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
     const config = GAME_CONFIG.roulette;
