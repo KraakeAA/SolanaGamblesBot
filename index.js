@@ -649,9 +649,6 @@ console.log("ℹ️ Game Config Loaded:", JSON.stringify(GAME_CONFIG)); // Log l
 
 // Fee buffer
 const FEE_BUFFER = BigInt(process.env.FEE_MARGIN);
-// Priority fee rate
-const PRIORITY_FEE_RATE = parseFloat(process.env.PAYOUT_PRIORITY_FEE_RATE); // Already validated
-
 // Helper function for MarkdownV2 escaping (use this consistently)
 const escapeMarkdownV2 = (text) => {
      if (typeof text !== 'string') text = String(text); // Convert non-strings
