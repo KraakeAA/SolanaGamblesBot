@@ -3140,22 +3140,21 @@ async function handleSlotsCommand(msg) {
 // --- CORRECTED /roulette command (MarkdownV2) ---
 async function handleRouletteCommand(msg) {
     const config = GAME_CONFIG.roulette;
-    // Use a single template literal and escape necessary hyphens
+    // Using template literal for clarity and careful MarkdownV2 escaping
     const message = `⚪️ *European Roulette Game* ⚪️
 
-Place bets on the outcome of the wheel spin \\(0\\-36\\)\\. // Escaped hyphen in range 0-36
+Place bets on the outcome of the wheel spin \\(numbers 0\\-36\\)\\.
 
-*Bet Types & Payouts \\(Odds N:1\\) \\- Payout is Stake * \\(N+1\\)*: // Escaped hyphen after Odds N:1)
-\\- *Straight* \\(\`S<number>\`, e\\.g\\. \`S17\`\\): 35:1
+*Bet Types & Payouts \\(Odds N:1\\) \\- Payout is Stake * \\(N\\+1\\)*:
+\\- *Straight* \\(Bet on one number, e\\.g\\. \`S17\`\\): 35:1
 \\- *Red* \\(\`R\`\\) \\/ *Black* \\(\`B\`\\): 1:1
 \\- *Even* \\(\`E\`\\) \\/ *Odd* \\(\`O\`\\): 1:1
-// Escaped hyphens in ranges 1-18 and 19-36
-\\- *Low* \\(\`L\`, 1\\-18\\) \\/ *High* \\(\`H\`, 19\\-36\\): 1:1
-\\- *Dozens* \\(\`D1\`\\/\`D2\`\\/\`D3\`\\): 2:1
-\\- *Columns* \\(\`C1\`\\/\`C2\`\\/\`C3\`\\): 2:1
+\\- *Low* \\(\`L\`, numbers 1\\-18\\) \\/ *High* \\(\`H\`, numbers 19\\-36\\): 1:1
+\\- *Dozens* \\(e\\.g\\. \`D1\` for 1\\-12, \`D2\` for 13\\-24, \`D3\` for 25\\-36\\): 2:1
+\\- *Columns* \\(e\\.g\\. \`C1\` for 1,4,7\\.\\.\\.34\\): 2:1
 
 *How to Play*:
-\\- Type \`/betroulette <amount> <bet_spec>\`
+\\- Type \`/betroulette <amount> <bet\\_spec>\`
   *\\(e\\.g\\., \`/betroulette 0.1 R\`\\)*
   *\\(e\\.g\\., \`/betroulette 0.05 S17\`\\)*
   *\\(e\\.g\\., \`/betroulette 0.2 D1\`\\)*
@@ -3167,6 +3166,7 @@ Place bets on the outcome of the wheel spin \\(0\\-36\\)\\. // Escaped hyphen in
 
 You will be given a wallet address and a *unique Memo ID* for each bet placement\\. Send the *exact* SOL amount with the memo\\.`;
 
+    // Send the message using the safe sender function with MarkdownV2 parse mode
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 // /wallet command (MarkdownV2)
