@@ -1923,6 +1923,12 @@ let isMonitorRunning = false;
 const botStartupTime = Math.floor(Date.now() / 1000);
 let monitorIntervalId = null;
 
+// --- Payment Monitoring Loop ---
+// (Includes stagger delay between wallet checks)
+let isMonitorRunning = false;
+const botStartupTime = Math.floor(Date.now() / 1000);
+let monitorIntervalId = null;
+
 async function monitorPayments() {
     if (isMonitorRunning) return;
     if (!isFullyInitialized) return; // Don't run if bot isn't ready
@@ -1931,6 +1937,7 @@ async function monitorPayments() {
     const startTime = Date.now();
     let signaturesFoundThisCycle = 0;
     let signaturesQueuedThisCycle = 0;
+    const WALLET_CHECK_DELAY_MS = 500; // Delay in ms between checking each wallet
 
     try {
         // Optional Throttling based on Payment Processor Queue Load
@@ -1954,14 +1961,22 @@ async function monitorPayments() {
              { envVar: 'WAR_WALLET_ADDRESS',      type: 'war',      priority: 0 },
         ];
 
+        let walletIndex = 0; // Keep track of index for delay
         for (const walletInfo of monitoredWallets) {
             const walletAddress = process.env[walletInfo.envVar];
             if (!walletAddress) {
                 // console.warn(`[Monitor] Skipping wallet type ${walletInfo.type} - address env var ${walletInfo.envVar} not configured.`);
-                continue;
+                continue; // Skip if this wallet address isn't set in env
             }
 
-             // Add jitter
+            // *** ADDED DELAY between wallet checks ***
+            if (walletIndex > 0) { // Don't delay before the *first* check in a cycle
+                await new Promise(resolve => setTimeout(resolve, WALLET_CHECK_DELAY_MS));
+            }
+            walletIndex++; // Increment index after check
+            // *** END ADDED DELAY ***
+
+             // Add jitter (keep existing jitter per wallet)
              const jitter = Math.random() * (parseInt(process.env.MONITOR_WALLET_JITTER_MS, 10));
              await new Promise(resolve => setTimeout(resolve, jitter));
 
@@ -1971,13 +1986,15 @@ async function monitorPayments() {
                 // Fetch only confirmed signatures to align with payment processing checks
                 const options = { limit: fetchLimit, commitment: 'confirmed' };
 
+                console.log(`[Monitor] Fetching signatures for ${walletInfo.type} wallet: ${walletAddress.slice(0,6)}...`); // Log which wallet is being checked
                 signaturesForWallet = await solanaConnection.getSignaturesForAddress(
                     new PublicKey(walletAddress),
                     options
                 );
+                // console.log(`[Monitor] Found ${signaturesForWallet?.length ?? 0} signatures for ${walletInfo.type}.`); // Optional verbose log
 
                 if (!signaturesForWallet || signaturesForWallet.length === 0) {
-                    continue; // No signatures found for this wallet
+                    continue; // No signatures found for this wallet in this cycle
                 }
 
                 signaturesFoundThisCycle += signaturesForWallet.length;
@@ -2016,6 +2033,7 @@ async function monitorPayments() {
                 // Process oldest first within the fetched batch to maintain order
                 recentSignatures.reverse();
 
+                // console.log(`[Monitor] Queuing ${recentSignatures.length} recent signatures for ${walletInfo.type}.`); // Optional verbose log
                 for (const sigInfo of recentSignatures) {
                     // Double check cache/active just before adding
                     if (processedSignaturesThisSession.has(sigInfo.signature)) continue;
@@ -2033,12 +2051,15 @@ async function monitorPayments() {
                 } // End loop through signatures
 
             } catch (error) {
+                // Log errors more specifically
                 console.error(`[Monitor] Error fetching/processing signatures for wallet ${walletAddress} (${walletInfo.type}):`, error.message);
-                performanceMonitor.logRequest(false); // Log error for monitoring
-                 // Check if the error is retryable or suggests an RPC issue
-                 if (!isRetryableError(error)) {
-                     console.warn(`[Monitor] Non-retryable error for wallet ${walletAddress}. Consider checking RPC health.`);
+                performanceMonitor.logRequest(false); // Log error for monitoring general performance
+                 if (error.message.includes('long-term storage')) {
+                     console.warn(`[Monitor] RPC Node Storage Error for ${walletInfo.type} wallet. Consider checking RPC node health/history support.`);
+                 } else if (!isRetryableError(error)) { // Log other non-retryable errors distinctly
+                      console.warn(`[Monitor] Non-retryable RPC error for ${walletInfo.type} wallet. Error: ${error.message}`);
                  }
+                 // Let RateLimitedConnection handle retries internally for retryable errors
             }
         } // End loop through wallets
 
@@ -2048,8 +2069,8 @@ async function monitorPayments() {
     } finally {
         isMonitorRunning = false; // Release the lock
         const duration = Date.now() - startTime;
-        if (signaturesFoundThisCycle > 0 || duration > 1500) { // Log if work was done or took long
-            // console.log(`[Monitor] Cycle completed in ${duration}ms. Found:${signaturesFoundThisCycle}. Queued:${signaturesQueuedThisCycle}.`); // Reduce noise
+        if (signaturesFoundThisCycle > 0 || duration > (parseInt(process.env.MONITOR_INTERVAL_SECONDS, 10) * 1000 / 2) ) { // Log if work was done or took significant time
+             console.log(`[Monitor] Cycle completed in ${duration}ms. Found:${signaturesFoundThisCycle}. Queued:${signaturesQueuedThisCycle}.`); // More informative log
         }
     }
 }
