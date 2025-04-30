@@ -2914,17 +2914,17 @@ async function handleRouletteGame(bet) {
 }
 
 
-// --- Casino War Game Logic --- (NEW)
+// --- Casino War Game Logic --- (NEW - Updated with Suits)
 async function handleWarGame(bet) {
     const { id: betId, user_id, chat_id, expected_lamports, memo_id } = bet;
     const config = GAME_CONFIG.war;
     const logPrefix = `War Bet ${betId} (${memo_id.slice(0, 6)}...)`;
 
-    // Simulate dealing cards (Ace = 14)
+    // Define ranks and suits
     const cardValues = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]; // J=11, Q=12, K=13, A=14
-    const playerCardRank = cardValues[Math.floor(Math.random() * cardValues.length)];
-    const dealerCardRank = cardValues[Math.floor(Math.random() * cardValues.length)];
+    const suits = ['♠️', '♥️', '♦️', '♣️']; // Suit emojis
 
+    // Helper function to get rank string
     function cardRankToString(rank) {
         if (rank <= 10) return rank.toString();
         if (rank === 11) return 'J';
@@ -2933,10 +2933,23 @@ async function handleWarGame(bet) {
         if (rank === 14) return 'A';
         return '?';
     }
-    const playerCardStr = cardRankToString(playerCardRank);
-    const dealerCardStr = cardRankToString(dealerCardRank);
 
-    // Determine outcome & gross winnings
+    // "Deal" cards with rank and suit
+    const playerCardRank = cardValues[Math.floor(Math.random() * cardValues.length)];
+    const playerSuit = suits[Math.floor(Math.random() * suits.length)];
+    const playerCardStr = cardRankToString(playerCardRank) + playerSuit; // e.g., "K♠️"
+
+    let dealerCardRank;
+    let dealerSuit;
+    // Ensure dealer doesn't get the *exact* same card if ranks are equal (though it doesn't affect game outcome)
+    do {
+        dealerCardRank = cardValues[Math.floor(Math.random() * cardValues.length)];
+        dealerSuit = suits[Math.floor(Math.random() * suits.length)];
+    } while (playerCardRank === dealerCardRank && playerSuit === dealerSuit);
+    const dealerCardStr = cardRankToString(dealerCardRank) + dealerSuit; // e.g., "8♥️"
+
+
+    // Determine outcome & gross winnings (based on RANK only)
     let outcome = '';
     let grossWinningsLamports = 0n;
     let playerWins = false;
@@ -2962,11 +2975,11 @@ async function handleWarGame(bet) {
     const payoutSOL = (Number(payoutLamports) / LAMPORTS_PER_SOL).toFixed(6);
     const displayName = await getUserDisplayName(chat_id, user_id);
 
-    // --- Send Result Message ---
-     // ** MD ESCAPE APPLIED ** - Escaped `\` `!`
+    // --- Send Result Message (Now includes suits) ---
+    // ** MD ESCAPE APPLIED ** - Escaped `\` `!`
     let resultMessage = `🃏 *Casino War Result* for ${displayName} \\!\n\n` +
-                         `Player Card: *${escapeMarkdownV2(playerCardStr)}*\n` +
-                         `Dealer Card: *${escapeMarkdownV2(dealerCardStr)}*\n\n`;
+                         `Player Card: *${escapeMarkdownV2(playerCardStr)}*\n` + // Includes suit now
+                         `Dealer Card: *${escapeMarkdownV2(dealerCardStr)}*\n\n`; // Includes suit now
 
     if (playerWins) {
           // ** MD ESCAPE APPLIED ** - Escaped `\` `!`
@@ -3027,7 +3040,6 @@ async function handleWarGame(bet) {
          await updateBetStatus(betId, isPush ? 'completed_push_zero_payout' : 'completed_loss');
     }
 }
-
 
 // --- Payout Job Handler ---
 // Handles the actual payout transaction after a win is confirmed.
@@ -3405,7 +3417,7 @@ You will be given a wallet address and a *unique Memo ID* for each bet placement
 // /war command (MarkdownV2) - NEW
 async function handleWarInfoCommand(msg) {
     const config = GAME_CONFIG.war;
-    // ** CORRECTED: Ensured all static MarkdownV2 characters like . ! ( ) - % are escaped with \\ **
+    // ** CORRECTED: Removed (WA-...) memo example. Ensured other escapes. **
     const message = `🃏 *Casino War Game* 🃏
 
     Place your bet\\. You and the dealer each get one card\\. Highest card wins \\(Ace high\\)\\!
@@ -3423,8 +3435,7 @@ async function handleWarInfoCommand(msg) {
     \\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL
     \\- House Edge: ${escapeMarkdownV2((config.houseEdge * 100).toFixed(1))}% \\(Applied to wins only\\)
 
-    You will be given a wallet address and a *unique Memo ID* \\(\`WA-...\`\\)\\. Send the *exact* SOL amount with the memo to play\\.`;
-    // Ensure options include parse_mode for the escapes to be interpreted
+    You will be given a wallet address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to play\\.`; // Removed (WA-...) part here
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2' });
 }
 
