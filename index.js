@@ -3540,8 +3540,8 @@ You will be given the Roulette deposit address and a *unique Memo ID*\\. Send th
 // /war command (MarkdownV2) - Text only by design
 async function handleWarInfoCommand(msg) {
     const config = GAME_CONFIG.war; // Still need min/max bet
-    // ** RE-CHECKED: Ensured all static chars like . ! ( ) - % are escaped. No static ~ found. **
-    const message = `🃏 *Casino War Game* 🃏‘
+    // ** CORRECTED: Escaped the '~' character used for approximation. Re-verified other escapes. **
+    const message = `🃏 *Casino War Game* 🃏
 
     Place your bet\\. You and the dealer each get one card\\. Highest card wins \\(Ace high\\)\\!
 
@@ -3556,7 +3556,7 @@ async function handleWarInfoCommand(msg) {
     *Limits:*
     \\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL
     \\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL
-    \\- House Edge: Applied via biased card dealing \\(House wins ~65% of non\\-push rounds\\)\\.
+    \\- House Edge: Applied via biased card dealing \\(House wins \\~65% of non\\-push rounds\\)\\. // Escaped ~ here
     \\- Payout on Win: 2x Stake\\. Push returns 1x Stake\\.
 
     You will be given the War deposit address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to play\\.`;
