@@ -1904,7 +1904,7 @@ const paymentProcessor = new GuaranteedPaymentProcessor();
 console.log("✅ Payment Processor instantiated.");
 
 // --- End of Part 2b ---
-// index.js - Part 3 (Final Version with War, /betcf, /betwar)
+// index.js - Part 3 (Corrected - Final Version with War, /betcf, /betwar)
 
 // (Code continues directly from the end of Part 2b)
 
@@ -2797,8 +2797,8 @@ async function handleRouletteGame(bet) {
             // Calculate Gross Win for this specific bet: Stake * (Odds + 1)
             const grossWinForBet = betAmountLamports * BigInt(payoutOdds + 1);
             totalGrossWinningsLamports += grossWinForBet;
-            // Add description for the user message
-            const winAmountSOL = (Number(grossWinForBet) / LAMPORTS_PER_SOL).toFixed(Math.min(6, Math.max(2, (Number(grossWinForBet) / LAMPORTS_PER_SOL).toString().split('.')[1]?.length || 2))));
+            // Add description for the user message - *** CORRECTED THIS LINE ***
+            const winAmountSOL = (Number(grossWinForBet) / LAMPORTS_PER_SOL).toFixed(Math.min(6, Math.max(2, (Number(grossWinForBet) / LAMPORTS_PER_SOL).toString().split('.')[1]?.length || 2)));
             winningBetDescriptions.push(`\`${betKey}\` \\(\\+${escapeMarkdownV2(winAmountSOL)} SOL\\)`);
         }
     }
@@ -2837,7 +2837,7 @@ async function handleRouletteGame(bet) {
             const statusUpdated = await updateBetStatus(betId, 'processing_payout');
             if (!statusUpdated) {
                 console.error(`${logPrefix}: CRITICAL! Failed to update status from 'processing_game' to 'processing_payout' before queueing! Aborting payout queue.`);
-                await safeSendMessage(chat_id, `⚠️ Internal error preparing your payout for bet \`${escapeMarkdownV2(memo_id)}\`\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
+                await safeSendMessage(chatId, `⚠️ Internal error preparing your payout for bet \`${escapeMarkdownV2(memo_id)}\`\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
                 await updateBetStatus(betId, 'error_payout_status_update');
                 return;
             }
@@ -3384,7 +3384,7 @@ async function handleWalletCommand(msg) {
 }
 
 
-// /betcf command (Coinflip - MarkdownV2) - Formerly /bet
+// /betcf command (Coinflip - MarkdownV2) - Formerly /bet handler
 async function handleBetCommand(msg, args) { // Function name kept, but triggered by /betcf
      const match = args.trim().match(/^(\d+\.?\d*)\s+(heads|tails)/i);
      if (!match) {
@@ -3835,7 +3835,7 @@ async function handleBotStatsCommand(msg) {
 // (Moved to Part 4)
 
 // --- End of Part 3 ---
-// index.js - Part 4 (Final Version with War, /betcf, /betwar)
+// index.js - Part 4 (Corrected - Final Version with War, /betcf, /betwar)
 
 // (Code continues directly from the end of Part 3)
 
@@ -4218,8 +4218,8 @@ server = app.listen(PORT, "0.0.0.0", () => { // Listen on 0.0.0.0 for container/
             isFullyInitialized = true; // Mark as fully initialized *before* final ready message
             console.log("✅ Background Initialization Complete.");
             // Use process.env.npm_package_version if running via npm start and it's defined in package.json
-            const botVersion = process.env.npm_package_version || '2.4-war';
-            console.log(`🚀🚀🚀 Solana Gambles Bot (v${botVersion}) is fully operational! 🚀🚀🚀`); // Updated version
+            const botVersion = process.env.npm_package_version || '2.4-war'; // Updated version string
+            console.log(`🚀🚀🚀 Solana Gambles Bot (v${botVersion}) is fully operational! 🚀🚀🚀`);
 
         } catch (initError) { // Catch errors from DB init, Telegram setup, etc.
             console.error("🔥🔥🔥 Delayed Background Initialization Failed:", initError);
