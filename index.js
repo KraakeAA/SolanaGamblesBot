@@ -3402,13 +3402,13 @@ You will be given a wallet address and a *unique Memo ID* for each bet placement
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
-// /war command (MarkdownV2) - Text only by design
+// /war command (MarkdownV2) - NEW
 async function handleWarInfoCommand(msg) {
     const config = GAME_CONFIG.war;
-    // ** MD ESCAPE APPLIED ** - Escaped `\` `.` `\` `(` `)` `\` `-` twice `\` `%` `\` `(` `)` `\` `.` `\` `(` `\` `-` `)` `\` `.`
+    // ** CORRECTED: Ensured all static MarkdownV2 characters like . ! ( ) - % are escaped with \\ **
     const message = `🃏 *Casino War Game* 🃏
 
-    Place your bet\\. You and the dealer each get one card\\. Highest card wins \\(Ace high\\)!
+    Place your bet\\. You and the dealer each get one card\\. Highest card wins \\(Ace high\\)\\!
 
     *Rules:*
     \\- If your card is higher, you win 1:1 \\(double your bet back\\)\\.
@@ -3424,6 +3424,7 @@ async function handleWarInfoCommand(msg) {
     \\- House Edge: ${escapeMarkdownV2((config.houseEdge * 100).toFixed(1))}% \\(Applied to wins only\\)
 
     You will be given a wallet address and a *unique Memo ID* \\(\`WA-...\`\\)\\. Send the *exact* SOL amount with the memo to play\\.`;
+    // Ensure options include parse_mode for the escapes to be interpreted
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2' });
 }
 
