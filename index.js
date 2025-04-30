@@ -3140,13 +3140,14 @@ async function handleSlotsCommand(msg) {
 // --- CORRECTED /roulette command (MarkdownV2) ---
 async function handleRouletteCommand(msg) {
     const config = GAME_CONFIG.roulette;
-    // Using template literal for clarity and careful MarkdownV2 escaping
+    // Using template literal, explicit escaping, and removed bold from complex header line.
     const message = `⚪️ *European Roulette Game* ⚪️
 
 Place bets on the outcome of the wheel spin \\(numbers 0\\-36\\)\\.
 
-*Bet Types & Payouts \\(Odds N:1\\) \\- Payout is Stake * \\(N\\+1\\)*:
-\\- *Straight* \\(Bet on one number, e\\.g\\. \`S17\`\\): 35:1
+// Removed bold from this line below
+Bet Types & Payouts \\(Odds N:1\\) \\- Payout is Stake * \\(N\\+1\\)*:
+\\- *Straight* \\(\`S<number>\`, e\\.g\\. \`S17\`\\): 35:1
 \\- *Red* \\(\`R\`\\) \\/ *Black* \\(\`B\`\\): 1:1
 \\- *Even* \\(\`E\`\\) \\/ *Odd* \\(\`O\`\\): 1:1
 \\- *Low* \\(\`L\`, numbers 1\\-18\\) \\/ *High* \\(\`H\`, numbers 19\\-36\\): 1:1
