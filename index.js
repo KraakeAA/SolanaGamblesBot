@@ -3537,42 +3537,32 @@ You will be given the Roulette deposit address and a *unique Memo ID*\\. Send th
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
-// /war command (MarkdownV2) - ** DIAGNOSTIC VERSION (Plain Text) **
+// /war command - ** MODIFIED TO USE HTML PARSING **
 async function handleWarInfoCommand(msg) {
     const config = GAME_CONFIG.war; // Still need min/max bet
 
-    // Using plain text, removing all Markdown formatting/escapes
-    // Keeping basic structure for readability
-    const message = `Casino War Game
+    // Basic HTML sanitation for potential edge cases in config values (though unlikely needed for numbers)
+    const minBetHtml = String(config.minBet).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const maxBetHtml = String(config.maxBet).replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-Place your bet. You and the dealer each get one card. Highest card wins (Ace high)!
+    // Construct message using HTML tags
+    const message = `🃏 <b>Casino War Game</b> 🃏\n\n` +
+                    `Place your bet. You and the dealer each get one card. Highest card wins (Ace high)!\n\n` +
+                    `<b>Rules:</b>\n` +
+                    `- If your card is higher, you win 1:1 (double your bet back).\n` +
+                    `- If the dealer's card is higher, you lose your bet.\n` +
+                    `- If cards <i>Tie</i>, it's a <i>Push</i> - your bet is returned to you.\n\n` +
+                    `<b>How to Play:</b>\n` +
+                    `- Type <code>/betwar &lt;amount&gt;</code> (e.g., <code>/betwar 0.1</code>)\n\n` +
+                    `<b>Limits:</b>\n` +
+                    `- Min Bet: ${minBetHtml} SOL\n` +
+                    `- Max Bet: ${maxBetHtml} SOL\n` +
+                    `- House Edge: Applied via biased card dealing (House wins approx 65% of non-push rounds).\n` + // Removed ~ approx. okay in HTML
+                    `- Payout on Win: 2x Stake. Push returns 1x Stake.\n\n` +
+                    `You will be given the War deposit address and a <b>unique Memo ID</b>. Send the <b>exact</b> SOL amount with the memo to play.`;
 
-Rules:
-- If your card is higher, you win 1:1 (double your bet back).
-- If the dealer's card is higher, you lose your bet.
-- If cards Tie, it's a Push - your bet is returned to you.
-
-How to Play:
-- Type /betwar <amount> (e.g., /betwar 0.1)
-
-Limits:
-- Min Bet: ${config.minBet} SOL
-- Max Bet: ${config.maxBet} SOL
-- House Edge: Applied via biased card dealing (House wins approx 65% of non-push rounds).
-- Payout on Win: 2x Stake. Push returns 1x Stake.
-
-You will be given the War deposit address and a unique Memo ID. Send the exact SOL amount with the memo to play.`;
-
-    // Send *without* parse_mode to test basic sending
-    console.log(`[DIAGNOSTIC] Attempting to send PLAIN TEXT War info message to chat ${msg.chat.id}...`);
-    try {
-        await safeSendMessage(msg.chat.id, message /* REMOVED , { parse_mode: 'MarkdownV2' } */ );
-        console.log(`[DIAGNOSTIC] Plain text message attempt completed for chat ${msg.chat.id}.`);
-    } catch (error) {
-        console.error(`[DIAGNOSTIC] Error sending plain text message for chat ${msg.chat.id}:`, error);
-        // Fallback just in case even plain text fails
-        await bot.sendMessage(msg.chat.id, "Error displaying War info.").catch(()=>{});
-    }
+    // Send using HTML parse mode
+    await safeSendMessage(msg.chat.id, message, { parse_mode: 'HTML' });
 }
 
 // /wallet command (MarkdownV2) - Text only by design
