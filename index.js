@@ -1,6 +1,6 @@
 // index.js - Final Version with War (Tie is Push), /betcf, /betwar
-// --- CORRECTED FOR MARKDOWNV2 STATIC TEXT ESCAPING, START CMD IMAGE, SKEWED ODDS & SEPARATE WALLETS ---
-// --- VERSION: 2.5.0 ---
+// --- CORRECTED FOR SEPARATE PAYOUT KEYS, SKEWED ODDS & OTHER FIXES ---
+// --- VERSION: 2.6.0 ---
 
 // --- All Imports MUST come first ---
 import 'dotenv/config';
@@ -31,17 +31,23 @@ console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} ---
 
 console.log("⏳ Starting Solana Gambles Bot (Multi-RPC)... Checking environment variables...");
 
-// --- START: Enhanced Environment Variable Checks (MODIFIED for New Games & Separate Wallets) ---
+// --- START: Enhanced Environment Variable Checks (MODIFIED for 5 Payout Keys & Separate Deposit Wallets) ---
 const REQUIRED_ENV_VARS = [
     'BOT_TOKEN',
     'DATABASE_URL',
-    'BOT_PRIVATE_KEY',          // Main payout key (CF, Slots, Roulette, War)
+    // Payout Private Keys (SECRET) - One for each game
+    'CF_BOT_PRIVATE_KEY',       // Coinflip payout key (Renamed from BOT_PRIVATE_KEY)
     'RACE_BOT_PRIVATE_KEY',     // Race payout key
+    'SLOTS_BOT_PRIVATE_KEY',    // Slots payout key (NEW)
+    'ROULETTE_BOT_PRIVATE_KEY', // Roulette payout key (NEW)
+    'WAR_BOT_PRIVATE_KEY',      // War payout key (NEW)
+    // Deposit Public Keys (Addresses) - One for each game
     'CF_WALLET_ADDRESS',        // Coinflip deposit address (Renamed from MAIN_WALLET_ADDRESS)
     'RACE_WALLET_ADDRESS',      // Race deposit address
     'SLOTS_WALLET_ADDRESS',     // Slots deposit address
     'ROULETTE_WALLET_ADDRESS',  // Roulette deposit address
     'WAR_WALLET_ADDRESS',       // War deposit address
+    // Other Required
     'RPC_URLS',                 // Comma-separated list of RPC URLs
 ];
 
@@ -72,16 +78,11 @@ const OPTIONAL_ENV_DEFAULTS = {
     'WAR_MAX_BET': '1.0',
     'WAR_EXPIRY_MINUTES': '10',
     // House Edge / Skew Configuration (NEW STRUCTURE)
-    // Coinflip: Chance house auto-wins (0.0 to < 1.0)
-    'CF_HOUSE_EDGE': '0.65', // Player win probability becomes (1-CF_HOUSE_EDGE)*0.5
-    // Race: Chance house auto-wins (0.0 to < 1.0). Internal weights also skewed.
-    'RACE_HOUSE_EDGE': '0.50', // Player only wins if house doesn't auto-win AND their horse wins visual race
-    // Slots: Chance to force a losing spin result (0.0 to < 1.0)
-    'SLOTS_HIDDEN_EDGE': '0.10',
-    // Roulette: Chance to force the result to '0' (0.0 to < 1.0)
-    'ROULETTE_HIDDEN_EDGE': '0.65',
-    // War: Variable removed (skew implemented in dealing logic directly based on target win rate)
-    // Note: SLOTS_HOUSE_EDGE, ROULETTE_HOUSE_EDGE, WAR_HOUSE_EDGE are removed as payout reduction is gone.
+    'CF_HOUSE_EDGE': '0.65', // Coinflip: Chance house auto-wins (0.0 to < 1.0)
+    'RACE_HOUSE_EDGE': '0.50', // Race: Chance house auto-wins (0.0 to < 1.0)
+    'SLOTS_HIDDEN_EDGE': '0.10', // Slots: Chance to force a losing spin result (0.0 to < 1.0)
+    'ROULETTE_HIDDEN_EDGE': '0.65', // Roulette: Chance to force the result to '0' (0.0 to < 1.0)
+    // War skew is hardcoded in dealing logic
 
     // RPC Connection Options
     'RPC_MAX_CONCURRENT': '8',
@@ -199,7 +200,7 @@ app.get('/health', (req, res) => {
 app.get('/railway-health', (req, res) => {
     res.status(200).json({
         status: isFullyInitialized ? 'ready' : 'starting',
-        version: '2.5.0' // Updated version string
+        version: '2.6.0' // Updated version string
     });
 });
 
@@ -234,9 +235,9 @@ const solanaConnection = new RateLimitedConnection(rpcUrls, {
     retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
     commitment: process.env.RPC_COMMITMENT,
     httpHeaders: {
-        'User-Agent': `SolanaGamblesBot/2.5.0` // Updated version
+        'User-Agent': `SolanaGamblesBot/2.6.0` // Updated version
     },
-    clientId: `SolanaGamblesBot/2.5.0` // Updated version
+    clientId: `SolanaGamblesBot/2.6.0` // Updated version
 });
 console.log("✅ Multi-RPC Solana connection instance created.");
 
@@ -444,8 +445,8 @@ async function initializeDatabase() {
 
 // --- End of Part 1 ---
 // --- Start of Part 2a ---
-// index.js - Part 2a (Corrected for Skewed Odds & Separate Wallets)
-// --- VERSION: 2.5.0 ---
+// index.js - Part 2a (Corrected for Separate Payout Keys & Skewed Odds)
+// --- VERSION: 2.6.0 ---
 
 // (Code continues directly from the end of Part 1)
 
@@ -469,7 +470,7 @@ bot.on('message', (msg) => {
         return;
     }
     // Add to queue only if it passes basic checks
-    messageQueue.add(() => handleMessage(msg)) // handleMessage defined in Part 3
+    messageQueue.add(() => handleMessage(msg)) // handleMessage defined in Part 3b
         .catch(err => {
             console.error(`⚠️ Message processing queue error for msg ID ${msg?.message_id}:`, err);
             performanceMonitor.logRequest(false); // Log error
@@ -552,7 +553,7 @@ app.get('/', (req, res) => {
         status: 'ok',
         initialized: isFullyInitialized,
         timestamp: new Date().toISOString(),
-        version: '2.5.0', // Updated version
+        version: '2.6.0', // Updated version
         queueStats: {
             messageQueuePending: messageQueueSize,
             messageQueueActive: messageQueuePending,
@@ -631,7 +632,7 @@ function validateGameConfig(config) {
          if (isNaN(gc.minBet) || gc.minBet <= 0) errors.push(`${game}.minBet invalid (${gc.minBet})`);
          if (isNaN(gc.maxBet) || gc.maxBet <= 0) errors.push(`${game}.maxBet invalid (${gc.maxBet})`);
          if (isNaN(gc.expiryMinutes) || gc.expiryMinutes <= 0) errors.push(`${game}.expiryMinutes invalid (${gc.expiryMinutes})`);
-         // Check houseEdge only if it exists (removed for some games)
+         // Check houseEdge only if it exists (now only for CF/Race)
          if (gc.houseEdge !== undefined && (isNaN(gc.houseEdge) || gc.houseEdge < 0 || gc.houseEdge >= 1)) {
              errors.push(`${game}.houseEdge invalid (${gc.houseEdge})`);
          }
@@ -639,49 +640,50 @@ function validateGameConfig(config) {
      return errors;
 }
 
-// ** MODIFIED GAME_CONFIG: Removed houseEdge where payout reduction is removed **
+// ** MODIFIED GAME_CONFIG: Removed houseEdge for Slots, Roulette, War **
+// CF_HOUSE_EDGE and RACE_HOUSE_EDGE now control auto-win probability only.
 const GAME_CONFIG = {
     coinflip: {
         minBet: parseFloat(process.env.CF_MIN_BET),
         maxBet: parseFloat(process.env.CF_MAX_BET),
         expiryMinutes: parseInt(process.env.CF_EXPIRY_MINUTES, 10),
-        houseEdge: parseFloat(process.env.CF_HOUSE_EDGE) // Kept for auto-win chance
+        houseEdge: parseFloat(process.env.CF_HOUSE_EDGE || '0.65') // Keep for auto-win logic
     },
     race: {
         minBet: parseFloat(process.env.RACE_MIN_BET),
         maxBet: parseFloat(process.env.RACE_MAX_BET),
         expiryMinutes: parseInt(process.env.RACE_EXPIRY_MINUTES, 10),
-        houseEdge: parseFloat(process.env.RACE_HOUSE_EDGE) // Kept for auto-win chance
+        houseEdge: parseFloat(process.env.RACE_HOUSE_EDGE || '0.50') // Keep for auto-win logic
     },
     slots: {
         minBet: parseFloat(process.env.SLOTS_MIN_BET),
         maxBet: parseFloat(process.env.SLOTS_MAX_BET),
         expiryMinutes: parseInt(process.env.SLOTS_EXPIRY_MINUTES, 10),
-        // houseEdge: parseFloat(process.env.SLOTS_HOUSE_EDGE) // REMOVED - Use SLOTS_HIDDEN_EDGE
+        // houseEdge removed - using SLOTS_HIDDEN_EDGE in game logic
     },
     roulette: {
         minBet: parseFloat(process.env.ROULETTE_MIN_BET),
         maxBet: parseFloat(process.env.ROULETTE_MAX_BET),
         expiryMinutes: parseInt(process.env.ROULETTE_EXPIRY_MINUTES, 10),
-        // houseEdge: parseFloat(process.env.ROULETTE_HOUSE_EDGE) // REMOVED - Use ROULETTE_HIDDEN_EDGE
+        // houseEdge removed - using ROULETTE_HIDDEN_EDGE in game logic
     },
     war: {
         minBet: parseFloat(process.env.WAR_MIN_BET),
         maxBet: parseFloat(process.env.WAR_MAX_BET),
         expiryMinutes: parseInt(process.env.WAR_EXPIRY_MINUTES, 10),
-        // houseEdge: parseFloat(process.env.WAR_HOUSE_EDGE) // REMOVED - Skew via dealing logic
+        // houseEdge removed - skew handled in dealing logic
     }
 };
-// Validate new structure (houseEdge is now optional for some games)
+// Validate new structure (houseEdge is optional)
 const configErrors = validateGameConfig(GAME_CONFIG);
 if (configErrors.length > 0) {
     console.error(`❌ Invalid game configuration values found for: ${configErrors.join(', ')}. Please check corresponding environment variables.`);
     process.exit(1);
 }
-console.log("ℹ️ Game Config Loaded (Adjusted for Skewed Odds):", JSON.stringify(GAME_CONFIG)); // Log loaded config
+console.log("ℹ️ Game Config Loaded (Adjusted for Skewed Odds & Full Payouts):", JSON.stringify(GAME_CONFIG));
 
 
-// Fee buffer (still used for bet record, not payout calc)
+// Fee buffer (still used for bet record)
 const FEE_BUFFER = BigInt(process.env.FEE_MARGIN);
 
 // Helper function for MarkdownV2 escaping (use this consistently for dynamic content)
@@ -697,7 +699,6 @@ const escapeMarkdownV2 = (text) => {
 // --- Helper Functions (Existing) ---
 
 function debugInstruction(inst, accountKeys) {
-    // ... (implementation remains unchanged) ...
      try {
          const programIdKeyInfo = accountKeys[inst.programIdIndex];
          const programId = programIdKeyInfo?.pubkey ? new PublicKey(programIdKeyInfo.pubkey) :
@@ -724,7 +725,6 @@ function debugInstruction(inst, accountKeys) {
 }
 
 const decodeInstructionData = (data) => {
-    // ... (implementation remains unchanged) ...
      if (!data) return null;
      try {
          if (typeof data === 'string') {
@@ -769,14 +769,13 @@ const decodeInstructionData = (data) => {
 };
 
 // --- calculateNetPayout function REMOVED ---
-// House edge is now applied via skewed win probabilities, not payout reduction.
 
 // --- End of Part 2a ---
 // --- Start of Part 2b ---
-// index.js - Part 2b (Corrected for Skewed Odds & Separate Wallets)
-// --- VERSION: 2.5.0 ---
+// index.js - Part 2b (Corrected for Separate Payout Keys & Skewed Odds)
+// --- VERSION: 2.6.0 ---
 
-// (Code continues directly from the end of Part 2a - provided previously)
+// (Code continues directly from the end of Part 2a)
 
 // --- START: Memo Handling System ---
 // (Updated for new game prefixes SL, RL, WA)
@@ -1466,7 +1465,7 @@ class GuaranteedPaymentProcessor {
                 if (bet) {
                     // Ensure bet is actually in a state ready for processing
                     if (bet.status === 'payment_verified') {
-                         await processPaidBet(bet); // processPaidBet handles own errors (defined in Part 3)
+                         await processPaidBet(bet); // processPaidBet handles own errors (defined in Part 3a)
                          result = { processed: true };
                     } else {
                          console.warn(`[PROCESS_JOB] Bet ${job.betId} is not in 'payment_verified' state (Status: ${bet.status}). Skipping game processing.`);
@@ -1483,7 +1482,7 @@ class GuaranteedPaymentProcessor {
                  while (attempt <= retries) {
                       attempt++;
                       try {
-                           await handlePayoutJob(job); // handlePayoutJob handles own errors (defined in Part 3)
+                           await handlePayoutJob(job); // handlePayoutJob handles own errors (defined in Part 3b)
                            result = { processed: true };
                            break; // Success, exit retry loop
                       } catch (err) {
@@ -1508,7 +1507,7 @@ class GuaranteedPaymentProcessor {
                                await updateBetStatus(job.betId, finalErrorStatus); // Update status to reflect failure
                                // Send user notification about the final failure
                                const safeErrorMsg = escapeMarkdownV2((errorMessage || 'Unknown Error').substring(0, 200));
-                               // ** MD ESCAPE APPLIED ** - Escaped `\` `(` `)` `.` twice
+                                // ** MD ESCAPE APPLIED ** - Escaped `\` `(` `)` `.` twice
                                await safeSendMessage(job.chatId, `⚠️ Payout for bet \`${escapeMarkdownV2(job.memoId)}\` failed after ${attempt} attempt\\(s\\)\\. Error: ${safeErrorMsg}\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
                                result = { processed: false, reason: `${isRetryable ? 'payout_retries_exhausted' : 'payout_non_retryable'}: ${errorMessage}` };
                                break; // Exit retry loop
@@ -1549,78 +1548,72 @@ class GuaranteedPaymentProcessor {
     }
 
     // Internal method to process an incoming payment signature
-    async _processIncomingPayment(signature, monitoredWalletType) { // monitoredWalletType still passed for potential logging/context
+    // ** MODIFIED: Determines target wallet based on bet.game_type **
+    async _processIncomingPayment(signature, monitoredWalletType) { // monitoredWalletType still passed for context
         const logPrefix = `Sig ${signature.slice(0, 6)}...`;
         if (processedSignaturesThisSession.has(signature)) {
-            // console.log(`${logPrefix}: Already processed in this session.`); // Reduce noise
+            // console.log(`${logPrefix}: Already processed in this session.`);
             return { processed: false, reason: 'already_processed_session' };
         }
         try {
-            // Check DB first to avoid fetching TX for already processed signatures
+            // Check DB first
             const exists = await pool.query('SELECT id, status FROM bets WHERE paid_tx_signature = $1 LIMIT 1', [signature]);
             if (exists.rowCount > 0) {
-                // console.log(`${logPrefix}: Already exists in DB (Bet ID: ${exists.rows[0].id}, Status: ${exists.rows[0].status}).`); // Reduce noise
+                // console.log(`${logPrefix}: Already exists in DB`);
                 processedSignaturesThisSession.add(signature); this._cleanSignatureCache();
                 return { processed: false, reason: 'exists_in_db' };
             }
         } catch (dbError) {
              console.error(`${logPrefix}: DB error checking paid_tx_signature: ${dbError.message}`);
-             // Potentially retryable? For now, treat as failure for this attempt.
              return { processed: false, reason: 'db_check_error', error: dbError };
         }
 
         let tx;
         try {
              tx = await this._getTransactionWithRetry(signature);
-             if (!tx) {
-                 // console.log(`${logPrefix}: Failed to fetch transaction or not confirmed after retries.`); // Reduce noise
-                 return { processed: false, reason: 'fetch_failed_or_not_confirmed' };
-             }
+             if (!tx) { return { processed: false, reason: 'fetch_failed_or_not_confirmed' }; }
              if (tx.meta?.err){
-                 // console.log(`${logPrefix}: Transaction failed on-chain, skipping. Error: ${JSON.stringify(tx.meta.err)}`); // Reduce noise
-                 processedSignaturesThisSession.add(signature); this._cleanSignatureCache(); // Add failed TX sig to avoid re-processing
+                 processedSignaturesThisSession.add(signature); this._cleanSignatureCache();
                  return { processed: false, reason: 'onchain_failure' };
              }
 
              const memo = await this._extractMemoGuaranteed(tx, signature);
              if (!memo) {
-                 // console.log(`${logPrefix}: No valid memo found in transaction.`); // Reduce noise
-                 processedSignaturesThisSession.add(signature); this._cleanSignatureCache(); // Add sig with no memo to avoid re-processing
+                 processedSignaturesThisSession.add(signature); this._cleanSignatureCache();
                  return { processed: false, reason: 'no_valid_memo' };
              }
 
              const bet = await this._findBetGuaranteed(memo);
              if (!bet) {
-                  // Check if a bet with this memo exists but isn't 'awaiting_payment'
                   const existingBetStatusResult = await pool.query('SELECT status FROM bets WHERE memo_id = $1 LIMIT 1', [memo]);
                   const existingBetStatus = existingBetStatusResult.rows[0]?.status;
                   if (existingBetStatus && existingBetStatus !== 'awaiting_payment') {
-                       // console.log(`${logPrefix}: Bet for memo ${memo} exists but status is ${existingBetStatus}. Payment likely already processed or expired.`); // Reduce noise
-                       processedSignaturesThisSession.add(signature); this._cleanSignatureCache(); // Add sig for already handled bet
+                       processedSignaturesThisSession.add(signature); this._cleanSignatureCache();
                        return { processed: false, reason: 'bet_already_processed_or_expired' };
                   } else {
-                       // console.log(`${logPrefix}: No bet found awaiting payment for memo ${memo}.`); // Reduce noise
-                       processedSignaturesThisSession.add(signature); this._cleanSignatureCache(); // Add sig for unknown memo
+                       processedSignaturesThisSession.add(signature); this._cleanSignatureCache();
                        return { processed: false, reason: 'no_matching_bet_found' };
                   }
              }
 
              // --- Determine correct TARGET wallet address based on BET's game type ---
              let expectedTargetAddress = null;
+             let targetEnvVarName = '';
              switch(bet.game_type) {
-                case 'coinflip': expectedTargetAddress = process.env.CF_WALLET_ADDRESS; break;
-                case 'race': expectedTargetAddress = process.env.RACE_WALLET_ADDRESS; break;
-                case 'slots': expectedTargetAddress = process.env.SLOTS_WALLET_ADDRESS; break;
-                case 'roulette': expectedTargetAddress = process.env.ROULETTE_WALLET_ADDRESS; break;
-                case 'war': expectedTargetAddress = process.env.WAR_WALLET_ADDRESS; break;
+                case 'coinflip': targetEnvVarName = 'CF_WALLET_ADDRESS'; break;
+                case 'race':     targetEnvVarName = 'RACE_WALLET_ADDRESS'; break;
+                case 'slots':    targetEnvVarName = 'SLOTS_WALLET_ADDRESS'; break;
+                case 'roulette': targetEnvVarName = 'ROULETTE_WALLET_ADDRESS'; break;
+                case 'war':      targetEnvVarName = 'WAR_WALLET_ADDRESS'; break;
                 default:
                     console.error(`${logPrefix}: Unknown game_type "${bet.game_type}" for bet ${bet.id}. Cannot determine target wallet.`);
                     await updateBetStatus(bet.id, 'error_unknown_game_type');
                     return { processed: false, reason: 'unknown_game_type_config' };
              }
+             expectedTargetAddress = process.env[targetEnvVarName];
 
              if (!expectedTargetAddress) {
-                 console.error(`${logPrefix}: Target wallet address for game_type "${bet.game_type}" is not configured in environment variables!`);
+                 console.error(`${logPrefix}: Target wallet address for game_type "${bet.game_type}" (env var ${targetEnvVarName}) is not configured!`);
                  await updateBetStatus(bet.id, 'error_missing_wallet_config');
                  return { processed: false, reason: 'missing_wallet_config' };
              }
@@ -1635,9 +1628,7 @@ class GuaranteedPaymentProcessor {
                    if (finalBetDetails && finalBetDetails.status === 'payment_verified') {
                        await this._queueBetProcessing(bet); // Queue using the original bet object fetched
                    } else {
-                       // This case should be rare due to transaction locking in _processPaymentGuaranteed
                        console.error(`${logPrefix}: CRITICAL! Post-verify status mismatch for Bet ID ${bet.id}. Status: ${finalBetDetails?.status ?? 'Not Found'} instead of 'payment_verified'.`);
-                       // Attempt to set an error status, though the cause is unclear
                        await updateBetStatus(bet.id, 'error_post_verify_status_mismatch');
                    }
               }
@@ -1670,23 +1661,22 @@ class GuaranteedPaymentProcessor {
                   // Check if transaction is actually confirmed (null means not found/confirmed)
                   if (tx === null) {
                       // console.log(`Sig ${signature?.slice(0,6)}: Transaction not found or not confirmed yet.`);
-                      // Treat as potentially temporary, could retry outside if needed
-                      lastError = new Error("Transaction not found or not confirmed yet."); // Set error for logging if retries fail
-                      retries--; // Decrement retry count
-                      if (retries > 0) await new Promise(r => setTimeout(r, 500 * (3 - retries))); // Backoff before next try
-                      else return null; // Retries exhausted
-                      continue; // Go to next iteration
+                      lastError = new Error("Transaction not found or not confirmed yet.");
+                      retries--;
+                      if (retries > 0) await new Promise(r => setTimeout(r, 500 * (3 - retries)));
+                      else return null;
+                      continue;
                   }
-                  return tx; // Return the transaction object
+                  return tx;
             } catch (error) {
                  lastError = error;
                  retries--;
                  console.warn(`Sig ${signature?.slice(0,6)}: Error fetching getParsedTransaction (Attempt ${4-retries}/3): ${error.message}`);
                  if (!isRetryableError(error) || retries === 0) {
                      console.error(`Sig ${signature?.slice(0,6)}: Final error fetching transaction: ${error.message}`);
-                     return null; // Failed to fetch
+                     return null;
                  }
-                 await new Promise(r => setTimeout(r, 500 * (3 - retries))); // Backoff
+                 await new Promise(r => setTimeout(r, 500 * (3 - retries)));
             }
         }
         return null; // Retries exhausted
@@ -1701,36 +1691,27 @@ class GuaranteedPaymentProcessor {
         // Check cache first
         const cachedBet = this.memoCache.get(memo);
         if (cachedBet && Date.now() - cachedBet.timestamp < this.cacheTTL) {
-            // console.log(`[MEMO CACHE] Hit for memo ${memo}`); // Reduce noise
-            // Ensure the cached bet is still awaiting payment
              if(cachedBet.bet?.status === 'awaiting_payment'){
                  return cachedBet.bet;
              } else {
-                 // Status changed, remove from cache and query DB
                  this.memoCache.delete(memo);
-                 // console.log(`[MEMO CACHE] Removed memo ${memo} due to status change (${cachedBet.bet?.status}).`);
              }
         } else if (cachedBet) {
-             // Expired cache entry
              this.memoCache.delete(memo);
-             // console.log(`[MEMO CACHE] Expired memo ${memo}`);
         }
 
-        // DB lookup with retry logic for transient connection issues
+        // DB lookup with retry logic
         let retries = 3;
         let lastError = null;
         while (retries > 0) {
             try {
                 const res = await pool.query(
-                    // Explicitly look for 'awaiting_payment' status
                     "SELECT * FROM bets WHERE memo_id = $1 AND status = 'awaiting_payment' ORDER BY created_at DESC LIMIT 1",
                     [memo]
                 );
                 const bet = res.rows[0];
                 if (bet) {
-                    // Cache the found bet (only if status is correct)
                     this.memoCache.set(memo, { bet, timestamp: Date.now() });
-                    // Schedule cache expiration check
                     setTimeout(() => {
                         const current = this.memoCache.get(memo);
                         if (current && current.bet?.id === bet.id && Date.now() - current.timestamp >= this.cacheTTL) {
@@ -1738,24 +1719,23 @@ class GuaranteedPaymentProcessor {
                         }
                     }, this.cacheTTL + 1000);
                 }
-                return bet; // Return bet object or undefined if not found/wrong status
+                return bet;
             } catch (dbError) {
                 lastError = dbError;
                 retries--;
                 console.error(`DB error finding bet for memo ${memo} (Attempt ${4-retries}/3): ${dbError.message}`);
                 if (!isRetryableError(dbError) || retries === 0) {
                     console.error(`[FIND_BET] Non-retryable DB error or retries exhausted for memo ${memo}.`);
-                    // Do not throw here, just return undefined
                     return undefined;
                 }
-                await new Promise(r => setTimeout(r, 500 * (3 - retries))); // Short backoff
+                await new Promise(r => setTimeout(r, 500 * (3 - retries)));
             }
         }
         return undefined; // Retries exhausted
     }
 
     // Performs payment validation and updates DB within a transaction
-    // ** MODIFIED: Accepts specific targetAddress instead of inferring **
+     // ** MODIFIED: Accepts specific expectedTargetAddress **
     async _processPaymentGuaranteed(bet, signature, expectedTargetAddress, tx) {
         const logPrefix = `Bet ${bet.id} (Memo ${bet.memo_id.slice(0,8)}...)`;
         const client = await pool.connect(); // Get a dedicated client for transaction
@@ -1781,8 +1761,6 @@ class GuaranteedPaymentProcessor {
             // Check status
             if (currentStatus !== 'awaiting_payment') {
                 await client.query('ROLLBACK');
-                // console.log(`${logPrefix}: Status check failed inside TX (Expected 'awaiting_payment', got '${currentStatus}'). Aborting.`); // Reduce noise
-                // Add signature to processed cache if status mismatch indicates it was handled already
                 if (currentStatus && currentStatus !== 'awaiting_payment') {
                     processedSignaturesThisSession.add(signature); this._cleanSignatureCache();
                 }
@@ -1804,7 +1782,6 @@ class GuaranteedPaymentProcessor {
             // 3. Analyze transaction amount and get payer using the correct target wallet address
             const { transferAmount, payerAddress } = analyzeTransactionAmounts(tx, expectedTargetAddress); // Pass expectedTargetAddress
               if (transferAmount <= 0n) {
-                 // This might happen if the TX didn't contain a direct transfer to the correct address
                  await client.query(`UPDATE bets SET status = $1, processed_at = NOW() WHERE id = $2`, ['error_payment_amount_zero', bet.id]);
                  await client.query('COMMIT');
                  console.log(`${logPrefix}: No valid transfer amount found in transaction ${signature} to target wallet ${expectedTargetAddress.slice(0,6)}...`);
@@ -1820,7 +1797,7 @@ class GuaranteedPaymentProcessor {
                  await client.query('COMMIT');
                  console.log(`${logPrefix}: Payment amount too low. Expected >=${expected - tolerance}, Got ${transferAmount}.`);
                  // Notify user about incorrect amount
-                 // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice using toFixed(3)
+                 // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `.` twice using toFixed(3)
                  const expectedSOL = (Number(expected)/LAMPORTS_PER_SOL).toFixed(3);
                  const receivedSOL = (Number(transferAmount)/LAMPORTS_PER_SOL).toFixed(3);
                  await safeSendMessage(bet.chat_id, `⚠️ Your payment for bet \`${escapeMarkdownV2(bet.memo_id)}\` was received, but the amount was too low\\. Expected ${escapeMarkdownV2(expectedSOL)} SOL, but received ${escapeMarkdownV2(receivedSOL)} SOL\\. Your bet could not be processed\\.`, { parse_mode: 'MarkdownV2' });
@@ -1828,10 +1805,8 @@ class GuaranteedPaymentProcessor {
                  return { processed: false, reason: 'payment_amount_low' };
              } else if (transferAmount > expected + tolerance) {
                  console.warn(`${logPrefix}: Payment amount slightly higher than expected. Expected ${expected}, Got ${transferAmount}. Processing anyway.`);
-                 // Log overpayment but continue processing
              } else {
                   // Amount is within tolerance
-                  // console.log(`${logPrefix}: Payment amount verified.`); // Reduce noise
              }
 
 
@@ -1845,9 +1820,7 @@ class GuaranteedPaymentProcessor {
               if (updateResult.rowCount === 0) {
                   await client.query('ROLLBACK');
                   console.warn(`${logPrefix}: Failed to update bet status to 'payment_verified' inside TX. Status might have changed concurrently.`);
-                  // Check the status again to see what happened
                   const finalCheck = await pool.query('SELECT status FROM bets WHERE id = $1', [bet.id]);
-                  // Add signature to processed if already handled by another process
                   if(finalCheck.rows[0]?.status !== 'awaiting_payment'){
                      processedSignaturesThisSession.add(signature); this._cleanSignatureCache();
                   }
@@ -1857,9 +1830,9 @@ class GuaranteedPaymentProcessor {
 
             // 6. Link wallet if payer found and different from current linked wallet (still inside TX)
             if (payerAddress) {
-                 const currentLinkedWallet = await getLinkedWallet(bet.user_id); // Use helper (checks cache first)
+                 const currentLinkedWallet = await getLinkedWallet(bet.user_id);
                  if (!currentLinkedWallet || currentLinkedWallet !== payerAddress) {
-                     // console.log(`${logPrefix}: Linking payer wallet ${payerAddress.slice(0,6)}... for user ${bet.user_id}.`); // Reduce noise
+                     // console.log(`${logPrefix}: Linking payer wallet ${payerAddress.slice(0,6)}... for user ${bet.user_id}.`);
                      await client.query(
                           `INSERT INTO wallets (user_id, wallet_address, last_used_at)
                            VALUES ($1, $2, NOW())
@@ -1867,9 +1840,7 @@ class GuaranteedPaymentProcessor {
                            DO UPDATE SET wallet_address = EXCLUDED.wallet_address, last_used_at = NOW()`,
                           [String(bet.user_id), payerAddress]
                      );
-                     // Update cache immediately after successful DB link/update
                      walletCache.set(`wallet-${bet.user_id}`, { wallet: payerAddress, timestamp: Date.now() });
-                     // Schedule cache expiration check
                      setTimeout(() => {
                          const current = walletCache.get(`wallet-${bet.user_id}`);
                          if (current && current.wallet === payerAddress && Date.now() - current.timestamp >= CACHE_TTL) {
@@ -1881,21 +1852,14 @@ class GuaranteedPaymentProcessor {
 
             // 7. Commit transaction
             await client.query('COMMIT');
-            // console.log(`${logPrefix}: Payment processing committed successfully.`); // Reduce noise
-            processedSignaturesThisSession.add(signature); // Add to session cache AFTER successful commit
+            processedSignaturesThisSession.add(signature);
              this._cleanSignatureCache();
             return { processed: true }; // Indicate success
 
         } catch (error) {
             console.error(`${logPrefix}: Error during DB transaction for payment processing: ${error.message}`);
-            try { // Attempt rollback safely
-                 await client.query('ROLLBACK');
-            } catch (rollbackError) {
-                 console.error(`${logPrefix}: Failed to rollback transaction after error: ${rollbackError.message}`);
-            }
-            // Attempt to set a generic processing error status outside the failed transaction
+            try { await client.query('ROLLBACK'); } catch (rollbackError) { console.error(`${logPrefix}: Failed to rollback transaction after error: ${rollbackError.message}`); }
             try {
-                 // Check current status before overwriting with error
                  const statusCheck = await pool.query('SELECT status FROM bets WHERE id = $1', [bet.id]);
                  if (statusCheck.rows.length > 0 && statusCheck.rows[0].status === 'awaiting_payment') {
                       await pool.query(`UPDATE bets SET status = $1, processed_at = NOW() WHERE id = $2`, ['error_processing_db', bet.id]);
@@ -1903,9 +1867,7 @@ class GuaranteedPaymentProcessor {
             } catch (updateErr) {
                  console.error(`${logPrefix}: Failed to set error status after rollback: ${updateErr.message}`);
             }
-            // Add betId context to the error for higher-level handling if needed
             error.betId = bet.id;
-            // Do not throw here, let processJob handle based on retry logic
             return { processed: false, reason: `db_transaction_error: ${error.message}`, error: error };
 
 
@@ -1921,10 +1883,8 @@ class GuaranteedPaymentProcessor {
         await this.addPaymentJob({
             type: 'process_bet',
             betId: bet.id,
-            // Pass necessary details if needed by processJob later (e.g., priority)
             priority: bet.priority || 0,
-            // Include info for potential user messages if processJob fails later
-            chatId: bet.chat_id,
+            chatId: bet.chat_id, // Pass info for potential error messages
             memoId: bet.memo_id
         });
     }
@@ -1934,10 +1894,8 @@ class GuaranteedPaymentProcessor {
      _cleanSignatureCache() {
           if (processedSignaturesThisSession.size > MAX_PROCESSED_SIGNATURES) {
                console.warn(`[SigCache] Reached max size (${MAX_PROCESSED_SIGNATURES}). Clearing oldest ${Math.floor(MAX_PROCESSED_SIGNATURES / 2)} entries.`);
-               // Simple strategy: remove half the entries (assumes Set iteration order is insertion order)
                const entriesToRemove = Math.floor(MAX_PROCESSED_SIGNATURES / 2);
                let i = 0;
-               // Use Array.from to create a stable array for iteration before deletion
                const sigs = Array.from(processedSignaturesThisSession);
                for (const sig of sigs) {
                    if (i >= entriesToRemove) break;
@@ -1955,8 +1913,8 @@ console.log("✅ Payment Processor instantiated.");
 
 // --- End of Part 2b ---
 // --- Start of Part 3a ---
-// index.js - Part 3a (Corrected for Skewed Odds & Separate Wallets)
-// --- VERSION: 2.5.0 ---
+// index.js - Part 3a (Corrected for Separate Payout Keys & Skewed Odds)
+// --- VERSION: 2.6.0 ---
 
 // (Code continues directly from the end of Part 2b)
 
@@ -1988,7 +1946,6 @@ async function monitorPayments() {
         // --- End Optional Throttle ---
 
         // Define wallets to monitor based on environment variables
-        // ** MODIFIED: Monitors all configured deposit wallets **
         const monitoredWallets = [
              { envVar: 'CF_WALLET_ADDRESS',       type: 'coinflip', priority: 0 },
              { envVar: 'RACE_WALLET_ADDRESS',     type: 'race',     priority: 0 },
@@ -2000,7 +1957,6 @@ async function monitorPayments() {
         for (const walletInfo of monitoredWallets) {
             const walletAddress = process.env[walletInfo.envVar];
             if (!walletAddress) {
-                // Log only once per type if missing? For now, skip silently.
                 // console.warn(`[Monitor] Skipping wallet type ${walletInfo.type} - address env var ${walletInfo.envVar} not configured.`);
                 continue;
             }
@@ -2105,24 +2061,12 @@ async function monitorPayments() {
  * Relies on RateLimitedConnection for underlying RPC calls.
  * @param {string | PublicKey} recipientPublicKey - The recipient's address.
  * @param {bigint} amountLamports - The amount to send in lamports (MUST be BigInt).
- * @param {'coinflip' | 'race'} payoutWalletType - Determines which private key to use ('coinflip' uses BOT_PRIVATE_KEY for main wallet games, 'race' uses RACE_BOT_PRIVATE_KEY).
- * @returns {Promise<{success: boolean, signature?: string, error?: string}>} Result object.
+ * @param {'coinflip' | 'race' | 'slots' | 'roulette' | 'war'} payoutWalletType - Determines which private key ENV VAR to use.
+ * @returns {Promise<{success: boolean, signature?: string}>} Result object. Throws error on failure.
  */
+ // ** MODIFIED: Handles 5 distinct payout private keys **
 async function sendSol(recipientPublicKey, amountLamports, payoutWalletType) {
     const operationId = `sendSol-${payoutWalletType}-${Date.now().toString().slice(-6)}`;
-    // console.log(`DEBUG_SENDSOL: ${operationId} - Entering function.`); // Reduce noise
-
-    // Determine correct private key based on payoutWalletType
-    // IMPORTANT: Assumes 'coinflip' covers CF, Slots, Roulette, War payouts. 'race' covers Race payouts.
-    const privateKeyEnvVar = payoutWalletType === 'race' ? 'RACE_BOT_PRIVATE_KEY' : 'BOT_PRIVATE_KEY';
-    const privateKey = process.env[privateKeyEnvVar];
-
-    if (!privateKey) {
-        console.error(`[${operationId}] ❌ ERROR: Missing private key env var ${privateKeyEnvVar}.`);
-        // ** Throw error to be caught by payout job retry logic **
-        throw new Error(`Missing private key for ${payoutWalletType}`);
-        // return { success: false, error: `Missing private key for ${payoutWalletType}` }; // Old way
-    }
 
     let recipientPubKey;
     try {
@@ -2130,26 +2074,36 @@ async function sendSol(recipientPublicKey, amountLamports, payoutWalletType) {
         if (!(recipientPubKey instanceof PublicKey)) throw new Error("Invalid recipient public key type");
     } catch (e) {
         console.error(`[${operationId}] ❌ ERROR: Invalid recipient address format: "${recipientPublicKey}". Error: ${e.message}`);
-         // ** Throw error to be caught by payout job retry logic **
         throw new Error(`Invalid recipient address: ${e.message}`);
-        // return { success: false, error: `Invalid recipient address: ${e.message}` }; // Old way
     }
 
-    // Validate amount (should already be BigInt if called correctly by handlePayoutJob)
     let amountToSend;
     try {
-        amountToSend = BigInt(amountLamports); // Ensure it's BigInt
+        amountToSend = BigInt(amountLamports);
         if (amountToSend <= 0n) {
             console.error(`[${operationId}] ❌ ERROR: Payout amount ${amountToSend} is zero or negative.`);
-             // ** Throw error to be caught by payout job retry logic **
             throw new Error('Payout amount is zero or negative');
-            // return { success: false, error: 'Payout amount is zero or negative' }; // Old way
         }
     } catch (e) {
         console.error(`[${operationId}] ❌ ERROR: Failed to convert input amountLamports '${amountLamports}' to BigInt. Error: ${e.message}`);
-         // ** Throw error to be caught by payout job retry logic **
         throw new Error(`Invalid payout amount format: ${e.message}`);
-        // return { success: false, error: `Invalid payout amount format: ${e.message}` }; // Old way
+    }
+
+    // ** MODIFIED: Select correct private key based on specific game type **
+    let privateKeyEnvVar;
+    switch (payoutWalletType) {
+        case 'race':     privateKeyEnvVar = 'RACE_BOT_PRIVATE_KEY';     break;
+        case 'slots':    privateKeyEnvVar = 'SLOTS_BOT_PRIVATE_KEY';    break;
+        case 'roulette': privateKeyEnvVar = 'ROULETTE_BOT_PRIVATE_KEY'; break;
+        case 'war':      privateKeyEnvVar = 'WAR_BOT_PRIVATE_KEY';      break;
+        case 'coinflip': // Fallthrough intended
+        default:         privateKeyEnvVar = 'CF_BOT_PRIVATE_KEY';       break; // Default to CF key
+    }
+
+    const privateKey = process.env[privateKeyEnvVar];
+    if (!privateKey) {
+        console.error(`[${operationId}] ❌ ERROR: Missing private key env var ${privateKeyEnvVar} for payout type ${payoutWalletType}.`);
+        throw new Error(`Missing private key for ${payoutWalletType}`);
     }
 
     const amountSOL = Number(amountToSend) / LAMPORTS_PER_SOL;
@@ -2157,45 +2111,33 @@ async function sendSol(recipientPublicKey, amountLamports, payoutWalletType) {
     // Calculate Priority Fee dynamically based on settings
     const basePriorityFee = parseInt(process.env.PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS, 10);
     const maxPriorityFee = parseInt(process.env.PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS, 10);
-    // Use PAYOUT_PRIORITY_FEE_RATE (e.g., 0.0001 for 0.01%)
     const calculatedFee = Math.floor(Number(amountToSend) * PRIORITY_FEE_RATE);
-    // Clamp the fee between base and max
     let priorityFeeMicroLamports = Math.max(basePriorityFee, Math.min(calculatedFee, maxPriorityFee));
-
 
     if (isNaN(priorityFeeMicroLamports)) {
          console.error(`[${operationId}] ❌ ERROR: NaN detected during priority fee calculation! base=${basePriorityFee}, max=${maxPriorityFee}, rate=${PRIORITY_FEE_RATE}, amount=${amountToSend}, calc=${calculatedFee}, final=${priorityFeeMicroLamports}`);
          console.warn(`[${operationId}] NaN priority fee, defaulting to base fee: ${basePriorityFee}`);
-         priorityFeeMicroLamports = basePriorityFee; // Use base as fallback
+         priorityFeeMicroLamports = basePriorityFee;
     }
-    // console.log(`DEBUG_SENDSOL: ${operationId} - Using Priority Fee: ${priorityFeeMicroLamports} microLamports`); // Reduce noise
-
 
     try {
-        // console.log(`DEBUG_SENDSOL: ${operationId} - Entering transaction build/send block...`); // Reduce noise
         const payerWallet = Keypair.fromSecretKey(bs58.decode(privateKey));
 
-        // Fetch latest blockhash just before sending
         const latestBlockhash = await solanaConnection.getLatestBlockhash('confirmed');
         if (!latestBlockhash || !latestBlockhash.blockhash || !latestBlockhash.lastValidBlockHeight) {
             throw new Error('Failed to get valid latest blockhash object from RPC.');
         }
-        // console.log(`[${operationId}] Using blockhash: ${latestBlockhash.blockhash}, lastValidHeight: ${latestBlockhash.lastValidBlockHeight}`); // More debug
 
         const transaction = new Transaction({
             recentBlockhash: latestBlockhash.blockhash,
             feePayer: payerWallet.publicKey
         });
 
-        // Add priority fee instruction
         transaction.add(
             ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports })
         );
+        // transaction.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 200000 })); // Optional
 
-        // Optional: Add compute limit if needed, but usually default is fine for simple transfers
-        // transaction.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 200000 })); // Example limit
-
-        // Add the transfer instruction
         transaction.add(
             SystemProgram.transfer({
                 fromPubkey: payerWallet.publicKey,
@@ -2205,50 +2147,41 @@ async function sendSol(recipientPublicKey, amountLamports, payoutWalletType) {
         );
 
         const confirmationTimeoutMs = parseInt(process.env.PAYOUT_CONFIRM_TIMEOUT_MS, 10);
-        // console.log(`DEBUG_SENDSOL: ${operationId} - Calling sendAndConfirmTransaction...`); // Reduce noise
 
-        // Use the main solanaConnection instance which handles rate limiting/rotation
         const signature = await sendAndConfirmTransaction(
-            solanaConnection, // Use the RateLimitedConnection instance
+            solanaConnection,
             transaction,
-            [payerWallet], // Signer
+            [payerWallet],
             {
-                commitment: 'confirmed', // Wait for 'confirmed' commitment
-                skipPreflight: false, // Keep preflight enabled for safety
-                maxRetries: parseInt(process.env.SCT_MAX_RETRIES || '3', 10), // Retries for sendAndConfirm itself
-                preflightCommitment: 'confirmed', // Preflight commitment level
-                lastValidBlockHeight: latestBlockhash.lastValidBlockHeight, // Include last valid block height
+                commitment: 'confirmed',
+                skipPreflight: false,
+                maxRetries: parseInt(process.env.SCT_MAX_RETRIES || '3', 10),
+                preflightCommitment: 'confirmed',
+                lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
             }
         );
 
-        console.log(`[${operationId}] SUCCESS! ✅ Sent ${amountSOL.toFixed(3)} SOL to ${recipientPubKey.toBase58()}. TX: ${signature.slice(0,10)}...`); // Use 3 decimals
+        // ** FORMATTING APPLIED ** - Use toFixed(3)
+        console.log(`[${operationId}] SUCCESS! ✅ Sent ${amountSOL.toFixed(3)} SOL to ${recipientPubKey.toBase58()} from key ${privateKeyEnvVar}. TX: ${signature.slice(0,10)}...`);
         return { success: true, signature };
 
     } catch (error) {
-        console.error(`[${operationId}] ❌ SEND FAILED. Error message:`, error.message);
+        // Error classification and re-throw logic (remains the same)
+        console.error(`[${operationId}] ❌ SEND FAILED from key ${privateKeyEnvVar}. Error message:`, error.message);
         if (error.logs) {
              console.error(`[${operationId}] Simulation Logs (if available, last 10):`);
              error.logs.slice(-10).forEach(log => console.error(`   -> ${log}`));
         }
-
         const errorMsg = error.message.toLowerCase();
-        let returnError = error.message; // Default to original message
-
-        // Classify error for retry logic / user message
+        let returnError = error.message;
         if (errorMsg.includes('insufficient lamports') || errorMsg.includes('insufficient funds')) { returnError = 'Insufficient funds in payout wallet.'; }
         else if (errorMsg.includes('blockhash not found') || errorMsg.includes('block height exceeded') || errorMsg.includes('slot advance behavior')) { returnError = 'Transaction expired (blockhash invalid/expired). Retryable.'; }
         else if (errorMsg.includes('transaction was not confirmed') || errorMsg.includes('timed out waiting')) { returnError = `Transaction confirmation timeout (${confirmationTimeoutMs / 1000}s). May succeed later. Retryable.`;}
         else if (errorMsg.includes('custom program error') || errorMsg.includes('invalid account data') || errorMsg.includes('account not found')) { returnError = `Permanent chain error: ${error.message}`; }
-        else if (isRetryableError(error)) { returnError = `Temporary network/RPC error: ${error.message}. Retryable.`; } // Check using helper
-        else { returnError = `Send/Confirm error: ${error.message}`; } // Default for other errors
-
-        // Attach retryable status to the error object if possible
+        else if (isRetryableError(error)) { returnError = `Temporary network/RPC error: ${error.message}. Retryable.`; }
+        else { returnError = `Send/Confirm error: ${error.message}`; }
         error.retryable = isRetryableError(error);
-
-        // Ensure the error object passed back contains the classified message
         error.message = returnError;
-
-        // Rethrow the modified error object so processJob retry logic gets the classified reason
         throw error;
     }
 }
@@ -2286,13 +2219,12 @@ async function processPaidBet(bet) {
         // Call the appropriate game handler *after* releasing the lock
         // Add a try-catch around the game handler call itself
         try {
-            // ** MODIFIED: Pass config for edge/skew logic **
-            const gameConfig = GAME_CONFIG[bet.game_type]; // Get specific game config if needed
-            const cfEdge = parseFloat(process.env.CF_HOUSE_EDGE || '0.65'); // Get skew values
+            // ** Get skew parameters from environment **
+            const cfEdge = parseFloat(process.env.CF_HOUSE_EDGE || '0.65');
             const raceEdge = parseFloat(process.env.RACE_HOUSE_EDGE || '0.50');
             const slotsHiddenEdge = parseFloat(process.env.SLOTS_HIDDEN_EDGE || '0.10');
             const rouletteHiddenEdge = parseFloat(process.env.ROULETTE_HIDDEN_EDGE || '0.65');
-            // War skew is handled entirely within its function now
+            // War skew is internal to its handler
 
             if (bet.game_type === 'coinflip') {
                 await handleCoinflipGame(bet, cfEdge); // Pass edge for auto-win check
@@ -2322,7 +2254,6 @@ async function processPaidBet(bet) {
             try { await client.query('ROLLBACK'); } catch (rbError) { console.error("Rollback failed:", rbError); }
         }
         // Mark bet with error status - do this outside the failed transaction
-         // Check status first to avoid overwriting a more specific error
          const currentStatusResult = await pool.query('SELECT status FROM bets WHERE id = $1', [bet.id]);
          if (currentStatusResult.rows[0]?.status === 'payment_verified' || currentStatusResult.rows[0]?.status === 'processing_game') {
              await updateBetStatus(bet.id, 'error_processing_setup');
@@ -2338,35 +2269,29 @@ async function getUserDisplayName(chat_id, user_id) {
      try {
          const chatMember = await bot.getChatMember(chat_id, user_id);
          const user = chatMember.user;
-         // Prioritize username, fallback to first name, finally use partial ID
          let name = user.first_name || `User_${String(user_id).slice(-4)}`;
-         if(user.username) name = `@${user.username}`; // Overwrite with username if available
-
-         return escapeMarkdownV2(name); // Use central escape function
+         if(user.username) name = `@${user.username}`;
+         return escapeMarkdownV2(name);
      } catch (e) {
-         // Handle user not found or other errors gracefully
           if (e.response && e.response.statusCode === 400 && e.message.includes('user not found')) {
-               // User might have left the chat
                // console.warn(`Couldn't get username/name for user ${user_id} in chat ${chat_id}: User not found.`);
           } else if (e.response && e.response.statusCode === 403) {
-               // Bot might be blocked or lack permissions
                // console.warn(`Couldn't get username/name for user ${user_id} in chat ${chat_id}: Bot blocked or no permission.`);
           } else {
-               // console.warn(`Couldn't get username/name for user ${user_id} in chat ${chat_id}:`, e.message); // Other errors
+               // console.warn(`Couldn't get username/name for user ${user_id} in chat ${chat_id}:`, e.message);
           }
          const fallbackName = `User_${String(user_id).slice(-4)}`;
-         return escapeMarkdownV2(fallbackName); // Escape fallback too
+         return escapeMarkdownV2(fallbackName);
      }
 }
 
 
-// --- Game Logic Implementation (Existing & New with Skewed Odds/Full Payouts) ---
+// --- Game Logic Implementation (Modified for Skewed Odds/Full Payouts) ---
 
 // ** MODIFIED: Accepts edge for auto-win, pays full 2x on win **
-async function handleCoinflipGame(bet, cfEdge) { // cfEdge comes from process.env.CF_HOUSE_EDGE
+async function handleCoinflipGame(bet, cfEdge) {
     const { id: betId, user_id, chat_id, bet_details, expected_lamports, memo_id } = bet;
     const choice = bet_details.choice;
-    //const config = GAME_CONFIG.coinflip; // config.houseEdge not used for payout now
     const logPrefix = `CF Bet ${betId} (${memo_id.slice(0, 6)}...)`;
 
     // --- Skewed Outcome ---
@@ -2387,10 +2312,9 @@ async function handleCoinflipGame(bet, cfEdge) { // cfEdge comes from process.en
     }
     // --- End Skewed Outcome ---
 
-
     let payoutLamports = 0n;
     if (win) {
-        // ** MODIFIED: Calculate full payout (2x stake) **
+        // Calculate full payout (2x stake)
         payoutLamports = BigInt(expected_lamports) * 2n;
     }
 
@@ -2399,17 +2323,16 @@ async function handleCoinflipGame(bet, cfEdge) { // cfEdge comes from process.en
 
     // Process win
     if (win && payoutLamports > 0n) {
-        // console.log(`${logPrefix}: ${displayName} WON ${payoutSOL.toFixed(3)} SOL! Choice: ${choice}, Result: ${result}`); // 3 decimals
         const winnerAddress = await getLinkedWallet(user_id);
         if (!winnerAddress) {
             await updateBetStatus(betId, 'completed_win_no_wallet');
-            // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `(` `)` `!` `.` twice
+             // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `(` `)` `!` `.` twice using toFixed(3)
             await safeSendMessage(chat_id,
                 `🎉 ${displayName}, you won the coinflip \\(Result: *${escapeMarkdownV2(result)}*\\) but have no wallet linked\\!\n` +
                 `Your payout of ${escapeMarkdownV2(payoutSOL.toFixed(3))} SOL is waiting\\. Place another bet \\(any amount\\) to link your wallet and receive pending payouts\\.`,
                 { parse_mode: 'MarkdownV2' }
             );
-            return; // Exit early, no payout job needed yet
+            return;
         }
         // Wallet linked, proceed to payout
         try {
@@ -2418,38 +2341,35 @@ async function handleCoinflipGame(bet, cfEdge) { // cfEdge comes from process.en
                   console.error(`${logPrefix}: CRITICAL! Failed to update status from 'processing_game' to 'processing_payout' before queueing! Aborting payout queue.`);
                    // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
                   await safeSendMessage(chatId, `⚠️ Internal error preparing your payout for bet \`${escapeMarkdownV2(memo_id)}\`\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
-                  await updateBetStatus(betId, 'error_payout_status_update'); // Mark with specific error
+                  await updateBetStatus(betId, 'error_payout_status_update');
                   return;
              }
-             // Notify user payout is processing
-              // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `!` `.` three times
+              // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `!` `.` three times using toFixed(3)
             await safeSendMessage(chat_id,
                 `🎉 ${displayName}, you won ${escapeMarkdownV2(payoutSOL.toFixed(3))} SOL\\!\n` +
                 `Result: *${escapeMarkdownV2(result)}*\n\n` +
                 `💸 Processing payout to your linked wallet\\.\\.\\.`,
                 { parse_mode: 'MarkdownV2' }
             );
-             // Queue the payout job
+             // Queue the payout job - Use correct 'coinflip' type for payout key selection
             await paymentProcessor.addPaymentJob({
                 type: 'payout',
                 betId,
                 recipient: winnerAddress,
-                amount: payoutLamports.toString(), // Pass full payout
-                gameType: 'coinflip', // Use main payout key
-                priority: 2, // High priority for payouts
+                amount: payoutLamports.toString(), // Full payout
+                gameType: 'coinflip', // <<< Ensures correct payout key is selected
+                priority: 2,
                 chatId: chat_id,
-                displayName: displayName, // Already escaped
+                displayName: displayName,
                 memoId: memo_id,
             });
         } catch (e) {
             console.error(`${logPrefix}: Error preparing/queueing payout info:`, e);
-             // Try to set error status if preparation failed
              await updateBetStatus(betId, 'error_payout_preparation');
               // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
             await safeSendMessage(chat_id, `⚠️ Error occurred while processing your coinflip win for bet \`${escapeMarkdownV2(memo_id)}\`\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
         }
     } else { // Process loss
-        // console.log(`${logPrefix}: ${displayName} LOST. Choice: ${choice}, Result: ${result}`); // Reduce noise
         await updateBetStatus(betId, 'completed_loss');
          // ** MD ESCAPE APPLIED ** - Escaped `\` `!` `.` `!`
         await safeSendMessage(chat_id,
@@ -2465,7 +2385,6 @@ async function handleCoinflipGame(bet, cfEdge) { // cfEdge comes from process.en
 async function handleRaceGame(bet, raceEdge) { // raceEdge comes from process.env.RACE_HOUSE_EDGE
     const { id: betId, user_id, chat_id, bet_details, expected_lamports, memo_id } = bet;
     const chosenHorseName = bet_details.horse;
-    //const config = GAME_CONFIG.race; // config.houseEdge used only for auto-win now
     const logPrefix = `Race Bet ${betId} (${memo_id.slice(0, 6)}...)`;
 
     // Define horses with DISPLAYED odds (used for payout calculation)
@@ -2478,17 +2397,15 @@ async function handleRaceGame(bet, raceEdge) { // raceEdge comes from process.en
          { name: 'Silver', emoji: '💎', odds: 15.0 }
     ];
     // ** Define heavily skewed INTERNAL probabilities for determining the VISUAL winner **
-    // These favor low-odds horses heavily. Sum should be approx 1.0
     const internalWeights = [
         { name: 'Yellow', weight: 650 }, { name: 'Orange', weight: 180 },
         { name: 'Blue',   weight: 90 },  { name: 'Cyan',   weight: 40 },
         { name: 'White',  weight: 20 },  { name: 'Red',    weight: 10 },
         { name: 'Black',  weight: 5 },   { name: 'Pink',   weight: 2 },
         { name: 'Purple', weight: 1 },   { name: 'Green',  weight: 1 },
-        { name: 'Silver', weight: 1 }    // Very low weight for high odds
+        { name: 'Silver', weight: 1 }    // Adjusted weights
     ];
     const totalWeight = internalWeights.reduce((sum, h) => sum + h.weight, 0);
-
 
     // --- Skewed Outcome ---
     // 1. Check for house auto-win based on RACE_HOUSE_EDGE
@@ -2497,55 +2414,45 @@ async function handleRaceGame(bet, raceEdge) { // raceEdge comes from process.en
     let winningHorse = null; // The horse that visually "wins"
     let playerWins = false;  // If the player's bet actually wins money
 
+    // Helper to pick winner based on skewed weights
+    const pickVisualWinner = () => {
+        let randomWeight = Math.random() * totalWeight;
+        for (const horse of internalWeights) {
+            if (randomWeight < horse.weight) {
+                return horses.find(h => h.name === horse.name);
+            }
+            randomWeight -= horse.weight;
+        }
+        return horses[0]; // Fallback
+    };
+
     if (houseAutoWins) {
         console.log(`${logPrefix}: House auto-win triggered (Edge: ${raceEdge*100}%).`);
-        // Determine a visual winner anyway using skewed weights for the message
-        let randomWeight = Math.random() * totalWeight;
-        for (const horse of internalWeights) {
-            if (randomWeight < horse.weight) {
-                winningHorse = horses.find(h => h.name === horse.name);
-                break;
-            }
-            randomWeight -= horse.weight;
-        }
-        if (!winningHorse) winningHorse = horses[0]; // Fallback
+        winningHorse = pickVisualWinner(); // Determine visual winner for message
         playerWins = false; // House auto-win means player loses regardless
-
     } else {
-        // House didn't auto-win, determine visual winner using SKEWED weights
-        let randomWeight = Math.random() * totalWeight;
-        for (const horse of internalWeights) {
-            if (randomWeight < horse.weight) {
-                winningHorse = horses.find(h => h.name === horse.name);
-                break;
-            }
-            randomWeight -= horse.weight;
-        }
-        if (!winningHorse) winningHorse = horses[0]; // Fallback
-
-        // Player wins ONLY if their chosen horse is the visual winner (and house didn't auto-win)
+        winningHorse = pickVisualWinner(); // Determine visual winner using SKEWED weights
+        // Player wins ONLY if their chosen horse is the visual winner
         playerWins = (chosenHorseName.toLowerCase() === winningHorse.name.toLowerCase());
     }
      // --- End Skewed Outcome ---
 
     let payoutLamports = 0n;
     if (playerWins) {
-        // ** MODIFIED: Calculate full payout based on DISPLAYED odds **
-        // Assuming odds like 2.0 mean "return 2x stake" (includes stake)
+        // Calculate full payout based on DISPLAYED odds
         const winningHorseInfo = horses.find(h => h.name.toLowerCase() === winningHorse.name.toLowerCase());
         if (winningHorseInfo) {
-            // Use Math.round to avoid potential floating point issues before BigInt conversion
+             // Assuming odds like 2.0 mean "return 2x stake"
              payoutLamports = (BigInt(expected_lamports) * BigInt(Math.round(winningHorseInfo.odds * 100))) / 100n;
         } else {
              console.error(`${logPrefix}: Could not find winning horse info for payout calculation? Winner: ${winningHorse?.name}`);
-             // Should not happen, but default to 0 payout if it does
         }
     }
 
     const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
     const displayName = await getUserDisplayName(chat_id, user_id);
 
-    // Send race commentary messages (uses the visual winningHorse)
+    // Send race commentary messages
     try {
          // ** MD ESCAPE APPLIED ** - Escaped `\` `!` twice
         await safeSendMessage(chat_id, `🐎 Race starting for bet \`${escapeMarkdownV2(memo_id)}\`\\! ${displayName} bet on *${escapeMarkdownV2(chosenHorseName)}*\\!`, { parse_mode: 'MarkdownV2' });
@@ -2562,11 +2469,10 @@ async function handleRaceGame(bet, raceEdge) { // raceEdge comes from process.en
 
     // Process win/loss (playerWins determined above considering houseAutoWins)
     if (playerWins && payoutLamports > 0n) {
-        // console.log(`${logPrefix}: ${displayName} WON ${payoutSOL.toFixed(3)} SOL! Horse: ${chosenHorseName}, Visual Winner: ${winningHorse.name}`);
         const winnerAddress = await getLinkedWallet(user_id);
         if (!winnerAddress) {
             await updateBetStatus(betId, 'completed_win_no_wallet');
-             // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `!` `\` `.` twice `\` `(` `)` `.`
+             // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `!` `\` `.` twice `\` `(` `)` `.` using toFixed(3)
             await safeSendMessage(chat_id,
                 `🎉 ${displayName}, your horse *${escapeMarkdownV2(chosenHorseName)}* won the race\\!\n`+
                 `Your payout of ${escapeMarkdownV2(payoutSOL.toFixed(3))} SOL is waiting\\. Place another bet \\(any amount\\) to link your wallet and receive pending payouts\\.`,
@@ -2583,19 +2489,20 @@ async function handleRaceGame(bet, raceEdge) { // raceEdge comes from process.en
                   await updateBetStatus(betId, 'error_payout_status_update');
                   return;
              }
-              // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `!` `\` `.` three times
+              // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `!` `\` `.` three times using toFixed(3)
               await safeSendMessage(chat_id,
                    `🎉 ${displayName}, your horse *${escapeMarkdownV2(chosenHorseName)}* won\\!\n` +
                    `Payout: ${escapeMarkdownV2(payoutSOL.toFixed(3))} SOL\n\n` +
                    `💸 Processing payout to your linked wallet\\.\\.\\.`,
                    { parse_mode: 'MarkdownV2' }
               );
+               // Queue the payout job - Use correct 'race' type for payout key selection
               await paymentProcessor.addPaymentJob({
                   type: 'payout',
                   betId,
                   recipient: winnerAddress,
                   amount: payoutLamports.toString(), // Full payout
-                  gameType: 'race', // Use 'race' to select RACE_BOT_PRIVATE_KEY
+                  gameType: 'race', // <<< Ensures correct payout key is selected
                   priority: 2,
                   chatId: chat_id,
                   displayName: displayName,
@@ -2608,12 +2515,10 @@ async function handleRaceGame(bet, raceEdge) { // raceEdge comes from process.en
             await safeSendMessage(chat_id, `⚠️ Error occurred while processing your race win for bet \`${escapeMarkdownV2(memo_id)}\`\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
         }
     } else { // Loss (either wrong horse OR house auto-win)
-        // console.log(`${logPrefix}: ${displayName} LOST. Choice: ${chosenHorseName}, Visual Winner: ${winningHorse.name}, HouseAutoWin: ${houseAutoWins}`);
         await updateBetStatus(betId, 'completed_loss');
-          // Adjust loss message slightly if house auto-win might have been the reason
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `!` `\` `!` `.`
+           // ** MD ESCAPE APPLIED ** - Escaped `\` `!` `\` `!` `.`
          const lossReason = houseAutoWins
-             ? `The house took the win this time\\!` // Simple message if house auto-wins
+             ? `The house took the win this time\\!`
              : `Your horse *${escapeMarkdownV2(chosenHorseName)}* lost the race\\! Winner: ${winningHorse.emoji} *${escapeMarkdownV2(winningHorse.name)}*\\.`;
 
           // ** MD ESCAPE APPLIED ** - Escaped `\` `!`
@@ -2626,24 +2531,18 @@ async function handleRaceGame(bet, raceEdge) { // raceEdge comes from process.en
 
 // --- Slots Game Logic ---
 
-// ** MODIFIED: Adjusted weights for rarity, removed houseEdge usage from here **
+// ** MODIFIED: Adjusted weights heavily for rarity, payouts adjusted slightly **
 const SLOTS_SYMBOLS = {
     // Payout: { num_matches: payout_multiplier_on_stake }
-    // High frequency, low payout
-    CHERRY: { emoji: '🍒', weight: 25, payout: { 2: 0, 3: 5 } }, // 2 cherries = 0x (no win), 3 cherries = 5x stake (+ stake back = 6x total)
-    ORANGE: { emoji: '🍊', weight: 15, payout: { 3: 10 } }, // 3 oranges = 10x stake
-    // Medium frequency, medium payout
-    BAR:    { emoji: '🍫', weight: 10, payout: { 3: 25 } }, // 3 bars = 25x stake
-    // Low frequency, high payout
-    SEVEN:  { emoji: '7️⃣', weight: 5, payout: { /* Special: Handled below */ } }, // Pays 4x stake if on first reel
-    // Very low frequency, Jackpot
-    TRIPLE_SEVEN: { emoji: '🎰', weight: 1, payout: { 3: 500 } }, // 3 Jackpot symbols = 500x stake
-    // High frequency, no payout
-    BLANK:  { emoji: '➖', weight: 44, payout: {} }, // Adjusted weight
+    CHERRY: { emoji: '🍒', weight: 30, payout: { 3: 3 } },  // 3 cherries = 3x stake (+ stake back = 4x total)
+    ORANGE: { emoji: '🍊', weight: 20, payout: { 3: 8 } },  // 3 oranges = 8x stake
+    BAR:    { emoji: '🍫', weight: 5, payout: { 3: 40 } }, // 3 bars = 40x stake (rarer)
+    SEVEN:  { emoji: '7️⃣', weight: 10, payout: { /* Special */ } }, // Pays 2x stake if on first reel
+    TRIPLE_SEVEN: { emoji: '🎰', weight: 1, payout: { 3: 750 } },// 3 Jackpot = 750x stake (very rare)
+    BLANK:  { emoji: '➖', weight: 50, payout: {} }, // Increased blanks significantly
 };
-// Recalculate total weight for the new distribution
-const slotsTotalWeight = Object.values(SLOTS_SYMBOLS).reduce((sum, s) => sum + s.weight, 0);
-const SLOTS_REEL_LENGTH = 3; // 3 reels
+const slotsTotalWeight = Object.values(SLOTS_SYMBOLS).reduce((sum, s) => sum + s.weight, 0); // Recalculate total weight
+const SLOTS_REEL_LENGTH = 3;
 
 // Helper to create a weighted reel based on new weights
 function createReel() {
@@ -2651,13 +2550,12 @@ function createReel() {
     for (const symbolKey in SLOTS_SYMBOLS) {
         const symbol = SLOTS_SYMBOLS[symbolKey];
         for (let i = 0; i < symbol.weight; i++) {
-            reel.push(symbolKey); // Add symbol key based on weight
+            reel.push(symbolKey);
         }
     }
-    // console.log("Slots Reel Strip Length:", reel.length); // Should match slotsTotalWeight if weights are integers
     return reel;
 }
-const reelStrip = createReel(); // Single reel strip used for all reels
+const reelStrip = createReel(); // Create the reel strip with new weights
 
 // Helper to get a random symbol from the reel
 function spinReel(strip) {
@@ -2666,9 +2564,8 @@ function spinReel(strip) {
 }
 
 // ** MODIFIED: Accepts hidden edge, pays full paytable amount on win **
-async function handleSlotsGame(bet, slotsHiddenEdge) { // slotsHiddenEdge from process.env.SLOTS_HIDDEN_EDGE
+async function handleSlotsGame(bet, slotsHiddenEdge) {
     const { id: betId, user_id, chat_id, expected_lamports, memo_id } = bet;
-    // const config = GAME_CONFIG.slots; // Not needed for payout anymore
     const logPrefix = `Slots Bet ${betId} (${memo_id.slice(0, 6)}...)`;
     const betAmountLamports = BigInt(expected_lamports);
 
@@ -2679,63 +2576,48 @@ async function handleSlotsGame(bet, slotsHiddenEdge) { // slotsHiddenEdge from p
     let results = [];
     if (houseForceLoss) {
         console.log(`${logPrefix}: House hidden edge triggered (Edge: ${slotsHiddenEdge*100}%). Forcing loss.`);
-        // Force a non-winning combination (ensure it doesn't match any paylines)
-        // A simple way is to ensure symbols are different and don't start with Cherry/Seven
-        results = ['BLANK', 'ORANGE', 'BAR']; // Example guaranteed loss
-        // Make sure first reel isn't SEVEN and first two aren't CHERRY
-        if (Math.random() < 0.5) results[0] = 'ORANGE'; // Mix it up slightly
+        // Force a non-winning combination
+        results = ['BLANK', 'CHERRY', 'ORANGE']; // Example guaranteed loss (no 3-in-a-row, no first reel 7)
+        if (Math.random() < 0.5) results[0] = 'ORANGE'; // Avoid first reel 7 reliably
     } else {
-        // Fair spin based on (skewed) reelStrip weights
+        // Fair spin based on (skewed by weights) reelStrip
         for (let i = 0; i < SLOTS_REEL_LENGTH; i++) {
-            results.push(spinReel(reelStrip)); // Get 3 symbol keys
+            results.push(spinReel(reelStrip));
         }
     }
     // --- End Skewed Outcome ---
 
-    // Format result string with escaped pipes for MarkdownV2
     let resultEmojis = results.map(key => SLOTS_SYMBOLS[key]?.emoji || '❓').join(' \\| ');
 
-    // console.log(`${logPrefix}: Spin result display: ${resultEmojis}`);
-
-    // --- Determine Win (based on possibly forced results) ---
-    let winMultiplier = 0; // Base payout multiplier (N:1 odds -> Multiplier = N)
+    // --- Determine Win (based on paytable) ---
+    let winMultiplier = 0; // Multiplier on STAKE
     let winDescription = "No Win";
 
-    // Check for 3 x TRIPLE_SEVEN (Highest Payout)
     if (results.every(s => s === 'TRIPLE_SEVEN')) {
-        winMultiplier = SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3]; // 500
-        winDescription = "Triple 777 Jackpot!";
+        winMultiplier = SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3]; // 750
+        winDescription = "777 JACKPOT!!!";
     }
-    // Check for 3 x BAR
     else if (results.every(s => s === 'BAR')) {
-        winMultiplier = SLOTS_SYMBOLS.BAR.payout[3]; // 25
+        winMultiplier = SLOTS_SYMBOLS.BAR.payout[3]; // 40
         winDescription = "Triple BAR!";
     }
-    // Check for 3 x ORANGE
     else if (results.every(s => s === 'ORANGE')) {
-        winMultiplier = SLOTS_SYMBOLS.ORANGE.payout[3]; // 10
+        winMultiplier = SLOTS_SYMBOLS.ORANGE.payout[3]; // 8
         winDescription = "Triple Orange!";
     }
-    // Check for 3 x CHERRY
     else if (results.every(s => s === 'CHERRY')) {
-        winMultiplier = SLOTS_SYMBOLS.CHERRY.payout[3]; // 5
+        winMultiplier = SLOTS_SYMBOLS.CHERRY.payout[3]; // 3
         winDescription = "Triple Cherry!";
     }
-    // Check for 7 on first reel (only if no higher win)
     else if (results[0] === 'SEVEN' && winMultiplier === 0) {
-        winMultiplier = 4; // Pays 4x stake
+        winMultiplier = 2; // Payout for first reel 7 is now 2x Stake
         winDescription = "Seven on First Reel!";
     }
-    // Check for 2 Cherries on first two reels (only if no higher win) - Removed payout for 2 cherries as per new weights
-    // else if (results[0] === 'CHERRY' && results[1] === 'CHERRY' && winMultiplier === 0) {
-    //     winMultiplier = SLOTS_SYMBOLS.CHERRY.payout[2]; // Pays 0x stake now
-    //     winDescription = "Two Cherries (No Win)!";
-    // }
 
     // --- Calculate Payout (Full Amount) ---
     let payoutLamports = 0n;
     if (winMultiplier > 0) {
-         // ** MODIFIED: Calculate full payout (Stake + Stake * Multiplier) **
+         // Full Payout = Stake + (Stake * Multiplier)
          payoutLamports = betAmountLamports + (betAmountLamports * BigInt(winMultiplier));
     }
 
@@ -2750,11 +2632,11 @@ async function handleSlotsGame(bet, slotsHiddenEdge) { // slotsHiddenEdge from p
 
 
     if (win) {
-        // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `!` using toFixed(3)
+         // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `!` using toFixed(3)
         resultMessage += `🎉 *${escapeMarkdownV2(winDescription)}* You won ${escapeMarkdownV2(payoutSOL.toFixed(3))} SOL\\!`;
          // console.log(`${logPrefix}: ${displayName} WON ${payoutSOL.toFixed(3)} SOL! Result: ${resultEmojis}, Desc: ${winDescription}`);
     } else {
-         // ** MD ESCAPE APPLIED ** - Escaped `\` `.` `\` `!`
+          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` `\` `!`
         resultMessage += `❌ No win this time\\. Better luck next spin\\!`;
         // console.log(`${logPrefix}: ${displayName} LOST. Result: ${resultEmojis}`);
     }
@@ -2774,19 +2656,19 @@ async function handleSlotsGame(bet, slotsHiddenEdge) { // slotsHiddenEdge from p
              const statusUpdated = await updateBetStatus(betId, 'processing_payout');
              if (!statusUpdated) {
                   console.error(`${logPrefix}: CRITICAL! Failed to update status from 'processing_game' to 'processing_payout' before queueing! Aborting payout queue.`);
-                   // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+                    // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
                   await safeSendMessage(chatId, `⚠️ Internal error preparing your payout for bet \`${escapeMarkdownV2(memo_id)}\`\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
                   await updateBetStatus(betId, 'error_payout_status_update');
                   return;
              }
-             // Don't send another message immediately, result message was sent above
+             // Queue payout job - Use correct 'slots' type for payout key selection
              await paymentProcessor.addPaymentJob({
                  type: 'payout',
                  betId,
                  recipient: winnerAddress,
                  amount: payoutLamports.toString(), // Full payout
-                 gameType: 'coinflip', // Use main payout key (shared wallet)
-                 priority: 1, // Normal priority for game payouts
+                 gameType: 'slots', // <<< Ensures correct payout key is selected
+                 priority: 1,
                  chatId: chat_id,
                  displayName: displayName,
                  memoId: memo_id,
@@ -2804,7 +2686,7 @@ async function handleSlotsGame(bet, slotsHiddenEdge) { // slotsHiddenEdge from p
 
 // --- Roulette Game Logic ---
 
-const ROULETTE_NUMBERS = {
+const ROULETTE_NUMBERS = { /* ... remains the same ... */
      0: { color: 'green', dozen: null, column: null },
      1: { color: 'red', dozen: 1, column: 1 }, 2: { color: 'black', dozen: 1, column: 2 },
      3: { color: 'red', dozen: 1, column: 3 }, 4: { color: 'black', dozen: 1, column: 1 }, 5: { color: 'red', dozen: 1, column: 2 },
@@ -2820,25 +2702,18 @@ const ROULETTE_NUMBERS = {
      33: { color: 'black', dozen: 3, column: 3 }, 34: { color: 'red', dozen: 3, column: 1 }, 35: { color: 'black', dozen: 3, column: 2 },
      36: { color: 'red', dozen: 3, column: 3 }
 };
-// Payout odds (N:1, so payout multiplier is N) - Use Standard Fair Odds
-const ROULETTE_PAYOUT_ODDS = {
-     S: 35, // Straight up (pays 35:1 -> 36x stake back)
-     R: 1, B: 1, // Red/Black (pays 1:1 -> 2x stake back)
-     E: 1, O: 1, // Even/Odd (pays 1:1 -> 2x stake back)
-     L: 1, H: 1, // Low (1-18)/High (19-36) (pays 1:1 -> 2x stake back)
-     D1: 2, D2: 2, D3: 2, // Dozens (pays 2:1 -> 3x stake back)
-     C1: 2, C2: 2, C3: 2, // Columns (pays 2:1 -> 3x stake back)
+// Payout odds (N:1) - Standard Fair Odds
+const ROULETTE_PAYOUT_ODDS = { /* ... remains the same ... */
+     S: 35, R: 1, B: 1, E: 1, O: 1, L: 1, H: 1, D1: 2, D2: 2, D3: 2, C1: 2, C2: 2, C3: 2,
 };
 
 // ** MODIFIED: Accepts hidden edge, pays full standard odds on win **
-async function handleRouletteGame(bet, rouletteHiddenEdge) { // rouletteHiddenEdge from process.env.ROULETTE_HIDDEN_EDGE
+async function handleRouletteGame(bet, rouletteHiddenEdge) {
     const { id: betId, user_id, chat_id, bet_details, expected_lamports, memo_id } = bet;
-    // const config = GAME_CONFIG.roulette; // Not used for payout
     const logPrefix = `Roulette Bet ${betId} (${memo_id.slice(0, 6)}...)`;
-    const userBets = bet_details.bets; // e.g., { 'R': '10000000', 'S17': '5000000' }
+    const userBets = bet_details.bets;
 
     // --- Skewed Outcome ---
-    // 1. Spin the wheel (potentially biased)
     let winningNumber = Math.floor(Math.random() * 37); // Initial fair spin (0-36)
     const houseForceZero = Math.random() < rouletteHiddenEdge; // Check if house forces '0'
 
@@ -2849,92 +2724,56 @@ async function handleRouletteGame(bet, rouletteHiddenEdge) { // rouletteHiddenEd
     // --- End Skewed Outcome ---
 
     const winningInfo = ROULETTE_NUMBERS[winningNumber];
-    const winningColorEmoji = winningInfo.color === 'red' ? '🔴' : winningInfo.color === 'black' ? '⚫️' : '🟢'; // Use green for 0
-
-    // console.log(`${logPrefix}: Spin result: ${winningNumber} (${winningInfo.color})`); // Reduce noise
+    const winningColorEmoji = winningInfo.color === 'red' ? '🔴' : winningInfo.color === 'black' ? '⚫️' : '🟢';
 
     // --- Calculate Winnings (Full Odds) ---
     let totalPayoutLamports = 0n; // Includes stake return for winning bets
     let winningBetDescriptions = [];
 
-    for (const betKey in userBets) { // betKey is 'R', 'S17', 'D1' etc.
-        const betAmountLamports = BigInt(userBets[betKey]); // Amount is stored as string
-        if (betAmountLamports <= 0n) continue; // Skip potentially invalid 0 amount bets
+    for (const betKey in userBets) {
+        const betAmountLamports = BigInt(userBets[betKey]);
+        if (betAmountLamports <= 0n) continue;
 
         let betWins = false;
-        let payoutOdds = 0; // This is the N in N:1
+        let payoutOdds = 0; // N in N:1
 
-        // Determine payout odds based on betKey from standard odds
         const betTypeCode = betKey.charAt(0);
-        if (betTypeCode === 'S') {
-            payoutOdds = ROULETTE_PAYOUT_ODDS[betTypeCode] ?? 0;
-        } else if (betTypeCode === 'D' || betTypeCode === 'C') {
-             payoutOdds = ROULETTE_PAYOUT_ODDS[betKey] ?? 0;
-        } else {
-             payoutOdds = ROULETTE_PAYOUT_ODDS[betTypeCode] ?? 0;
-        }
+        if (betTypeCode === 'S') { payoutOdds = ROULETTE_PAYOUT_ODDS[betTypeCode] ?? 0; }
+        else if (betTypeCode === 'D' || betTypeCode === 'C') { payoutOdds = ROULETTE_PAYOUT_ODDS[betKey] ?? 0; }
+        else { payoutOdds = ROULETTE_PAYOUT_ODDS[betTypeCode] ?? 0; }
 
-        // Determine if the bet wins based on winningNumber and betKey
         const betValue = betKey.length > 1 ? betKey.substring(1) : undefined;
 
         switch (betTypeCode) {
-            case 'S': // Straight up
-                 if (winningNumber === parseInt(betValue, 10)) betWins = true;
-                 break;
-            case 'R': // Red
-                 if (winningInfo.color === 'red') betWins = true;
-                 break;
-            case 'B': // Black
-                 if (winningInfo.color === 'black') betWins = true;
-                 break;
-            case 'E': // Even
-                 if (winningNumber !== 0 && winningNumber % 2 === 0) betWins = true;
-                 break;
-            case 'O': // Odd
-                 if (winningNumber !== 0 && winningNumber % 2 !== 0) betWins = true;
-                 break;
-            case 'L': // Low (1-18)
-                 if (winningNumber >= 1 && winningNumber <= 18) betWins = true;
-                 break;
-            case 'H': // High (19-36)
-                 if (winningNumber >= 19 && winningNumber <= 36) betWins = true;
-                 break;
-            case 'D': // Dozen (D1, D2, D3)
-                 const dozen = parseInt(betValue, 10);
-                 if (winningInfo.dozen === dozen) betWins = true;
-                 break;
-            case 'C': // Column (C1, C2, C3)
-                 const column = parseInt(betValue, 10);
-                 if (winningInfo.column === column) betWins = true;
-                 break;
-            default:
-                 console.warn(`${logPrefix}: Unknown bet type key "${betKey}" during payout calc.`);
-                 break;
+            case 'S': if (winningNumber === parseInt(betValue, 10)) betWins = true; break;
+            case 'R': if (winningInfo.color === 'red') betWins = true; break;
+            case 'B': if (winningInfo.color === 'black') betWins = true; break;
+            case 'E': if (winningNumber !== 0 && winningNumber % 2 === 0) betWins = true; break;
+            case 'O': if (winningNumber !== 0 && winningNumber % 2 !== 0) betWins = true; break;
+            case 'L': if (winningNumber >= 1 && winningNumber <= 18) betWins = true; break;
+            case 'H': if (winningNumber >= 19 && winningNumber <= 36) betWins = true; break;
+            case 'D': if (winningInfo.dozen === parseInt(betValue, 10)) betWins = true; break;
+            case 'C': if (winningInfo.column === parseInt(betValue, 10)) betWins = true; break;
         }
 
         if (betWins) {
-            // ** MODIFIED: Calculate Full Payout = Stake + (Stake * Odds) **
+            // Calculate Full Payout = Stake + (Stake * Odds)
             const payoutForBet = betAmountLamports + (betAmountLamports * BigInt(payoutOdds));
             totalPayoutLamports += payoutForBet;
-
-             // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `+` `(` `)` using toFixed(3)
+            // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `+` `(` `)` using toFixed(3)
             const winAmountSOL = (Number(payoutForBet) / LAMPORTS_PER_SOL).toFixed(3);
             winningBetDescriptions.push(`\`${betKey}\` \\(\\+${escapeMarkdownV2(winAmountSOL)} SOL\\)`);
-        } else {
-            // If the bet didn't win, the stake is lost (implicitly handled by not adding to totalPayoutLamports)
         }
     }
 
     // --- Determine final outcome and message ---
-    const payoutLamports = totalPayoutLamports; // Use the calculated total payout
-    // Player "wins" overall if they receive back more than their total initial stake (which is `expected_lamports` for single bets)
-    // For multi-bets this comparison is more complex, let's just check if payout > 0
-    const win = payoutLamports > 0n;
+    const payoutLamports = totalPayoutLamports;
+    const win = payoutLamports > 0n; // Considered a win if anything is paid out
     const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
     const displayName = await getUserDisplayName(chat_id, user_id);
 
     // --- Send Result Message ---
-     // ** MD ESCAPE APPLIED ** - Escaped `\` `!` `\` `(` `)`
+      // ** MD ESCAPE APPLIED ** - Escaped `\` `!` `\` `(` `)`
     let resultMessage = `⚪️ *Roulette Result* for ${displayName} \\!\n\n` +
                          `*Winning Number:* ${winningColorEmoji} *${escapeMarkdownV2(winningNumber)}* \\(${escapeMarkdownV2(winningInfo.color)}\\)\n\n`;
 
@@ -2944,11 +2783,9 @@ async function handleRouletteGame(bet, rouletteHiddenEdge) { // rouletteHiddenEd
         if (winningBetDescriptions.length > 0) {
             resultMessage += `Winning Bets: ${winningBetDescriptions.join(', ')}\n`; // Items are already escaped
         }
-        // console.log(`${logPrefix}: ${displayName} WON ${payoutSOL.toFixed(3)} SOL! Winning No: ${winningNumber}`);
     } else {
          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` `\` `!`
         resultMessage += `❌ No winning bets this time\\. Better luck next spin\\!`;
-        // console.log(`${logPrefix}: ${displayName} LOST. Winning No: ${winningNumber}`);
     }
     await safeSendMessage(chat_id, resultMessage, { parse_mode: 'MarkdownV2' });
 
@@ -2957,7 +2794,7 @@ async function handleRouletteGame(bet, rouletteHiddenEdge) { // rouletteHiddenEd
         const winnerAddress = await getLinkedWallet(user_id);
         if (!winnerAddress) {
             await updateBetStatus(betId, 'completed_win_no_wallet');
-            // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `.` twice
+             // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `.` twice
             await safeSendMessage(chat_id, `Your payout of ${escapeMarkdownV2(payoutSOL.toFixed(3))} SOL is waiting\\. Place another bet to link your wallet\\.`, { parse_mode: 'MarkdownV2' });
             return;
         }
@@ -2974,13 +2811,14 @@ async function handleRouletteGame(bet, rouletteHiddenEdge) { // rouletteHiddenEd
              // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `.` three times using toFixed(3)
              await safeSendMessage(chat_id, `💸 Processing payout of ${escapeMarkdownV2(payoutSOL.toFixed(3))} SOL to your linked wallet\\.\\.\\.`, { parse_mode: 'MarkdownV2' });
 
+             // Queue payout job - Use correct 'roulette' type for payout key selection
             await paymentProcessor.addPaymentJob({
                 type: 'payout',
                 betId,
                 recipient: winnerAddress,
                 amount: payoutLamports.toString(), // Full payout
-                gameType: 'coinflip', // Use main payout key (shared wallet)
-                priority: 1, // Normal priority
+                gameType: 'roulette', // <<< Ensures correct payout key is selected
+                priority: 1,
                 chatId: chat_id,
                 displayName: displayName,
                 memoId: memo_id,
@@ -2998,22 +2836,19 @@ async function handleRouletteGame(bet, rouletteHiddenEdge) { // rouletteHiddenEd
 
 
 // --- Casino War Game Logic --- (NEW - Updated with Suits & Skewed Dealing)
+// ** MODIFIED: Implements ~65% house win rate via dealing bias, pays full 2x on win **
 async function handleWarGame(bet) {
     const { id: betId, user_id, chat_id, expected_lamports, memo_id } = bet;
-    // const config = GAME_CONFIG.war; // No config needed now
     const logPrefix = `War Bet ${betId} (${memo_id.slice(0, 6)}...)`;
 
     // Define ranks and suits
     const cardValues = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]; // J=11, Q=12, K=13, A=14
-    const suits = ['♠️', '♥️', '♦️', '♣️']; // Suit emojis
+    const suits = ['♠️', '♥️', '♦️', '♣️'];
 
-    // Helper function to get rank string
     function cardRankToString(rank) {
         if (rank <= 10) return rank.toString();
-        if (rank === 11) return 'J';
-        if (rank === 12) return 'Q';
-        if (rank === 13) return 'K';
-        if (rank === 14) return 'A';
+        if (rank === 11) return 'J'; if (rank === 12) return 'Q';
+        if (rank === 13) return 'K'; if (rank === 14) return 'A';
         return '?';
     }
 
@@ -3022,29 +2857,31 @@ async function handleWarGame(bet) {
     const playerSuit = suits[Math.floor(Math.random() * suits.length)];
     const playerCardStr = cardRankToString(playerCardRank) + playerSuit;
 
+    // Determine if the house should win this non-push round
     const forceDealerWin = Math.random() < 0.65; // 65% target house win rate
 
     let dealerCardRank;
     let dealerSuit;
+
     if (forceDealerWin) {
-        // Force dealer win - find ranks higher than player
+        // Try to deal a card higher than the player's
         const higherRanks = cardValues.filter(rank => rank > playerCardRank);
         if (higherRanks.length > 0) {
             dealerCardRank = higherRanks[Math.floor(Math.random() * higherRanks.length)];
             console.log(`${logPrefix}: House bias forcing dealer win.`);
         } else {
-            // Player has Ace, dealer cannot win. Force a Push instead.
+            // Player has Ace, dealer cannot win. Force a Push.
             dealerCardRank = playerCardRank;
              console.log(`${logPrefix}: House bias attempted win, but player has Ace. Forcing Push.`);
         }
     } else {
-        // Allow player win or push - find ranks <= player
+        // Allow player to win or push - deal a card less than or equal to player's
         const lowerOrEqualRanks = cardValues.filter(rank => rank <= playerCardRank);
          if (lowerOrEqualRanks.length > 0) {
             dealerCardRank = lowerOrEqualRanks[Math.floor(Math.random() * lowerOrEqualRanks.length)];
         } else {
-            // Should be impossible if cardValues has elements
-            dealerCardRank = playerCardRank; // Fallback
+            // Fallback (shouldn't happen with standard deck)
+            dealerCardRank = cardValues[Math.floor(Math.random() * cardValues.length)];
         }
     }
 
@@ -3054,7 +2891,6 @@ async function handleWarGame(bet) {
     } while (playerCardRank === dealerCardRank && playerSuit === dealerSuit);
     const dealerCardStr = cardRankToString(dealerCardRank) + dealerSuit;
     // --- End Skewed Dealing ---
-
 
     // Determine outcome & payout (based on ranks only, full payout)
     let outcome = '';
@@ -3117,13 +2953,13 @@ async function handleWarGame(bet) {
                  return;
              }
 
-             // Queue the payout job
+             // Queue the payout job - Use correct 'war' type for payout key selection
              await paymentProcessor.addPaymentJob({
                  type: 'payout',
                  betId: betId,
                  recipient: winnerAddress,
                  amount: payoutLamports.toString(), // Full payout amount
-                 gameType: 'coinflip', // War uses the same payout key as coinflip/slots/roulette
+                 gameType: 'war', // <<< Ensures correct payout key is selected
                  priority: 1,
                  chatId: chat_id,
                  displayName: displayName,
@@ -3147,95 +2983,115 @@ async function handleWarGame(bet) {
 
 // --- End of Part 3a ---
 // --- Start of Part 3b ---
-// index.js - Part 3b (Corrected for Skewed Odds & Separate Wallets)
-// --- VERSION: 2.5.0 ---
+// index.js - Part 3b (Corrected for Separate Payout Keys & Skewed Odds)
+// --- VERSION: 2.6.0 ---
 
 // (Code continues directly from the end of Part 3a)
 
 // --- Payout Job Handler ---
-// ** MODIFIED: Removed payout success message **
+// ** MODIFIED: Handles 5 distinct payout key types based on gameType **
 async function handlePayoutJob(job) {
     const { betId, recipient, amount, gameType, chatId, displayName, memoId } = job;
     const logPrefix = `Payout Job Bet ${betId} (${memoId?.slice(0, 6)}...)`;
 
     let payoutAmountLamports;
     try {
-         payoutAmountLamports = BigInt(amount); // Amount comes as string from queue job
+         payoutAmountLamports = BigInt(amount);
          if (payoutAmountLamports <= 0n) {
              console.error(`${logPrefix}: ❌ Payout amount is zero or negative (${amount}). Skipping.`);
              await updateBetStatus(betId, 'error_payout_zero_amount');
               // ** MD ESCAPE APPLIED ** - Escaped `\` `(` `)` `\` `.` twice
              await safeSendMessage(chatId, `⚠️ There was an issue calculating the payout for bet \`${escapeMarkdownV2(memoId)}\` \\(amount was zero\\)\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
-             return; // Exit function, job is considered "done" (failed)
+             return;
          }
     } catch (e) {
         console.error(`${logPrefix}: ❌ Invalid payout amount format received in job: '${amount}'. Error: ${e.message}`);
         await updateBetStatus(betId, 'error_payout_invalid_amount');
          // ** MD ESCAPE APPLIED ** - Escaped `\` `(` `)` `\` `.` twice
         await safeSendMessage(chatId, `⚠️ Technical error processing payout for bet \`${escapeMarkdownV2(memoId)}\` \\(invalid amount\\)\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
-        return; // Exit function
+        return;
     }
 
-    // console.log(`${logPrefix}: Processing payout of ${Number(payoutAmountLamports) / LAMPORTS_PER_SOL} SOL to ${recipient}`); // Reduce noise
+    // ** MODIFIED: Determine correct payoutWalletType based on job.gameType **
+    let payoutWalletType;
+    switch (job.gameType) {
+        case 'race':     payoutWalletType = 'race';     break;
+        case 'slots':    payoutWalletType = 'slots';    break;
+        case 'roulette': payoutWalletType = 'roulette'; break;
+        case 'war':      payoutWalletType = 'war';      break;
+        case 'coinflip': // Fallthrough intended
+        default:
+             payoutWalletType = 'coinflip'; // Default or specifically coinflip
+             if (job.gameType !== 'coinflip') {
+                 console.warn(`${logPrefix}: Unexpected gameType "${job.gameType}" encountered in payout job. Defaulting to 'coinflip' payout key.`);
+             }
+             break;
+    }
+    // console.log(`${logPrefix}: Determined payoutWalletType: ${payoutWalletType} from gameType: ${job.gameType}`); // Debug log
 
-    // Determine which payout key to use ('coinflip' uses main, 'race' uses race key)
-    // War/Slots/Roulette use 'coinflip' key as determined when queuing the job
-    const payoutWalletType = (gameType === 'race') ? 'race' : 'coinflip';
+    // Call sendSol to perform the transaction, passing the determined type
+    let retries = parseInt(process.env.PAYOUT_JOB_RETRIES, 10);
+    const baseRetryDelay = parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10);
+    let attempt = 0;
+    while (attempt <= retries) {
+        attempt++;
+        try {
+             // Pass the determined payoutWalletType to sendSol
+             const sendResult = await sendSol(recipient, payoutAmountLamports, payoutWalletType);
 
-    // Call sendSol to perform the transaction
-    try {
-        const sendResult = await sendSol(recipient, payoutAmountLamports, payoutWalletType);
+             // Success path (sendSol throws on failure)
+             if (sendResult.success && sendResult.signature) {
+                 const recorded = await recordPayout(betId, 'completed_win_paid', sendResult.signature);
+                 if (recorded) {
+                     console.log(`[PAYOUT_JOB_SUCCESS] Bet ${job.betId} payout logged successfully.`);
+                     // Payout success message to user removed
+                     return; // Exit function on success
+                 } else {
+                     console.error(`${logPrefix}: 🆘 CRITICAL! Payout sent (TX: ${sendResult.signature}) but FAILED to record in DB! Requires manual investigation.`);
+                     await updateBetStatus(betId, 'error_payout_record_failed');
+                      // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+                     await safeSendMessage(chatId,
+                         `⚠️ Your payout for bet \`${escapeMarkdownV2(memoId)}\` was sent successfully, but there was an issue recording it\\. Please contact support and provide this TX ID\\.\n` +
+                         `TX: \`https://solscan.io/tx/${sendResult.signature}\``,
+                         { parse_mode: 'MarkdownV2', disable_web_page_preview: true }
+                     );
+                     return; // Exit function even though recording failed
+                 }
+             } else {
+                  // Should not be reached if sendSol throws correctly
+                  console.error(`${logPrefix}: ❌ Payout failed via sendSol but did not throw error? Result:`, sendResult);
+                  throw new Error(sendResult.error || 'sendSol failed without throwing');
+             }
+        } catch (error) {
+            // Handle errors thrown by sendSol or recordPayout issues
+            const errorMessage = error?.message || 'Unknown payout error';
+            const isRetryable = isRetryableError(error);
+            const currentBetStatusResult = await pool.query('SELECT status FROM bets WHERE id = $1', [job.betId]);
+            const currentBetStatus = currentBetStatusResult.rows[0]?.status;
 
-        // sendSol now throws error on failure, so we only reach here on success
-        if (sendResult.success && sendResult.signature) {
-            // console.log(`${logPrefix}: ✅ Payout successful! TX: ${sendResult.signature.slice(0, 10)}...`); // Reduce noise
-            // Attempt to record the payout in the database
-            const recorded = await recordPayout(betId, 'completed_win_paid', sendResult.signature);
-            if (recorded) {
-                // Successfully sent and recorded
-                console.log(`[PAYOUT_JOB_SUCCESS] Bet ${job.betId} payout logged successfully.`);
-
-                // --- PAYOUT SUCCESS MESSAGE REMOVED AS PER REQUEST ---
-                /*
-                const payoutAmountSOLString = (Number(payoutAmountLamports)/LAMPORTS_PER_SOL).toFixed(3); // Use 3 decimals
-                const escapedAmount = escapeMarkdownV2(payoutAmountSOLString);
-                await safeSendMessage(chatId,
-                    `✅ Payout successful for bet \`${escapeMarkdownV2(memoId)}\`\\!\n` +
-                    `${escapedAmount} SOL sent\\.\n` +
-                    `TX: \`https://solscan.io/tx/${sendResult.signature}\``,
-                    { parse_mode: 'MarkdownV2', disable_web_page_preview: true }
-                );
-                */
-                // --- END OF REMOVED MESSAGE ---
-
-                 return; // Explicitly return to signal success completion of this attempt
-            } else {
-                // Sent successfully BUT failed to record in DB - this is critical!
-                console.error(`${logPrefix}: 🆘 CRITICAL! Payout sent (TX: ${sendResult.signature}) but FAILED to record in DB! Requires manual investigation.`);
-                // Update status to a specific error state if possible
-                await updateBetStatus(betId, 'error_payout_record_failed');
-                // Notify user about the issue
-                 // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
-                await safeSendMessage(chatId,
-                    `⚠️ Your payout for bet \`${escapeMarkdownV2(memoId)}\` was sent successfully, but there was an issue recording it\\. Please contact support and provide this TX ID\\.\n` +
-                    `TX: \`https://solscan.io/tx/${sendResult.signature}\``,
-                    { parse_mode: 'MarkdownV2', disable_web_page_preview: true }
-                );
-                return; // Signal completion of attempt, even though recording failed
+            // If already completed or errored out, don't retry or send messages
+            if (currentBetStatus?.startsWith('completed_') || currentBetStatus?.startsWith('error_payout_')) {
+                 console.warn(`[PAYOUT_JOB_RETRY] Bet ${job.betId} is already in final state '${currentBetStatus}'. Aborting payout attempts.`);
+                 return; // Exit function
             }
-        } else {
-             // This block should technically not be reached if sendSol throws on error
-             console.error(`${logPrefix}: ❌ Payout failed via sendSol but did not throw error? Result:`, sendResult);
-             throw new Error(sendResult.error || 'sendSol failed without throwing');
-        }
-      } catch (error) {
-        // This block catches errors thrown by sendSol or potentially other issues
-         console.error(`${logPrefix}: ❌ Payout failed. Error caught in handlePayoutJob: ${error.message}`);
-         // Re-throw the error. The processJob retry logic will catch it
-         // and determine if it's retryable based on isRetryableError(error).
-         throw error; // Rethrow original or classified error from sendSol
-      }
-    // The catch block in processJob handles status updates for final failed retries/non-retryable errors.
+
+            console.warn(`[PAYOUT_JOB_RETRY] Payout attempt ${attempt}/${retries} failed for bet ${job.betId}. Type:${payoutWalletType}. Error: ${errorMessage}. Retryable: ${isRetryable}`);
+
+            if (!isRetryable || attempt > retries) {
+                 const finalErrorStatus = isRetryable ? 'error_payout_job_failed' : 'error_payout_non_retryable';
+                 console.error(`[PAYOUT_JOB_FAIL] Final payout attempt failed (or error not retryable) for bet ${job.betId}. Setting status to ${finalErrorStatus}. Error: ${errorMessage}`);
+                 await updateBetStatus(job.betId, finalErrorStatus);
+                 const safeErrorMsg = escapeMarkdownV2((errorMessage || 'Unknown Error').substring(0, 200));
+                 // ** MD ESCAPE APPLIED ** - Escaped `\` `(` `)` `.` twice
+                 await safeSendMessage(job.chatId, `⚠️ Payout for bet \`${escapeMarkdownV2(job.memoId)}\` failed after ${attempt} attempt\\(s\\)\\. Error: ${safeErrorMsg}\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
+                 return; // Exit function after final failure
+            }
+
+            // Calculate delay with jitter before retrying
+            const delay = baseRetryDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+            await new Promise(resolve => setTimeout(resolve, delay));
+        } // end catch
+    } // end while loop
 }
 
 
@@ -3245,8 +3101,8 @@ bot.on('polling_error', (error) => {
     console.error(`❌ Polling error: ${error.code} - ${error.message}`);
     if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
         console.error("❌❌❌ FATAL: Conflict detected! Another bot instance might be running. Exiting.");
-         shutdown('POLLING_CONFLICT', false).catch(() => process.exit(1)); // Attempt graceful, then exit
-         setTimeout(() => process.exit(1), 5000).unref(); // Force exit if shutdown hangs
+         shutdown('POLLING_CONFLICT', false).catch(() => process.exit(1));
+         setTimeout(() => process.exit(1), 5000).unref();
     } else if (error.code === 'ECONNRESET') {
          console.warn("⚠️ Polling connection reset. Attempting to continue...");
     } else if (error.response && error.response.statusCode === 401) {
@@ -3254,14 +3110,12 @@ bot.on('polling_error', (error) => {
          shutdown('BOT_TOKEN_INVALID', false).catch(() => process.exit(1));
          setTimeout(() => process.exit(1), 5000).unref();
     } else {
-         // Log other polling errors but don't necessarily exit
          console.error(`Unhandled Polling Error: Code ${error.code}, Status ${error.response?.statusCode}`);
     }
 });
 
 bot.on('webhook_error', (error) => {
     console.error(`❌ Webhook error: ${error.code} - ${error.message}`);
-    // Common webhook errors might include network issues, certificate problems, or Telegram issues.
       if (error.message.includes('ETIMEDOUT') || error.message.includes('ECONNRESET')) {
           console.warn("Webhook connection issue detected.");
       } else {
@@ -3272,13 +3126,11 @@ bot.on('webhook_error', (error) => {
 bot.on('error', (error) => { // General errors from the library
     console.error('❌ General Bot Error:', error);
     performanceMonitor.logRequest(false);
-    // You might want to add specific checks here, e.g., for rate limit errors if not caught elsewhere
 });
 
 
 /**
  * Central handler for all incoming messages. Routes to command handlers.
- * ** MODIFIED: Cooldown set earlier **
  */
 async function handleMessage(msg) {
     // Basic filtering done in 'on message' listener
@@ -3294,36 +3146,33 @@ async function handleMessage(msg) {
             if (confirmCooldown.has(userId)) {
                 const lastTime = confirmCooldown.get(userId);
                 if (now - lastTime < cooldownInterval) {
-                     // console.log(`User ${userId} ignored due to cooldown.`); // Reduce noise
                     return; // Ignore command during cooldown
                 }
             }
-            // ** COOLDOWN TIMING ADJUSTMENT ** - Set cooldown *before* executing handler logic
+            // Set cooldown *before* executing handler logic
             confirmCooldown.set(userId, now);
         }
 
         // Command Routing
-        // Allow commands with or without bot username (e.g., /start or /start@MyBot)
         const commandMatch = messageText.trim().match(/^\/(\w+)(?:@\w+)?(?:\s+(.*))?$/s);
         if (!commandMatch) return; // Not a command
 
         const command = commandMatch[1].toLowerCase();
         const args = commandMatch[2]?.trim() || ''; // Arguments string
 
-        // --- Command Handler Map --- Updated for War & /betcf ---
+        // --- Command Handler Map --- (War Info now uses HTML) ---
         const commandHandlers = {
             'start': handleStartCommand,
-            'war': handleWarInfoCommand,        // Info command for War
+            'war': handleWarInfoCommand, // Uses HTML now
             'coinflip': handleCoinflipCommand,
-            'betcf': (msg, args) => handleBetCommand(msg, args), // Coinflip bet
+            'betcf': (msg, args) => handleBetCommand(msg, args),
             'race': handleRaceCommand,
             'betrace': (msg, args) => handleBetRaceCommand(msg, args),
             'slots': handleSlotsCommand,
             'betslots': (msg, args) => handleBetSlotsCommand(msg, args),
             'roulette': handleRouletteCommand,
             'betroulette': (msg, args) => handleBetRouletteCommand(msg, args),
-            'betwar': (msg, args) => handleBetWarCommand(msg, args), // War bet
-            // Generic 'bet' command is removed
+            'betwar': (msg, args) => handleBetWarCommand(msg, args),
             'wallet': handleWalletCommand,
             'help': handleHelpCommand,
             'botstats': handleBotStatsCommand, // Admin
@@ -3333,20 +3182,17 @@ async function handleMessage(msg) {
         const handler = commandHandlers[command];
 
         if (handler) {
-            // Admin Check for specific commands
+            // Admin Check
             if (command === 'botstats') {
                 const adminIds = (process.env.ADMIN_USER_IDS || '').split(',').map(id=>id.trim()).filter(id => id);
                 if (adminIds.includes(userId)) {
-                    await handler(msg); // Admin commands might only expect msg
+                    await handler(msg);
                 } else {
-                     console.log(`User ${userId} attempted unauthorized /${command} command.`);
                      // Silently ignore or send a generic "Unknown command" message
-                     // await safeSendMessage(chatId, "Unknown command.", { parse_mode: 'MarkdownV2' });
                 }
             } else {
                  // Regular command execution
                  if (typeof handler === 'function') {
-                     // Check handler arity (number of expected arguments) to pass args correctly
                      if (handler.length === 2) { // Handler expects msg and args
                           await handler(msg, args);
                      } else { // Handler expects only msg
@@ -3359,22 +3205,18 @@ async function handleMessage(msg) {
             }
         } else {
              // Unknown command
-             // await safeSendMessage(chatId, `Unknown command: \`/${command}\``, { parse_mode: 'MarkdownV2'});
         }
 
     } catch (error) {
-        // Catch errors thrown by command handlers or routing logic
         console.error(`❌ Error processing msg ${messageId} from user ${userId} ("${messageText}"):`, error);
         performanceMonitor.logRequest(false);
         try {
-            // Send a generic error message to the user
              // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
             await safeSendMessage(chatId, "⚠️ An unexpected error occurred processing your request\\. Please try again later or contact support if the issue persists\\.", { parse_mode: 'MarkdownV2'});
         } catch (tgError) { /* safeSendMessage already logs its own errors */ }
     } finally {
-        // Optional: Cooldown map cleanup (runs occasionally)
-         if (Math.random() < 0.05) { // Run roughly 5% of the time
-             const cutoff = Date.now() - 300000; // 5 minutes ago
+         if (Math.random() < 0.05) { // Cleanup cooldown map occasionally
+             const cutoff = Date.now() - 300000;
              for (const [key, timestamp] of confirmCooldown.entries()) {
                  if (timestamp < cutoff) confirmCooldown.delete(key);
              }
@@ -3384,11 +3226,11 @@ async function handleMessage(msg) {
 
 
 // --- Specific Command Handler Implementations ---
+// (Ensure HTML/Markdown escaping is correct in each)
 
-// /start command (HTML) - ** MODIFIED TO REMOVE ANIMATION **
+// /start command (HTML) - Remains HTML
 async function handleStartCommand(msg) {
     const firstName = msg.from.first_name || 'there';
-    // Basic sanitation for HTML
     const sanitizedFirstName = firstName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const welcomeText = `👋 Welcome, <b>${sanitizedFirstName}</b>!\n\n` +
                          `🎰 <b>Solana Gambles Bot</b>\n\n` +
@@ -3397,29 +3239,24 @@ async function handleStartCommand(msg) {
                          `/race - Bet on Horse Races\n` +
                          `/slots - Play the Slot Machine\n` +
                          `/roulette - Play European Roulette\n` +
-                         `/war - Play Casino War (Tie is Push)\n\n` + // Added War
+                         `/war - Play Casino War (Tie is Push)\n\n` +
                          `/wallet - View/Link your Solana wallet\n` +
                          `/help - See all commands & rules\n\n` +
                          `<i>Remember to gamble responsibly!</i>`;
-
     try {
-        // Send only the text message
         await safeSendMessage(msg.chat.id, welcomeText, { parse_mode: 'HTML' });
     } catch (error) {
-        console.error("Error in handleStartCommand (text only):", error);
-        // Fallback if even text fails
-        // await safeSendMessage(msg.chat.id, "Welcome! Error loading details.");
+        console.error("Error in handleStartCommand:", error);
     }
 }
 
 
-// /coinflip command (HTML) - Text only by design
+// /coinflip command (HTML) - Remains HTML
 async function handleCoinflipCommand(msg) {
     try {
         const config = GAME_CONFIG.coinflip;
-        // Payout is now always 2x, edge comes from auto-win chance
-        const payoutMultiplier = '2.00'; // Display fixed 2x payout
-        const houseEdgePercent = (config.houseEdge * 100).toFixed(1); // Get configured auto-win chance
+        const payoutMultiplier = '2.00'; // Fixed 2x
+        const houseEdgePercent = (config.houseEdge * 100).toFixed(1);
 
         const messageText = `🪙 <b>Coinflip Game</b> 🪙\n\n` +
              `Bet on Heads or Tails! Simple and quick.\n\n` +
@@ -3429,90 +3266,87 @@ async function handleCoinflipCommand(msg) {
              `<b>Rules:</b>\n` +
              `- Min Bet: ${config.minBet} SOL\n` +
              `- Max Bet: ${config.maxBet} SOL\n` +
-             `- House Edge: Applied via win probability (Approx ${houseEdgePercent}% house auto-win chance)\n` + // Clarify edge source
-             `- Payout on Win: <b>${payoutMultiplier}x</b> <i>(Stake returned + 1x Stake Won)</i>\n\n` + // Clarify payout
+             `- House Edge: Approx ${houseEdgePercent}% house auto-win chance\n` +
+             `- Payout on Win: <b>${payoutMultiplier}x</b> <i>(Stake returned + 1x Stake Won)</i>\n\n` +
              `You will be given the Coinflip deposit address and a <b>unique Memo ID</b>. Send the <b>exact</b> SOL amount with the memo to place your bet.\n\n`+
              `<i>Good luck!</i>`;
         await safeSendMessage(msg.chat.id, messageText, { parse_mode: 'HTML' });
     } catch (error) {
         console.error("Error in handleCoinflipCommand:", error);
-        await safeSendMessage(msg.chat.id, "Sorry, couldn't display Coinflip info right now."); // Generic error message
+        await safeSendMessage(msg.chat.id, "Sorry, couldn't display Coinflip info right now.");
     }
 }
 
-// /race command (MarkdownV2) - Text only by design
+// /race command (MarkdownV2) - Remains MarkdownV2 (verified escapes)
 async function handleRaceCommand(msg) {
-    const horses = [ // Keep consistent definition
+    const horses = [
          { name: 'Yellow', emoji: '🟡', odds: 1.1 }, { name: 'Orange', emoji: '🟠', odds: 2.0 }, { name: 'Blue', emoji: '🔵', odds: 3.0 }, { name: 'Cyan', emoji: '💧', odds: 4.0 },
          { name: 'White', emoji: '⚪️', odds: 5.0 }, { name: 'Red', emoji: '🔴', odds: 6.0 }, { name: 'Black', emoji: '⚫️', odds: 7.0 }, { name: 'Pink', emoji: '🌸', odds: 8.0 },
          { name: 'Purple', emoji: '🟣', odds: 9.0 }, { name: 'Green', emoji: '🟢', odds: 10.0 }, { name: 'Silver', emoji: '💎', odds: 15.0 }
     ];
-    // ** CORRECTED: Escaped the '(' in the header line **
-    let raceMessage = `🐎 *Horse Race Game* 🐎\n\nBet on the winning horse\\!\n\n*Available Horses \\& Payout Multiplier* \\(Stake \\* Multiplier\\):\n`; // Escaped ( and *
+     // ** Ensured all static MarkdownV2 characters like ! ( ) . - % + & * are escaped **
+    let raceMessage = `🐎 *Horse Race Game* 🐎\n\nBet on the winning horse\\!\n\n*Available Horses \\& Payout Multiplier* \\(Stake \\* Multiplier\\):\n`; // Escaped ! & ( * ) :
     horses.forEach(horse => {
-        // Display the direct odds multiplier
         const displayMultiplier = horse.odds.toFixed(2);
-        // ** MD ESCAPE APPLIED ** - Escaped `\` `-` `\` `(` `\` `)`
+         // Escaped - ( ) x
         raceMessage += `\\- ${horse.emoji} *${escapeMarkdownV2(horse.name)}* \\(${escapeMarkdownV2(displayMultiplier)}x Payout\\)\n`;
     });
     const config = GAME_CONFIG.race;
     const houseEdgePercent = (config.houseEdge * 100).toFixed(1);
-     // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice `\` `(` `)` `\` `-` twice `\` `%` `\` `.` `\` `-`
+     // Escaped . ( ) . - ( ) % + . - * .
     raceMessage += `\n*How to play:*\n` +
                          `1\\. Type \`/betrace amount horse_name\`\n` +
                          `  \\(e\\.g\\., \`/betrace 0\\.1 Yellow\`\\)\n\n` +
                          `*Rules:*\n` +
                          `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` +
                          `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` +
-                         `\\- House Edge: Applied via win probability \\(Approx ${escapeMarkdownV2(houseEdgePercent)}% house auto\\-win chance \\+ skewed horse weights\\)\n` + // Escaped + here
-                         `\\- Payout on Win: Stake \\* Horse Odds\n\n`+ // Using * for multiplication, no + needed
+                         `\\- House Edge: Applied via win probability \\(Approx ${escapeMarkdownV2(houseEdgePercent)}% house auto\\-win chance \\+ skewed horse weights\\)\n` +
+                         `\\- Payout on Win: Stake \\* Horse Odds\n\n`+
                          `You will be given the Race deposit address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to place your bet\\.`;
     await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'MarkdownV2' });
 }
 
-// /slots command (MarkdownV2) - Text only by design
+// /slots command (MarkdownV2) - Remains MarkdownV2 (verified escapes)
 async function handleSlotsCommand(msg) {
-    const config = GAME_CONFIG.slots; // Still needed for min/max bet
+    const config = GAME_CONFIG.slots;
     const hiddenEdgePercent = parseFloat(process.env.SLOTS_HIDDEN_EDGE || '0.10') * 100;
-     // Ensure internal escapes are correct for display
     const paylines = [
          `🍒 Cherry \\| 🍒 Cherry \\| 🍒 Cherry \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[3])}x Stake`,
          `🍊 Orange \\| 🍊 Orange \\| 🍊 Orange \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.ORANGE.payout[3])}x Stake`,
          `🍫 BAR \\| 🍫 BAR \\| 🍫 BAR \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.BAR.payout[3])}x Stake`,
-         `7️⃣ Seven \\| \\(Any\\) \\| \\(Any\\) \\= 4x Stake`, // Special case
-         `🎰 777 \\| 🎰 777 \\| 🎰 777 \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}x Stake \\(Jackpot\\!\\)` // Escaped !
+         `7️⃣ Seven \\| \\(Any\\) \\| \\(Any\\) \\= 2x Stake`, // Updated payout from prev round
+         `🎰 777 \\| 🎰 777 \\| 🎰 777 \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}x Stake \\(Jackpot\\!\\)`
     ];
 
-    // ** CORRECTED: Escaped the '+' in Payout explanation **
-    // Also escaped other relevant static characters.
+    // ** Ensured all static MarkdownV2 characters like ! ( ) . - % + & * are escaped **
     const message = `🎰 *777 Slots Game* 🎰\n\n` +
                    `Spin the 3 reels and match symbols on the center line\\!\n\n`+
                    `*Symbols:*\n`+
                    `🍒 Cherry, 🍊 Orange, 🍫 BAR, 7️⃣ Seven, 🎰 777, ➖ Blank\n\n` +
-                   `*Payouts \\(Win Amount / Bet Amount\\):*\n` + // Escaped hyphen
-                   paylines.map(line => `\\- ${line}`).join('\n') + `\n\n` + // List hyphens escaped
+                   `*Payouts \\(Win Amount / Bet Amount\\):*\n` + // Escaped -
+                   paylines.map(line => `\\- ${line}`).join('\n') + `\n\n` + // Escaped -
                    `*How to Play:*\n` +
-                   `\\- Type \`/betslots amount\` \\(e\\.g\\., \`/betslots 0\\.05\`\\)\n\n` +
+                   `\\- Type \`/betslots amount\` \\(e\\.g\\., \`/betslots 0\\.05\`\\)\n\n` + // Escaped . ( ) .
                    `*Rules:*\n` +
                    `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` +
                    `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` +
-                   `\\- House Edge: Applied via symbol weights \\& hidden ${escapeMarkdownV2(hiddenEdgePercent.toFixed(1))}% forced loss chance\\.\n`+ // Escaped & and .
-                   `\\- Payout on Win: Stake \\+ \\(Stake \\* Multiplier\\)\n\n`+ // Escaped + and * for clarity, also ( )
+                   `\\- House Edge: Applied via symbol weights \\& hidden ${escapeMarkdownV2(hiddenEdgePercent.toFixed(1))}% forced loss chance\\.\n`+ // Escaped & % .
+                   `\\- Payout on Win: Stake \\+ \\(Stake \\* Multiplier\\)\n\n`+ // Escaped + ( ) *
                    `You will be given the Slots deposit address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to spin\\.`; // Escaped .
 
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2' });
 }
 
-// /roulette command (MarkdownV2) - Text only by design
+// /roulette command (MarkdownV2) - Remains MarkdownV2 (verified escapes)
 async function handleRouletteCommand(msg) {
-    const config = GAME_CONFIG.roulette; // Still needed for min/max
+    const config = GAME_CONFIG.roulette;
     const hiddenEdgePercent = parseFloat(process.env.ROULETTE_HIDDEN_EDGE || '0.65') * 100;
-    // ** MD ESCAPE APPLIED ** - Escaped numerous `\` `(` `)` `.` `-` `%` and clarified edge/payout
+    // ** Ensured all static MarkdownV2 characters like ! ( ) . - % + & * are escaped **
     const message = `⚪️ *European Roulette Game* ⚪️
 
 Place bets on the outcome of the wheel spin \\(numbers 0\\-36\\)\\.
 
-Bet Types & Payouts \\(Odds N:1\\) \\- Payout is Stake * \\(N\\+1\\)*:
+Bet Types & Payouts \\(Odds N:1\\) \\- Payout is Stake \\* \\(N\\+1\\)*:
 \\- *Straight* \\(\`S<number>\`, e\\.g\\. \`S17\`\\): 35:1 \\(Pays 36x Stake\\)
 \\- *Red* \\(\`R\`\\) \\/ *Black* \\(\`B\`\\): 1:1 \\(Pays 2x Stake\\)
 \\- *Even* \\(\`E\`\\) \\/ *Odd* \\(\`O\`\\): 1:1 \\(Pays 2x Stake\\)
@@ -3537,15 +3371,12 @@ You will be given the Roulette deposit address and a *unique Memo ID*\\. Send th
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
-// /war command - ** MODIFIED TO USE HTML PARSING **
+// /war command (HTML) - Use HTML version to avoid parsing issues
 async function handleWarInfoCommand(msg) {
-    const config = GAME_CONFIG.war; // Still need min/max bet
-
-    // Basic HTML sanitation for potential edge cases in config values (though unlikely needed for numbers)
+    const config = GAME_CONFIG.war;
     const minBetHtml = String(config.minBet).replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const maxBetHtml = String(config.maxBet).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-    // Construct message using HTML tags
+    // Message using HTML tags
     const message = `🃏 <b>Casino War Game</b> 🃏\n\n` +
                     `Place your bet. You and the dealer each get one card. Highest card wins (Ace high)!\n\n` +
                     `<b>Rules:</b>\n` +
@@ -3557,27 +3388,25 @@ async function handleWarInfoCommand(msg) {
                     `<b>Limits:</b>\n` +
                     `- Min Bet: ${minBetHtml} SOL\n` +
                     `- Max Bet: ${maxBetHtml} SOL\n` +
-                    `- House Edge: Applied via biased card dealing (House wins approx 65% of non-push rounds).\n` + // Removed ~ approx. okay in HTML
+                    `- House Edge: Applied via biased card dealing (House wins approx 65% of non-push rounds).\n` + // Removed problematic ~
                     `- Payout on Win: 2x Stake. Push returns 1x Stake.\n\n` +
                     `You will be given the War deposit address and a <b>unique Memo ID</b>. Send the <b>exact</b> SOL amount with the memo to play.`;
-
-    // Send using HTML parse mode
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'HTML' });
 }
 
-// /wallet command (MarkdownV2) - Text only by design
+// /wallet command (MarkdownV2) - Remains MarkdownV2 (verified escapes)
 async function handleWalletCommand(msg) {
     const userId = String(msg.from.id);
     const walletAddress = await getLinkedWallet(userId);
     if (walletAddress) {
-        // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+         // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
         await safeSendMessage(msg.chat.id,
             `🔗 Your linked Solana wallet:\n\`${escapeMarkdownV2(walletAddress)}\`\n\n`+
             `Payouts will be sent here\\. It's linked automatically when you make your first paid bet\\.`,
             { parse_mode: 'MarkdownV2' }
         );
     } else {
-         // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
         await safeSendMessage(msg.chat.id,
             `🔗 No wallet linked yet\\.\n` +
             `Place a bet and send the required SOL\\. Your sending wallet will be automatically linked for future payouts\\.`,
@@ -3587,51 +3416,40 @@ async function handleWalletCommand(msg) {
 }
 
 
-// /betcf command (Coinflip - MarkdownV2)
-// ** MODIFIED: Uses CF_WALLET_ADDRESS, formats to 3 decimals **
-async function handleBetCommand(msg, args) { // Function name kept, triggered by /betcf
+// /betcf command (MarkdownV2) - Verified escapes & uses CF_WALLET_ADDRESS
+async function handleBetCommand(msg, args) {
      const match = args.trim().match(/^(\d+\.?\d*)\s+(heads|tails)/i);
      if (!match) {
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
          await safeSendMessage(msg.chat.id,
               `⚠️ Invalid format\\. Use: \`/betcf <amount> <heads|tails>\`\n` +
-              `Example: \`/betcf 0\\.100 heads\``, // Example with 3 decimals
+              `Example: \`/betcf 0\\.100 heads\``,
               { parse_mode: 'MarkdownV2' }
          );
          return;
      }
-
      const userId = String(msg.from.id);
      const chatId = String(msg.chat.id);
      const config = GAME_CONFIG.coinflip;
-
      const betAmount = parseFloat(match[1]);
      if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice using toFixed(3)
+            // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice using toFixed(3)
          await safeSendMessage(chatId,
               `⚠️ Invalid bet amount\\. Please bet between ${escapeMarkdownV2(config.minBet.toFixed(3))} and ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL\\.`,
               { parse_mode: 'MarkdownV2' }
          );
          return;
      }
-
      const userChoice = match[2].toLowerCase();
      const memoId = generateMemoId('CF');
      const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
      const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
-
-     const saveResult = await savePendingBet(
-         userId, chatId, 'coinflip', { choice: userChoice }, expectedLamports, memoId, expiresAt
-     );
-
+     const saveResult = await savePendingBet( userId, chatId, 'coinflip', { choice: userChoice }, expectedLamports, memoId, expiresAt );
      if (!saveResult.success) {
-         const errorMessage = saveResult.error || 'Unknown error saving bet';
-           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
-         await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(errorMessage)}\\. Please try the command again\\.`, { parse_mode: 'MarkdownV2' });
+          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+         await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try the command again\\.`, { parse_mode: 'MarkdownV2' });
          return;
      }
-
-     // ** USE CF_WALLET_ADDRESS **
      const depositAddress = process.env.CF_WALLET_ADDRESS;
      if (!depositAddress) {
           console.error("CRITICAL: CF_WALLET_ADDRESS environment variable is not set!");
@@ -3639,86 +3457,67 @@ async function handleBetCommand(msg, args) { // Function name kept, triggered by
           await safeSendMessage(chatId, `⚠️ Bot configuration error: Coinflip deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
           return;
      }
-
       // ** FORMATTING & MD ESCAPE APPLIED ** - Use toFixed(3), escaped `\` `!` `(` `)` `.` twice `(` `)` `.`
      const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
      const message = `✅ Coinflip bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
                       `You chose: *${escapeMarkdownV2(userChoice)}*\n` +
                       `Amount: *${betAmountString} SOL*\n\n` +
-                      `➡️ Send *exactly ${betAmountString} SOL* to \\(Coinflip Deposit\\):\n` + // Added wallet label
+                      `➡️ Send *exactly ${betAmountString} SOL* to \\(Coinflip Deposit\\):\n` +
                       `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
                       `📎 *Include MEMO:* \`${memoId}\`\n\n` +
                       `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
                       `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
-
      await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
-// /betrace command (MarkdownV2)
-// ** MODIFIED: Uses RACE_WALLET_ADDRESS, formats to 3 decimals **
+// /betrace command (MarkdownV2) - Verified escapes & uses RACE_WALLET_ADDRESS
 async function handleBetRaceCommand(msg, args) {
-     const match = args.trim().match(/^(\d+\.?\d*)\s+([\w\s]+)/i); // Allow spaces in name
+     const match = args.trim().match(/^(\d+\.?\d*)\s+([\w\s]+)/i);
      if (!match) {
           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
          await safeSendMessage(msg.chat.id,
               `⚠️ Invalid format\\. Use: \`/betrace <amount> <horse_name>\`\n`+
-              `Example: \`/betrace 0\\.100 Yellow\``, // Example with 3 decimals
+              `Example: \`/betrace 0\\.100 Yellow\``,
               { parse_mode: 'MarkdownV2' }
          );
          return;
      }
-
      const userId = String(msg.from.id);
      const chatId = String(msg.chat.id);
      const config = GAME_CONFIG.race;
-
      const betAmount = parseFloat(match[1]);
      if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice using toFixed(3)
+           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice using toFixed(3)
          await safeSendMessage(chatId,
               `⚠️ Invalid bet amount\\. Please bet between ${escapeMarkdownV2(config.minBet.toFixed(3))} and ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL\\.`,
               { parse_mode: 'MarkdownV2' }
          );
          return;
      }
-
       const chosenHorseNameInput = match[2].trim();
-      const horses = [ // Use same list as in handleRaceGame
+      const horses = [
           { name: 'Yellow', emoji: '🟡', odds: 1.1 }, { name: 'Orange', emoji: '🟠', odds: 2.0 }, { name: 'Blue', emoji: '🔵', odds: 3.0 }, { name: 'Cyan', emoji: '💧', odds: 4.0 },
           { name: 'White', emoji: '⚪️', odds: 5.0 }, { name: 'Red', emoji: '🔴', odds: 6.0 }, { name: 'Black', emoji: '⚫️', odds: 7.0 }, { name: 'Pink', emoji: '🌸', odds: 8.0 },
           { name: 'Purple', emoji: '🟣', odds: 9.0 }, { name: 'Green', emoji: '🟢', odds: 10.0 }, { name: 'Silver', emoji: '💎', odds: 15.0 }
       ];
       const chosenHorse = horses.find(h => h.name.toLowerCase() === chosenHorseNameInput.toLowerCase());
-
      if (!chosenHorse) {
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
          await safeSendMessage(chatId, `⚠️ Invalid horse name: "${escapeMarkdownV2(chosenHorseNameInput)}"\\. Please choose from the list in /race\\.`, { parse_mode: 'MarkdownV2' });
          return;
      }
-
      const memoId = generateMemoId('RA');
      const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
      const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
-
-     // Calculate potential payout for display (full odds)
      const potentialPayoutLamports = (expectedLamports * BigInt(Math.round(chosenHorse.odds * 100))) / 100n;
-     const potentialPayoutSOL = escapeMarkdownV2((Number(potentialPayoutLamports) / LAMPORTS_PER_SOL).toFixed(3)); // 3 decimals
-     const betAmountString = escapeMarkdownV2(betAmount.toFixed(3)); // 3 decimals
-
-     const saveResult = await savePendingBet(
-         userId, chatId, 'race',
-         { horse: chosenHorse.name, odds: chosenHorse.odds }, // Store chosen horse name and odds
-         expectedLamports, memoId, expiresAt
-     );
-
+     const potentialPayoutSOL = escapeMarkdownV2((Number(potentialPayoutLamports) / LAMPORTS_PER_SOL).toFixed(3));
+     const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
+     const saveResult = await savePendingBet( userId, chatId, 'race', { horse: chosenHorse.name, odds: chosenHorse.odds }, expectedLamports, memoId, expiresAt );
      if (!saveResult.success) {
-          const errorMessage = saveResult.error || 'Unknown error saving bet';
            // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
-         await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(errorMessage)}\\. Please try the command again\\.`, { parse_mode: 'MarkdownV2' });
+         await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try the command again\\.`, { parse_mode: 'MarkdownV2' });
          return;
      }
-
-     // ** USE RACE_WALLET_ADDRESS **
      const depositAddress = process.env.RACE_WALLET_ADDRESS;
      if (!depositAddress) {
           console.error("CRITICAL: RACE_WALLET_ADDRESS environment variable is not set!");
@@ -3726,142 +3525,111 @@ async function handleBetRaceCommand(msg, args) {
           await safeSendMessage(chatId, `⚠️ Bot configuration error: Race deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
           return;
      }
-
-     // ** FORMATTING & MD ESCAPE APPLIED ** - Use toFixed(3), escaped `\` `!` `(` `)` `\` `.` twice `\` `(` `)` `\` `.`
+      // ** FORMATTING & MD ESCAPE APPLIED ** - Use toFixed(3), escaped `\` `!` `(` `)` `\` `.` twice `\` `(` `)` `\` `.`
      const message = `✅ Race bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
                       `You chose: ${chosenHorse.emoji} *${escapeMarkdownV2(chosenHorse.name)}*\n` +
                       `Amount: *${betAmountString} SOL*\n` +
-                      `Potential Payout: ${potentialPayoutSOL} SOL \\(Stake * ${chosenHorse.odds.toFixed(2)}x\\)\n\n`+ // Show full payout calc
-                      `➡️ Send *exactly ${betAmountString} SOL* to \\(Race Deposit\\):\n` + // Added wallet label
+                      `Potential Payout: ${potentialPayoutSOL} SOL \\(Stake \\* ${chosenHorse.odds.toFixed(2)}x\\)\n\n`+
+                      `➡️ Send *exactly ${betAmountString} SOL* to \\(Race Deposit\\):\n` +
                       `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
                       `📎 *Include MEMO:* \`${memoId}\`\n\n` +
                       `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
                       `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
-
      await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
-// /betslots command (MarkdownV2)
-// ** MODIFIED: Uses SLOTS_WALLET_ADDRESS, formats to 3 decimals **
+// /betslots command (MarkdownV2) - Verified escapes & uses SLOTS_WALLET_ADDRESS
 async function handleBetSlotsCommand(msg, args) {
-    const match = args.trim().match(/^(\d+\.?\d*)$/); // Only expects amount
+    const match = args.trim().match(/^(\d+\.?\d*)$/);
     if (!match) {
-         // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
         await safeSendMessage(msg.chat.id,
             `⚠️ Invalid format\\. Use: \`/betslots <amount>\`\n` +
-            `Example: \`/betslots 0\\.050\``, // Example with 3 decimals
+            `Example: \`/betslots 0\\.050\``,
             { parse_mode: 'MarkdownV2' }
         );
         return;
     }
-
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
     const config = GAME_CONFIG.slots;
-
     const betAmount = parseFloat(match[1]);
     if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
-         // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice using toFixed(3)
+          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice using toFixed(3)
         await safeSendMessage(chatId,
             `⚠️ Invalid bet amount\\. Please bet between ${escapeMarkdownV2(config.minBet.toFixed(3))} and ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL\\.`,
             { parse_mode: 'MarkdownV2' }
         );
         return;
     }
-
-    const memoId = generateMemoId('SL'); // Slots memo prefix
+    const memoId = generateMemoId('SL');
     const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
     const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
-
-    const betDetails = { betAmountSOL: betAmount }; // Store original amount if needed
-
-    const saveResult = await savePendingBet(
-        userId, chatId, 'slots', betDetails, expectedLamports, memoId, expiresAt
-    );
-
+    const betDetails = { betAmountSOL: betAmount };
+    const saveResult = await savePendingBet( userId, chatId, 'slots', betDetails, expectedLamports, memoId, expiresAt );
     if (!saveResult.success) {
-        const errorMessage = saveResult.error || 'Unknown error saving bet';
          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
-        await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(errorMessage)}\\. Please try the command again\\.`, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' });
         return;
     }
-
-    // ** USE SLOTS_WALLET_ADDRESS **
     const depositAddress = process.env.SLOTS_WALLET_ADDRESS;
     if (!depositAddress) {
          console.error("CRITICAL: SLOTS_WALLET_ADDRESS environment variable is not set!");
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
          await safeSendMessage(chatId, `⚠️ Bot configuration error: Slots deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
          return;
     }
-
-     // ** FORMATTING & MD ESCAPE APPLIED ** - Use toFixed(3), escaped `\` `!` `(` `)` twice `\` `.` twice `\` `(` `)` `\` `.`
+      // ** FORMATTING & MD ESCAPE APPLIED ** - Use toFixed(3), escaped `\` `!` `(` `)` twice `\` `.` twice `\` `(` `)` `\` `.`
     const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
     const message = `✅ Slots bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
                      `Spin Amount: *${betAmountString} SOL*\n\n` +
-                     `➡️ Send *exactly ${betAmountString} SOL* to \\(Slots Deposit\\):\n` + // Added wallet label
+                     `➡️ Send *exactly ${betAmountString} SOL* to \\(Slots Deposit\\):\n` +
                      `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
                      `📎 *Include MEMO:* \`${memoId}\`\n\n` +
                      `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
                      `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
-
     await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
 
-// /betroulette command (MarkdownV2)
-// ** MODIFIED: Uses ROULETTE_WALLET_ADDRESS, formats to 3 decimals **
+// /betroulette command (MarkdownV2) - Verified escapes & uses ROULETTE_WALLET_ADDRESS
 async function handleBetRouletteCommand(msg, args) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
     const config = GAME_CONFIG.roulette;
-
-    const match = args.trim().match(/^(\d+\.?\d*)\s+(.+)$/i); // Match amount and the rest (bet spec)
-
+    const match = args.trim().match(/^(\d+\.?\d*)\s+(.+)$/i);
     if (!match) {
-        // ** MD ESCAPE APPLIED ** - Escaped `\` `.` `\` `\` `\` etc.
+         // ** MD ESCAPE APPLIED ** - Escaped `\` `.` `\` `\` `\` etc.
         await safeSendMessage(chatId,
             `⚠️ Invalid format\\. Use: \`/betroulette <amount> <bet_spec>\`\n` +
             `Bet Spec Codes: \`R\`, \`B\`, \`E\`, \`O\`, \`L\`, \`H\`, \`D1\`/\`D2\`/\`D3\`, \`C1\`/\`C2\`/\`C3\`, \`S<0-36>\`\n`+
-            `Examples: \`/betroulette 0.100 R\` \\| \`/betroulette 0.020 S17\` \\| \`/betroulette 0.200 D1\``, // Examples with 3 decimals
+            `Examples: \`/betroulette 0\\.100 R\` \\| \`/betroulette 0\\.020 S17\` \\| \`/betroulette 0\\.200 D1\``,
             { parse_mode: 'MarkdownV2', disable_web_page_preview: true }
         );
         return;
     }
-
     const betAmount = parseFloat(match[1]);
-    const betSpec = match[2].toUpperCase(); // e.g., "R", "S35", "D1"
-
+    const betSpec = match[2].toUpperCase();
      if (isNaN(betAmount) || betAmount <= 0) {
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `.`
+           // ** MD ESCAPE APPLIED ** - Escaped `\` `.`
          await safeSendMessage(chatId, `⚠️ Invalid bet amount specified: "${escapeMarkdownV2(match[1] || args)}"\\. Amount must be positive\\.`, { parse_mode: 'MarkdownV2' });
          return;
      }
-
     if (betAmount < config.minBet || betAmount > config.maxBet) {
-         // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `(` `\` `-` `\` `)` `.` using toFixed(3)
+          // ** MD ESCAPE & DECIMAL APPLIED ** - Escaped `\` `(` `\` `-` `\` `)` `.` using toFixed(3)
         await safeSendMessage(chatId,
             `⚠️ Bet amount out of range for a single placement \\(${escapeMarkdownV2(config.minBet.toFixed(3))} \\- ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL\\)\\.`,
             { parse_mode: 'MarkdownV2' }
         );
         return;
     }
-
-    let betKey = '';      // The final validated key, e.g., 'R', 'S17', 'D1'
-    let betType = '';     // The category, e.g., 'R', 'S', 'D'
-    let betValue = undefined;
-
-    // Parse the betSpec string
-    if (/^(R|B|E|O|L|H)$/.test(betSpec)) {
-        betKey = betSpec; betType = betSpec;
-    } else if (/^D([1-3])$/.test(betSpec)) { // Check Dozens D1, D2, D3
-        betKey = betSpec; betType = 'D'; betValue = betSpec.substring(1);
-    } else if (/^C([1-3])$/.test(betSpec)) { // Check Columns C1, C2, C3
-        betKey = betSpec; betType = 'C'; betValue = betSpec.substring(1);
-    } else if (/^S(0|[1-9]|[12]\d|3[0-6])$/.test(betSpec)) { // Regex ensures number is 0-36
-        betKey = betSpec; betType = 'S'; betValue = betSpec.substring(1);
-    } else {
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice `\` `\` etc. `\` `.`
+    let betKey = ''; let betType = ''; let betValue = undefined;
+    if (/^(R|B|E|O|L|H)$/.test(betSpec)) { betKey = betSpec; betType = betSpec; }
+    else if (/^D([1-3])$/.test(betSpec)) { betKey = betSpec; betType = 'D'; betValue = betSpec.substring(1); }
+    else if (/^C([1-3])$/.test(betSpec)) { betKey = betSpec; betType = 'C'; betValue = betSpec.substring(1); }
+    else if (/^S(0|[1-9]|[12]\d|3[0-6])$/.test(betSpec)) { betKey = betSpec; betType = 'S'; betValue = betSpec.substring(1); }
+    else {
+           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice `\` `\` etc. `\` `.`
          await safeSendMessage(chatId,
             `⚠️ Invalid Bet Specification: \`${escapeMarkdownV2(betSpec)}\`\\.\n` +
             `Use codes like \`R\`, \`B\`, \`E\`, \`O\`, \`L\`, \`H\`, \`D1\`/\`D2\`/\`D3\`, \`C1\`/\`C2\`/\`C3\`, \`S<0-36>\`\\. See /roulette\\.`,
@@ -3869,124 +3637,92 @@ async function handleBetRouletteCommand(msg, args) {
          );
         return;
     }
-
-    const memoId = generateMemoId('RL'); // Roulette memo prefix
+    const memoId = generateMemoId('RL');
     const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
     const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
-
-    const betDetails = {
-        betAmountSOL: betAmount,
-        bets: { // Store bets with lamports as string: { 'S17': '5000000' }
-            [betKey]: expectedLamports.toString()
-        }
-    };
-
-    const saveResult = await savePendingBet(
-        userId, chatId, 'roulette', betDetails, expectedLamports, memoId, expiresAt
-    );
-
+    const betDetails = { betAmountSOL: betAmount, bets: { [betKey]: expectedLamports.toString() } };
+    const saveResult = await savePendingBet( userId, chatId, 'roulette', betDetails, expectedLamports, memoId, expiresAt );
     if (!saveResult.success) {
-        const errorMessage = saveResult.error || 'Unknown error saving bet';
          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
-        await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(errorMessage)}\\. Please try the command again\\.`, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' });
         return;
     }
-
-    // ** USE ROULETTE_WALLET_ADDRESS **
     const depositAddress = process.env.ROULETTE_WALLET_ADDRESS;
     if (!depositAddress) {
          console.error("CRITICAL: ROULETTE_WALLET_ADDRESS environment variable is not set!");
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
          await safeSendMessage(chatId, `⚠️ Bot configuration error: Roulette deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
          return;
     }
-
-     // ** FORMATTING & MD ESCAPE APPLIED ** - Use toFixed(3), escaped `\` `!` `(` `)` `\` `(` `)` `\` `.` twice `\` `(` `)` `\` `.`
+      // ** FORMATTING & MD ESCAPE APPLIED ** - Use toFixed(3), escaped `\` `!` `(` `)` `\` `(` `)` `\` `.` twice `\` `(` `)` `\` `.`
     const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
     const message = `✅ Roulette bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
                      `Bet Placed: *${escapeMarkdownV2(betKey)}*\n` +
                      `Amount: *${betAmountString} SOL*\n\n` +
-                     `➡️ Send *exactly ${betAmountString} SOL* to \\(Roulette Deposit\\):\n` + // Added wallet label
+                     `➡️ Send *exactly ${betAmountString} SOL* to \\(Roulette Deposit\\):\n` +
                      `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
                      `📎 *Include MEMO:* \`${memoId}\`\n\n` +
                      `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
                      `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
-
     await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
-// /betwar command (MarkdownV2)
-// ** MODIFIED: Uses WAR_WALLET_ADDRESS, formats to 3 decimals **
+// /betwar command (MarkdownV2) - Verified escapes & uses WAR_WALLET_ADDRESS
 async function handleBetWarCommand(msg, args) {
-    const match = args.trim().match(/^(\d+\.?\d*)$/); // Only amount
+    const match = args.trim().match(/^(\d+\.?\d*)$/);
     if (!match) {
-         // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
         await safeSendMessage(msg.chat.id,
             `⚠️ Invalid format\\. Use: \`/betwar <amount>\`\n` +
-            `Example: \`/betwar 0\\.100\``, // Example with 3 decimals
+            `Example: \`/betwar 0\\.100\``,
             { parse_mode: 'MarkdownV2' }
         );
         return;
     }
-
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
-    const config = GAME_CONFIG.war; // Use war config for min/max/expiry
-
+    const config = GAME_CONFIG.war;
     const betAmount = parseFloat(match[1]);
     if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
-         // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice using toFixed(3)
+          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice using toFixed(3)
         await safeSendMessage(chatId,
             `⚠️ Invalid bet amount\\. Please bet between ${escapeMarkdownV2(config.minBet.toFixed(3))} and ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL for War\\.`,
             { parse_mode: 'MarkdownV2' }
         );
         return;
     }
-
-    const memoId = generateMemoId('WA'); // Use 'WA' prefix
+    const memoId = generateMemoId('WA');
     const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
     const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
-
-    const saveResult = await savePendingBet(
-        userId, chatId,
-        'war', // Game Type
-        {},    // Bet Details (empty)
-        expectedLamports, memoId, expiresAt
-    );
-
+    const saveResult = await savePendingBet( userId, chatId, 'war', {}, expectedLamports, memoId, expiresAt );
     if (!saveResult.success) {
-        const errorMessage = saveResult.error || 'Unknown error saving bet';
          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
-        await safeSendMessage(chatId, `⚠️ Error registering War bet: ${escapeMarkdownV2(errorMessage)}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, `⚠️ Error registering War bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' });
         return;
     }
-
-    // ** USE WAR_WALLET_ADDRESS **
     const depositAddress = process.env.WAR_WALLET_ADDRESS;
     if (!depositAddress) {
          console.error("CRITICAL: WAR_WALLET_ADDRESS environment variable is not set!");
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
+           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
          await safeSendMessage(chatId, `⚠️ Bot configuration error: War deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
          return;
     }
-
-     // ** FORMATTING & MD ESCAPE APPLIED ** - Use toFixed(3), escaped `\` `!` `(` `)` `\` `.` twice `\` `(` `)` `\` `.`
+      // ** FORMATTING & MD ESCAPE APPLIED ** - Use toFixed(3), escaped `\` `!` `(` `)` `\` `.` twice `\` `(` `)` `\` `.`
     const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
     const message = `✅ Casino War bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
                      `Bet Amount: *${betAmountString} SOL*\n\n` +
-                     `➡️ Send *exactly ${betAmountString} SOL* to \\(War Deposit\\):\n` + // Added wallet label
+                     `➡️ Send *exactly ${betAmountString} SOL* to \\(War Deposit\\):\n` +
                      `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
                      `📎 *Include MEMO:* \`${memoId}\`\n\n` +
                      `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
                      `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
-
     await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
 
-// /help command (MarkdownV2) - UPDATED
+// /help command (MarkdownV2) - Verified escapes
 async function handleHelpCommand(msg) {
-    // ** MD ESCAPE APPLIED ** - Escaped `\` `-` multiple times `\` `&` `\` `(` `)` `\` `.`
+     // ** MD ESCAPE APPLIED ** - Escaped `\` `-` multiple times `\` `&` `\` `(` `)` `\` `.`
     const helpText = `*Solana Gambles Bot Commands* 🎰\n\n` +
                       `/start \\- Show welcome message\n` +
                       `/help \\- Show this help message\n\n` +
@@ -3995,13 +3731,13 @@ async function handleHelpCommand(msg) {
                       `/race \\- Horse Race info \\& how to bet\n` +
                       `/slots \\- Slots info \\& how to bet\n` +
                       `/roulette \\- Roulette info \\& how to bet\n` +
-                      `/war \\- Casino War info \\& how to bet\n\n` + // Added War
+                      `/war \\- Casino War info \\& how to bet\n\n` +
                       `*Betting:*\n` +
-                      `/betcf <amount> <heads|tails> \\- Place a Coinflip bet\n` + // Renamed
+                      `/betcf <amount> <heads|tails> \\- Place a Coinflip bet\n` +
                       `/betrace <amount> <horse\\_name> \\- Place a Race bet\n` +
                       `/betslots <amount> \\- Place a Slots bet\n` +
                       `/betroulette <amount> <bet_spec> \\- Place a Roulette bet \\(see /roulette\\)\n` +
-                      `/betwar <amount> \\- Place a Casino War bet\n\n` + // Added War bet
+                      `/betwar <amount> \\- Place a Casino War bet\n\n` +
                       `*Wallet:*\n` +
                       `/wallet \\- View your linked Solana wallet for payouts\n\n` +
                       `*Support:* If you encounter issues, please contact support \\(details not provided here\\)\\.`;
@@ -4010,7 +3746,7 @@ async function handleHelpCommand(msg) {
 }
 
 
-// /botstats command (Admin - MarkdownV2)
+// /botstats command (Admin - MarkdownV2) - Updated Version
 async function handleBotStatsCommand(msg) {
     // Note: Assumes ADMIN_USER_IDS check happened in handleMessage
     const processor = paymentProcessor;
@@ -4028,8 +3764,8 @@ async function handleBotStatsCommand(msg) {
     const paymentNormalQueueSize = processor?.normalQueue?.size || 0;
     const paymentNormalQueuePending = processor?.normalQueue?.pending || 0;
 
-     // ** MD ESCAPE APPLIED ** - Escaped `\` `(` `)` `\` `-` multiple times `\` `/` `\` `.` `\` `%`
-    let statsMsg = `*Bot Statistics* \\(v${escapeMarkdownV2('2.5.0')}\\)\n\n`; // Updated version
+      // ** MD ESCAPE APPLIED & Version Updated ** - Escaped `\` `(` `)` `\` `-` multiple times `\` `/` `\` `.` `\` `%`
+    let statsMsg = `*Bot Statistics* \\(v${escapeMarkdownV2('2.6.0')}\\)\n\n`; // Updated version
     statsMsg += `*Uptime:* ${escapeMarkdownV2(Math.floor(process.uptime() / 60))} minutes\n`;
     statsMsg += `*Performance:* Req:${performanceMonitor.requests}, Err:${performanceMonitor.errors}\n`;
     statsMsg += `*Queues:*\n`;
@@ -4051,12 +3787,11 @@ async function handleBotStatsCommand(msg) {
         statsMsg += `  \\- Tot Req: S:${connectionStats.stats.totalRequestsSucceeded ?? 'N/A'}, F:${connectionStats.stats.totalRequestsFailed ?? 'N/A'}\n`;
         statsMsg += `  \\- RL Events: ${connectionStats.stats.rateLimitEvents ?? 'N/A'}\n`;
         statsMsg += `  \\- Rotations: ${connectionStats.stats.endpointRotations ?? 'N/A'}\n`;
-        statsMsg += `  \\- Success Rate: ${escapeMarkdownV2(connectionStats.stats.successRate ? connectionStats.stats.successRate.toFixed(1) + '%' : 'N/A')}\n`; // Safe access
+        statsMsg += `  \\- Success Rate: ${escapeMarkdownV2(connectionStats.stats.successRate ? connectionStats.stats.successRate.toFixed(1) + '%' : 'N/A')}\n`;
     } else {
         statsMsg += `*Solana Connection:* Stats unavailable\\.\n`;
     }
 
-    // Add DB Pool Stats
     try {
         statsMsg += `*DB Pool:*\n`;
         statsMsg += `  \\- Total: ${pool.totalCount}, Idle: ${pool.idleCount}, Waiting: ${pool.waitingCount}\n`;
@@ -4073,8 +3808,8 @@ async function handleBotStatsCommand(msg) {
 
 // --- End of Part 3b ---
 // --- Start of Part 4 ---
-// index.js - Part 4 (Corrected for Skewed Odds & Separate Wallets)
-// --- VERSION: 2.5.0 ---
+// index.js - Part 4 (Corrected for Separate Payout Keys & Skewed Odds)
+// --- VERSION: 2.6.0 ---
 
 // (Code continues directly from the end of Part 3b)
 
@@ -4458,7 +4193,7 @@ server = app.listen(PORT, "0.0.0.0", () => { // Listen on 0.0.0.0 for container/
             console.log("✅ Background Initialization Complete.");
             // Use process.env.npm_package_version if running via npm start and it's defined in package.json
             // ** VERSION UPDATED **
-            const botVersion = process.env.npm_package_version || '2.5.0';
+            const botVersion = process.env.npm_package_version || '2.6.0';
             console.log(`🚀🚀🚀 Solana Gambles Bot (v${botVersion}) is fully operational! 🚀🚀🚀`);
 
         } catch (initError) { // Catch errors from DB init, Telegram setup, etc.
