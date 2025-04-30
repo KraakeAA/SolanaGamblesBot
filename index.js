@@ -3447,25 +3447,25 @@ async function handleRaceCommand(msg) {
          { name: 'White', emoji: '⚪️', odds: 5.0 }, { name: 'Red', emoji: '🔴', odds: 6.0 }, { name: 'Black', emoji: '⚫️', odds: 7.0 }, { name: 'Pink', emoji: '🌸', odds: 8.0 },
          { name: 'Purple', emoji: '🟣', odds: 9.0 }, { name: 'Green', emoji: '🟢', odds: 10.0 }, { name: 'Silver', emoji: '💎', odds: 15.0 }
     ];
-     // ** MD ESCAPE APPLIED ** - Escaped `\` `!` `\` `(` `)` `\` `.` `\` `-`
-    let raceMessage = `🐎 *Horse Race Game* 🐎\n\nBet on the winning horse\\!\n\n*Available Horses \\& Payout Multiplier* \\(Stake * Multiplier\\):\n`; // Changed description slightly
+    // ** CORRECTED: Escaped the '(' in the header line **
+    let raceMessage = `🐎 *Horse Race Game* 🐎\n\nBet on the winning horse\\!\n\n*Available Horses \\& Payout Multiplier* \\(Stake \\* Multiplier\\):\n`; // Escaped ( and *
     horses.forEach(horse => {
-         // Display the direct odds multiplier
-        const displayMultiplier = horse.odds.toFixed(2); // Use the defined odds directly
-         // ** MD ESCAPE APPLIED ** - Escaped `\` `-` `\` `(` `\` `)`
+        // Display the direct odds multiplier
+        const displayMultiplier = horse.odds.toFixed(2);
+        // ** MD ESCAPE APPLIED ** - Escaped `\` `-` `\` `(` `\` `)`
         raceMessage += `\\- ${horse.emoji} *${escapeMarkdownV2(horse.name)}* \\(${escapeMarkdownV2(displayMultiplier)}x Payout\\)\n`;
     });
     const config = GAME_CONFIG.race;
     const houseEdgePercent = (config.houseEdge * 100).toFixed(1);
-     // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice `\` `(` `)` `\` `-` twice `\` `%` `\` `.`
+     // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice `\` `(` `)` `\` `-` twice `\` `%` `\` `.` `\` `-`
     raceMessage += `\n*How to play:*\n` +
                          `1\\. Type \`/betrace amount horse_name\`\n` +
                          `  \\(e\\.g\\., \`/betrace 0\\.1 Yellow\`\\)\n\n` +
                          `*Rules:*\n` +
                          `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` +
                          `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` +
-                         `\\- House Edge: Applied via win probability (Approx ${escapeMarkdownV2(houseEdgePercent)}% house auto\\-win chance \\+ skewed horse weights)\n` + // Clarify edge
-                         `\\- Payout on Win: Stake * Horse Odds\n\n`+ // Clarify payout
+                         `\\- House Edge: Applied via win probability \\(Approx ${escapeMarkdownV2(houseEdgePercent)}% house auto\\-win chance \\+ skewed horse weights\\)\n` + // Escaped + here
+                         `\\- Payout on Win: Stake \\* Horse Odds\n\n`+ // Using * for multiplication, no + needed
                          `You will be given the Race deposit address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to place your bet\\.`;
     await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'MarkdownV2' });
 }
@@ -3474,9 +3474,8 @@ async function handleRaceCommand(msg) {
 async function handleSlotsCommand(msg) {
     const config = GAME_CONFIG.slots; // Still needed for min/max bet
     const hiddenEdgePercent = parseFloat(process.env.SLOTS_HIDDEN_EDGE || '0.10') * 100;
-     // ** MD ESCAPE APPLIED ** - Updated payline text for clarity, escaped chars
+     // Ensure internal escapes are correct for display
     const paylines = [
-         // Using Multiplier on Stake (Win amount = Stake * Multiplier)
          `🍒 Cherry \\| 🍒 Cherry \\| 🍒 Cherry \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[3])}x Stake`,
          `🍊 Orange \\| 🍊 Orange \\| 🍊 Orange \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.ORANGE.payout[3])}x Stake`,
          `🍫 BAR \\| 🍫 BAR \\| 🍫 BAR \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.BAR.payout[3])}x Stake`,
@@ -3484,7 +3483,8 @@ async function handleSlotsCommand(msg) {
          `🎰 777 \\| 🎰 777 \\| 🎰 777 \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}x Stake \\(Jackpot\\!\\)` // Escaped !
     ];
 
-    // ** MD ESCAPE APPLIED ** - Escaped `\` `!` `\` `-` `\` `.` `\` `(` `)` `\` `-` twice `\` `%` `\` `.`
+    // ** CORRECTED: Escaped the '+' in Payout explanation **
+    // Also escaped other relevant static characters.
     const message = `🎰 *777 Slots Game* 🎰\n\n` +
                    `Spin the 3 reels and match symbols on the center line\\!\n\n`+
                    `*Symbols:*\n`+
@@ -3496,9 +3496,9 @@ async function handleSlotsCommand(msg) {
                    `*Rules:*\n` +
                    `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` +
                    `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` +
-                   `\\- House Edge: Applied via symbol weights & hidden ${escapeMarkdownV2(hiddenEdgePercent.toFixed(1))}% forced loss chance\\.\n`+ // Clarify edge
-                   `\\- Payout on Win: Stake + \\(Stake * Multiplier\\)\n\n`+ // Clarify payout
-                   `You will be given the Slots deposit address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to spin\\.`;
+                   `\\- House Edge: Applied via symbol weights \\& hidden ${escapeMarkdownV2(hiddenEdgePercent.toFixed(1))}% forced loss chance\\.\n`+ // Escaped & and .
+                   `\\- Payout on Win: Stake \\+ \\(Stake \\* Multiplier\\)\n\n`+ // Escaped + and * for clarity, also ( )
+                   `You will be given the Slots deposit address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to spin\\.`; // Escaped .
 
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2' });
 }
@@ -3537,10 +3537,10 @@ You will be given the Roulette deposit address and a *unique Memo ID*\\. Send th
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
-// /war command (MarkdownV2) - ** MODIFIED ** Text only by design
+// /war command (MarkdownV2) - Text only by design
 async function handleWarInfoCommand(msg) {
     const config = GAME_CONFIG.war; // Still need min/max bet
-    // ** MD ESCAPE APPLIED & TEXT ADJUSTED FOR SKEWED ODDS **
+    // ** RE-CHECKED: Ensured all static chars like . ! ( ) - % are escaped. No static ~ found. **
     const message = `🃏 *Casino War Game* 🃏
 
     Place your bet\\. You and the dealer each get one card\\. Highest card wins \\(Ace high\\)\\!
