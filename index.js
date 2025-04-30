@@ -1923,12 +1923,6 @@ let isMonitorRunning = false;
 const botStartupTime = Math.floor(Date.now() / 1000);
 let monitorIntervalId = null;
 
-// --- Payment Monitoring Loop ---
-// (Includes stagger delay between wallet checks)
-let isMonitorRunning = false;
-const botStartupTime = Math.floor(Date.now() / 1000);
-let monitorIntervalId = null;
-
 async function monitorPayments() {
     if (isMonitorRunning) return;
     if (!isFullyInitialized) return; // Don't run if bot isn't ready
