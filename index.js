@@ -3103,49 +3103,53 @@ async function handleRaceCommand(msg) {
     await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'MarkdownV2' });
 }
 
-// --- /slots command (MarkdownV2) --- CORRECTED
+// --- CORRECTED /slots command (MarkdownV2) ---
 async function handleSlotsCommand(msg) {
     const config = GAME_CONFIG.slots;
     // Define paylines clearly for MarkdownV2
     const paylines = [
-        `🍒 Cherry \\| 🍒 Cherry \\| \\(Any\\) \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[2])}\\:1`, // Payout is 1:1 (win back stake)
-        `7️⃣ Seven \\| \\(Any\\) \\| \\(Any\\) \\= 4\\:1`,                                                  // Payout is 4:1 (win 4x stake)
+        // Note: No hyphens needing escape within paylines themselves assuming format is "X:1"
+        `🍒 Cherry \\| 🍒 Cherry \\| \\(Any\\) \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[2])}\\:1`,
+        `7️⃣ Seven \\| \\(Any\\) \\| \\(Any\\) \\= 4\\:1`,
         `🍒 Cherry \\| 🍒 Cherry \\| 🍒 Cherry \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[3])}\\:1`,
         `🍊 Orange \\| 🍊 Orange \\| 🍊 Orange \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.ORANGE.payout[3])}\\:1`,
         `🍫 BAR \\| 🍫 BAR \\| 🍫 BAR \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.BAR.payout[3])}\\:1`,
         `🎰 777 \\| 🎰 777 \\| 🎰 777 \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}\\:1`
     ];
 
+    // Corrected message string with escaped hyphen
     const message = `🎰 *777 Slots Game* 🎰\n\n` +
-                     `Spin the 3 reels and match symbols on the center line\\!\n\n`+ // Escape !
+                     `Spin the 3 reels and match symbols on the center line\\!\n\n`+
                      `*Symbols:*\n`+
                      `🍒 Cherry, 🍊 Orange, 🍫 BAR, 7️⃣ Seven, 🎰 777, ➖ Blank\n\n` +
-                     `*Payouts \\(Odds Ratio - Win Amount / Bet Amount\\):*\n` + // Clarify odds meaning
-                     paylines.map(line => `\\- ${line}`).join('\n') + `\n\n` + // Add escape for list hyphen -
+                     // Escaped the hyphen in "Odds Ratio - Win Amount"
+                     `*Payouts \\(Odds Ratio \\- Win Amount / Bet Amount\\):*\n` +
+                     paylines.map(line => `\\- ${line}`).join('\n') + `\n\n` + // List hyphens are correctly escaped `\\-`
                      `*How to Play:*\n` +
-                     `\\- Type \`/betslots amount\` \\(e\\.g\\., \`/betslots 0\\.05\`\\)\n\n` + // Escaped - () . , .
+                     `\\- Type \`/betslots amount\` \\(e\\.g\\., \`/betslots 0\\.05\`\\)\n\n` +
                      `*Rules:*\n` +
-                     `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` + // Escaped -
-                     `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` + // Escaped -
-                     `\\- House Edge: ${escapeMarkdownV2((config.houseEdge * 100).toFixed(1))}% \\(applied to gross winnings\\)\n\n`+ // Escaped - . % ()
-                     `You will be given a wallet address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to spin\\.`; // Escaped . .
+                     `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` +
+                     `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` +
+                     `\\- House Edge: ${escapeMarkdownV2((config.houseEdge * 100).toFixed(1))}% \\(applied to gross winnings\\)\n\n`+
+                     `You will be given a wallet address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to spin\\.`;
 
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2' });
 }
 
 
-// --- /roulette command (MarkdownV2) --- CORRECTED for Syntax Error
+// --- CORRECTED /roulette command (MarkdownV2) ---
 async function handleRouletteCommand(msg) {
     const config = GAME_CONFIG.roulette;
-    // Use a single template literal for the message to avoid concatenation issues
+    // Use a single template literal and escape necessary hyphens
     const message = `⚪️ *European Roulette Game* ⚪️
 
-Place bets on the outcome of the wheel spin \\(0\\-36\\)\\.
+Place bets on the outcome of the wheel spin \\(0\\-36\\)\\. // Escaped hyphen in range 0-36
 
-*Bet Types & Payouts \\(Odds N:1\\) - Payout is Stake * (N+1)*:
+*Bet Types & Payouts \\(Odds N:1\\) \\- Payout is Stake * \\(N+1\\)*: // Escaped hyphen after Odds N:1)
 \\- *Straight* \\(\`S<number>\`, e\\.g\\. \`S17\`\\): 35:1
 \\- *Red* \\(\`R\`\\) \\/ *Black* \\(\`B\`\\): 1:1
 \\- *Even* \\(\`E\`\\) \\/ *Odd* \\(\`O\`\\): 1:1
+// Escaped hyphens in ranges 1-18 and 19-36
 \\- *Low* \\(\`L\`, 1\\-18\\) \\/ *High* \\(\`H\`, 19\\-36\\): 1:1
 \\- *Dozens* \\(\`D1\`\\/\`D2\`\\/\`D3\`\\): 2:1
 \\- *Columns* \\(\`C1\`\\/\`C2\`\\/\`C3\`\\): 2:1
@@ -3165,7 +3169,6 @@ You will be given a wallet address and a *unique Memo ID* for each bet placement
 
     await safeSendMessage(msg.chat.id, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
-
 // /wallet command (MarkdownV2)
 async function handleWalletCommand(msg) {
     const userId = String(msg.from.id);
