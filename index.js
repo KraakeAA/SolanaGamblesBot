@@ -1904,7 +1904,7 @@ const paymentProcessor = new GuaranteedPaymentProcessor();
 console.log("✅ Payment Processor instantiated.");
 
 // --- End of Part 2b ---
-// index.js - Part 3 (Corrected - Final Version with War, /betcf, /betwar)
+// index.js - Part 3 (Corrected Again - Final Version with War, /betcf, /betwar)
 
 // (Code continues directly from the end of Part 2b)
 
@@ -2915,16 +2915,16 @@ async function handleWarGame(bet) {
     const displayName = await getUserDisplayName(chat_id, user_id);
 
     // --- Send Result Message ---
-    let resultMessage = `🃏 *Casino War Result* for ${displayName} \\!\n\n` +
+    let resultMessage = `🃏 *Casino War Result* for ${displayName} \\!\n\n` + // Escaped !
                         `Player Card: *${escapeMarkdownV2(playerCardStr)}*\n` +
                         `Dealer Card: *${escapeMarkdownV2(dealerCardStr)}*\n\n`;
 
     if (playerWins) {
-         resultMessage += `🎉 *You Win\\!* Payout: ${escapeMarkdownV2(payoutSOL)} SOL`;
+         resultMessage += `🎉 *You Win\\!* Payout: ${escapeMarkdownV2(payoutSOL)} SOL`; // Escaped !
     } else if (isPush) {
-         resultMessage += `🤝 *Push \\(Tie\\)!* Bet returned: ${escapeMarkdownV2(payoutSOL)} SOL`;
+         resultMessage += `🤝 *Push \\(Tie\\)!* Bet returned: ${escapeMarkdownV2(payoutSOL)} SOL`; // Escaped ()!
     } else { // Loss
-         resultMessage += `❌ *Dealer Wins\\!* Better luck next time\\.`;
+         resultMessage += `❌ *Dealer Wins\\!* Better luck next time\\.`; // Escaped !.
     }
     await safeSendMessage(chat_id, resultMessage, { parse_mode: 'MarkdownV2' });
 
@@ -2933,6 +2933,7 @@ async function handleWarGame(bet) {
         const winnerAddress = await getLinkedWallet(user_id);
         if (!winnerAddress) {
             await updateBetStatus(betId, 'completed_win_no_wallet'); // Use generic status
+            // Escaped .
             await safeSendMessage(chat_id, `Your ${outcome === 'win' ? 'winnings' : 'returned bet'} of ${escapeMarkdownV2(payoutSOL)} SOL is waiting\\. Place another bet to link your wallet\\.`, { parse_mode: 'MarkdownV2' });
             return; // Exit early, no payout job needed yet
         }
@@ -2941,6 +2942,7 @@ async function handleWarGame(bet) {
              const statusUpdated = await updateBetStatus(betId, 'processing_payout');
              if (!statusUpdated) {
                 console.error(`${logPrefix}: CRITICAL! Failed to update status from 'processing_game' to 'processing_payout' before queueing! Aborting payout queue.`);
+                 // Escaped `.`
                 await safeSendMessage(chatId, `⚠️ Internal error preparing your payout for bet \`${escapeMarkdownV2(memo_id)}\`\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
                 await updateBetStatus(betId, 'error_payout_status_update'); // Mark with specific error
                 return;
@@ -2961,6 +2963,7 @@ async function handleWarGame(bet) {
         } catch (e) {
              console.error(`${logPrefix}: Error preparing/queueing war payout info:`, e);
              await updateBetStatus(betId, 'error_payout_preparation');
+              // Escaped `.`
              await safeSendMessage(chatId, `⚠️ Error occurred while processing your war win/push for bet \`${escapeMarkdownV2(memo_id)}\`\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
         }
     } else if (outcome === 'loss') {
@@ -2986,12 +2989,14 @@ async function handlePayoutJob(job) {
          if (payoutAmountLamports <= 0n) {
              console.error(`${logPrefix}: ❌ Payout amount is zero or negative (${amount}). Skipping.`);
              await updateBetStatus(betId, 'error_payout_zero_amount');
+              // Escaped `().`
              await safeSendMessage(chatId, `⚠️ There was an issue calculating the payout for bet \`${escapeMarkdownV2(memoId)}\` \\(amount was zero\\)\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
              return; // Exit function, job is considered "done" (failed)
          }
     } catch (e) {
         console.error(`${logPrefix}: ❌ Invalid payout amount format received in job: '${amount}'. Error: ${e.message}`);
         await updateBetStatus(betId, 'error_payout_invalid_amount');
+         // Escaped `().`
         await safeSendMessage(chatId, `⚠️ Technical error processing payout for bet \`${escapeMarkdownV2(memoId)}\` \\(invalid amount\\)\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
         return; // Exit function
     }
@@ -3016,14 +3021,14 @@ async function handlePayoutJob(job) {
                 const payoutAmountSOLString = (Number(payoutAmountLamports)/LAMPORTS_PER_SOL).toFixed(6);
                 const escapedAmount = escapeMarkdownV2(payoutAmountSOLString);
 
+                // Escaped `!.`
                 await safeSendMessage(chatId,
                     `✅ Payout successful for bet \`${escapeMarkdownV2(memoId)}\`\\!\n` +
                     `${escapedAmount} SOL sent\\.\n` +
-                    `TX: \`https://solscan.io/tx/${sendResult.signature}\``, // Signature doesn't need escaping in code block
+                    `TX: \`https://solscan.io/tx/${sendResult.signature}\``,
                     { parse_mode: 'MarkdownV2', disable_web_page_preview: true }
                 );
                  console.log(`[PAYOUT_JOB_SUCCESS] Bet ${job.betId} payout logged successfully.`);
-                 // Success: Do not throw error. Let processJob complete.
                  return; // Explicitly return to signal success completion of this attempt
             } else {
                 // Sent successfully BUT failed to record in DB - this is critical!
@@ -3031,12 +3036,12 @@ async function handlePayoutJob(job) {
                 // Update status to a specific error state if possible
                 await updateBetStatus(betId, 'error_payout_record_failed');
                 // Notify user about the issue
+                // Escaped `..`
                 await safeSendMessage(chatId,
-                    `⚠️ Your payout for bet \`${escapeMarkdownV2(memoId)}\` was sent successfully, but there was an issue recording it\\. Please contact support and provide this TX ID\\.\n` +
+                    `⚠️ Your payout for bet \`${escapeMarkdownV2(memo_id)}\` was sent successfully, but there was an issue recording it\\. Please contact support and provide this TX ID\\.\n` +
                     `TX: \`https://solscan.io/tx/${sendResult.signature}\``,
                     { parse_mode: 'MarkdownV2', disable_web_page_preview: true }
                 );
-                // Do not throw error here; the error is logged and status updated. The job attempt is considered "finished" albeit with a critical logging issue.
                 return; // Signal completion of attempt, even though recording failed
             }
         } else {
@@ -3181,7 +3186,7 @@ async function handleMessage(msg) {
         console.error(`❌ Error processing msg ${messageId} from user ${userId} ("${messageText}"):`, error);
         performanceMonitor.logRequest(false);
         try {
-            // Send a generic error message to the user
+            // Send a generic error message to the user - Escaped .
             await safeSendMessage(chatId, "⚠️ An unexpected error occurred processing your request\\. Please try again later or contact support if the issue persists\\.", { parse_mode: 'MarkdownV2'});
         } catch (tgError) { /* safeSendMessage already logs its own errors */ }
     } finally {
@@ -3627,13 +3632,13 @@ async function handleBetRouletteCommand(msg, args) {
     let betValue = undefined;
 
     // Parse the betSpec string
-    if (/^(R|B|E|O|L|H)$/.test(betSpec)) {
-        betKey = betSpec; betType = betSpec;
-    } else if (/^D([1-3])$/.test(betSpec)) {
+    if (/^(R|B|E|O|L|H)<span class="math-inline">/\.test\(betSpec\)\) \{
+betKey \= betSpec; betType \= betSpec;
+\} else if \(/^D\(\[1\-3\]\)</span>/.test(betSpec)) {
         betKey = betSpec; betType = 'D'; betValue = betSpec.substring(1);
-    } else if (/^C([1-3])$/.test(betSpec)) {
-        betKey = betSpec; betType = 'C'; betValue = betSpec.substring(1);
-    } else if (/^S(0|[1-9]|[12]\d|3[0-6])$/.test(betSpec)) { // Regex ensures number is 0-36
+    } else if (/^C([1-3])<span class="math-inline">/\.test\(betSpec\)\) \{
+betKey \= betSpec; betType \= 'C'; betValue \= betSpec\.substring\(1\);
+\} else if \(/^S\(0\|\[1\-9\]\|\[12\]\\d\|3\[0\-6\]\)</span>/.test(betSpec)) { // Regex ensures number is 0-36
         betKey = betSpec; betType = 'S'; betValue = betSpec.substring(1);
     } else {
         await safeSendMessage(chatId,
