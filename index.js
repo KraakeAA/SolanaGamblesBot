@@ -3633,7 +3633,7 @@ async function handleBetRouletteCommand(msg, args) {
 
     // Parse the betSpec string
     if (/^(R|B|E|O|L|H)$/.test(betSpec)) {
-betKey = betSpec; betType \= betSpec;
+betKey = betSpec; betType = betSpec;
 \} else if \(/^D\(\[1\-3\]\)</span>/.test(betSpec)) {
         betKey = betSpec; betType = 'D'; betValue = betSpec.substring(1);
     } else if (/^C([1-3])<span class="math-inline">/\.test\(betSpec\)\) \{
