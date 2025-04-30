@@ -3541,7 +3541,7 @@ You will be given the Roulette deposit address and a *unique Memo ID*\\. Send th
 async function handleWarInfoCommand(msg) {
     const config = GAME_CONFIG.war; // Still need min/max bet
     // ** RE-CHECKED: Ensured all static chars like . ! ( ) - % are escaped. No static ~ found. **
-    const message = `🃏 *Casino War Game* 🃏
+    const message = `🃏 *Casino War Game* 🃏‘
 
     Place your bet\\. You and the dealer each get one card\\. Highest card wins \\(Ace high\\)\\!
 
