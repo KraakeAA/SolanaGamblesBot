@@ -3277,74 +3277,33 @@ async function handleCoinflipCommand(msg) {
     }
 }
 
-// /betrace command (MarkdownV2)
-// ** CORRECTED: Escaped the period within the dynamic chosenHorse.odds.toFixed(2) string **
-async function handleBetRaceCommand(msg, args) {
-     const match = args.trim().match(/^(\d+\.?\d*)\s+([\w\s]+)/i);
-     if (!match) {
-          // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
-         await safeSendMessage(msg.chat.id,
-              `⚠️ Invalid format\\. Use: \`/betrace <amount> <horse_name>\`\n`+
-              `Example: \`/betrace 0\\.100 Yellow\``,
-              { parse_mode: 'MarkdownV2' }
-         );
-         return;
-     }
-     const userId = String(msg.from.id);
-     const chatId = String(msg.chat.id);
-     const config = GAME_CONFIG.race;
-     const betAmount = parseFloat(match[1]);
-     if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) {
-           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice using toFixed(3)
-         await safeSendMessage(chatId,
-              `⚠️ Invalid bet amount\\. Please bet between ${escapeMarkdownV2(config.minBet.toFixed(3))} and ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL\\.`,
-              { parse_mode: 'MarkdownV2' }
-         );
-         return;
-     }
-      const chosenHorseNameInput = match[2].trim();
-      const horses = [
-          { name: 'Yellow', emoji: '🟡', odds: 1.1 }, { name: 'Orange', emoji: '🟠', odds: 2.0 }, { name: 'Blue', emoji: '🔵', odds: 3.0 }, { name: 'Cyan', emoji: '💧', odds: 4.0 },
-          { name: 'White', emoji: '⚪️', odds: 5.0 }, { name: 'Red', emoji: '🔴', odds: 6.0 }, { name: 'Black', emoji: '⚫️', odds: 7.0 }, { name: 'Pink', emoji: '🌸', odds: 8.0 },
-          { name: 'Purple', emoji: '🟣', odds: 9.0 }, { name: 'Green', emoji: '🟢', odds: 10.0 }, { name: 'Silver', emoji: '💎', odds: 15.0 }
-      ];
-      const chosenHorse = horses.find(h => h.name.toLowerCase() === chosenHorseNameInput.toLowerCase());
-     if (!chosenHorse) {
-           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
-         await safeSendMessage(chatId, `⚠️ Invalid horse name: "${escapeMarkdownV2(chosenHorseNameInput)}"\\. Please choose from the list in /race\\.`, { parse_mode: 'MarkdownV2' });
-         return;
-     }
-     const memoId = generateMemoId('RA');
-     const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
-     const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
-     const potentialPayoutLamports = (expectedLamports * BigInt(Math.round(chosenHorse.odds * 100))) / 100n;
-     const potentialPayoutSOL = escapeMarkdownV2((Number(potentialPayoutLamports) / LAMPORTS_PER_SOL).toFixed(3));
-     const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
-     const saveResult = await savePendingBet( userId, chatId, 'race', { horse: chosenHorse.name, odds: chosenHorse.odds }, expectedLamports, memoId, expiresAt );
-     if (!saveResult.success) {
-           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
-         await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try the command again\\.`, { parse_mode: 'MarkdownV2' });
-         return;
-     }
-     const depositAddress = process.env.RACE_WALLET_ADDRESS;
-     if (!depositAddress) {
-          console.error("CRITICAL: RACE_WALLET_ADDRESS environment variable is not set!");
-           // ** MD ESCAPE APPLIED ** - Escaped `\` `.` twice
-          await safeSendMessage(chatId, `⚠️ Bot configuration error: Race deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
-          return;
-     }
-     // ** FORMATTING & MD ESCAPE APPLIED **
-     const message = `✅ Race bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
-                      `You chose: ${chosenHorse.emoji} *${escapeMarkdownV2(chosenHorse.name)}*\n` +
-                      `Amount: *${betAmountString} SOL*\n` +
-                      // Apply escapeMarkdownV2 to the odds string which contains a period
-                      `Potential Payout: ${potentialPayoutSOL} SOL \\(Stake \\* ${escapeMarkdownV2(chosenHorse.odds.toFixed(2))}x\\)\n\n`+
-                      `➡️ Send *exactly ${betAmountString} SOL* to \\(Race Deposit\\):\n` +
-                      `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
-                      `📎 *Include MEMO:* \`${memoId}\`\n\n` +
-                      `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
-                      `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
-     await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
+// /race command (MarkdownV2) - Remains MarkdownV2 (verified escapes)
+async function handleRaceCommand(msg) {
+    const horses = [
+         { name: 'Yellow', emoji: '🟡', odds: 1.1 }, { name: 'Orange', emoji: '🟠', odds: 2.0 }, { name: 'Blue', emoji: '🔵', odds: 3.0 }, { name: 'Cyan', emoji: '💧', odds: 4.0 },
+         { name: 'White', emoji: '⚪️', odds: 5.0 }, { name: 'Red', emoji: '🔴', odds: 6.0 }, { name: 'Black', emoji: '⚫️', odds: 7.0 }, { name: 'Pink', emoji: '🌸', odds: 8.0 },
+         { name: 'Purple', emoji: '🟣', odds: 9.0 }, { name: 'Green', emoji: '🟢', odds: 10.0 }, { name: 'Silver', emoji: '💎', odds: 15.0 }
+    ];
+     // ** Ensured all static MarkdownV2 characters like ! ( ) . - % + & * are escaped **
+    let raceMessage = `🐎 *Horse Race Game* 🐎\n\nBet on the winning horse\\!\n\n*Available Horses \\& Payout Multiplier* \\(Stake \\* Multiplier\\):\n`; // Escaped ! & ( * ) :
+    horses.forEach(horse => {
+        const displayMultiplier = horse.odds.toFixed(2);
+         // Escaped - ( ) x
+        raceMessage += `\\- ${horse.emoji} *${escapeMarkdownV2(horse.name)}* \\(${escapeMarkdownV2(displayMultiplier)}x Payout\\)\n`;
+    });
+    const config = GAME_CONFIG.race;
+    const houseEdgePercent = (config.houseEdge * 100).toFixed(1);
+     // Escaped . ( ) . - ( ) % + . - * .
+    raceMessage += `\n*How to play:*\n` +
+                         `1\\. Type \`/betrace amount horse_name\`\n` +
+                         `  \\(e\\.g\\., \`/betrace 0\\.1 Yellow\`\\)\n\n` +
+                         `*Rules:*\n` +
+                         `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` +
+                         `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` +
+                         `\\- House Edge: Applied via win probability \\(Approx ${escapeMarkdownV2(houseEdgePercent)}% house auto\\-win chance \\+ skewed horse weights\\)\n` +
+                         `\\- Payout on Win: Stake \\* Horse Odds\n\n`+
+                         `You will be given the Race deposit address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to place your bet\\.`;
+    await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'MarkdownV2' });
 }
 
 // /slots command (MarkdownV2) - Remains MarkdownV2 (verified escapes)
@@ -3511,7 +3470,8 @@ async function handleBetCommand(msg, args) {
      await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
-// /betrace command (MarkdownV2) - Verified escapes & uses RACE_WALLET_ADDRESS
+// /betrace command (MarkdownV2)
+// ** CORRECTED: Escaped the period within the dynamic chosenHorse.odds.toFixed(2) string **
 async function handleBetRaceCommand(msg, args) {
      const match = args.trim().match(/^(\d+\.?\d*)\s+([\w\s]+)/i);
      if (!match) {
@@ -3566,11 +3526,12 @@ async function handleBetRaceCommand(msg, args) {
           await safeSendMessage(chatId, `⚠️ Bot configuration error: Race deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
           return;
      }
-      // ** FORMATTING & MD ESCAPE APPLIED ** - Use toFixed(3), escaped `\` `!` `(` `)` `\` `.` twice `\` `(` `)` `\` `.`
+     // ** FORMATTING & MD ESCAPE APPLIED **
      const message = `✅ Race bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
                       `You chose: ${chosenHorse.emoji} *${escapeMarkdownV2(chosenHorse.name)}*\n` +
                       `Amount: *${betAmountString} SOL*\n` +
-                      `Potential Payout: ${potentialPayoutSOL} SOL \\(Stake \\* ${chosenHorse.odds.toFixed(2)}x\\)\n\n`+
+                      // Apply escapeMarkdownV2 to the odds string which contains a period
+                      `Potential Payout: ${potentialPayoutSOL} SOL \\(Stake \\* ${escapeMarkdownV2(chosenHorse.odds.toFixed(2))}x\\)\n\n`+
                       `➡️ Send *exactly ${betAmountString} SOL* to \\(Race Deposit\\):\n` +
                       `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
                       `📎 *Include MEMO:* \`${memoId}\`\n\n` +
