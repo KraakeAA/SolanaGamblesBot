@@ -3130,16 +3130,16 @@ async function handleCoinflipCommand(msg) {
     }
 }
 
-// /race command (MarkdownV2) - Info only
+// /race command (MarkdownV2) - Text only by design
 async function handleRaceCommand(msg) {
-     const chatId = msg.chat.id;
-     const horses = [ /* ... same horses array ... */
-        { name: 'Yellow', emoji: '🟡', odds: 2.0 }, { name: 'Orange', emoji: '🟠', odds: 3.0 },
-        { name: 'Blue',   emoji: '🔵', odds: 4.0 }, { name: 'Cyan',   emoji: '💧', odds: 5.0 },
-        { name: 'White',  emoji: '⚪️', odds: 6.0 }, { name: 'Red',    emoji: '🔴', odds: 7.0 },
-        { name: 'Black',  emoji: '⚫️', odds: 8.0 }, { name: 'Pink',   emoji: '🌸', odds: 9.0 },
-        { name: 'Purple', emoji: '🟣', odds: 10.0 }, { name: 'Green',  emoji: '🟢', odds: 15.0 },
-        { name: 'Silver', emoji: '💎', odds: 25.0 }
+    // ** MODIFIED: Use final odds for display **
+    const horses = [
+         { name: 'Yellow', emoji: '🟡', odds: 2.0 }, { name: 'Orange', emoji: '🟠', odds: 3.0 },
+         { name: 'Blue',   emoji: '🔵', odds: 4.0 }, { name: 'Cyan',   emoji: '💧', odds: 5.0 },
+         { name: 'White',  emoji: '⚪️', odds: 6.0 }, { name: 'Red',    emoji: '🔴', odds: 7.0 },
+         { name: 'Black',  emoji: '⚫️', odds: 8.0 }, { name: 'Pink',   emoji: '🌸', odds: 9.0 },
+         { name: 'Purple', emoji: '🟣', odds: 10.0 }, { name: 'Green',  emoji: '🟢', odds: 15.0 }, // Updated Green
+         { name: 'Silver', emoji: '💎', odds: 25.0 }  // Updated Silver
     ];
     let raceMessage = `🐎 *Horse Race Game* 🐎\n\nBet on the winning horse\\!\n\n*Available Horses \\& Payout Multiplier* \\(Stake \\* Multiplier\\):\n`;
     horses.forEach(horse => {
@@ -3149,16 +3149,15 @@ async function handleRaceCommand(msg) {
     const config = GAME_CONFIG.race;
     const houseEdgePercent = (config.houseEdge * 100).toFixed(1);
     raceMessage += `\n*How to play:*\n` +
-                    `1\\. Link wallet: \`/link YOUR\\_WALLET\` (if not done)\n` +
-                    `2\\. Type \`/betrace amount horse_name\`\n` +
-                    `  \\(e\\.g\\., \`/betrace 0\\.1 Yellow\`\\)\n\n` +
-                    `*Rules:*\n` +
-                    `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` +
-                    `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` +
-                    `\\- House Edge: Applied via win probability \\(Approx ${escapeMarkdownV2(houseEdgePercent)}% house auto\\-win chance \\+ skewed horse weights\\)\n` +
-                    `\\- Payout on Win: Stake \\* Horse Odds\n\n`+
-                    `Use the \`/betrace\` command to get the *Race Deposit Address* and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to place your bet\\.`; // Clarified wallet
-    await safeSendMessage(chatId, raceMessage, { parse_mode: 'MarkdownV2' });
+                         `1\\. Type \`/betrace amount horse_name\`\n` +
+                         `  \\(e\\.g\\., \`/betrace 0\\.1 Yellow\`\\)\n\n` +
+                         `*Rules:*\n` +
+                         `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` +
+                         `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` +
+                         `\\- House Edge: Applied via win probability \\(Approx ${escapeMarkdownV2(houseEdgePercent)}% house auto\\-win chance \\+ skewed horse weights\\)\n` +
+                         `\\- Payout on Win: Stake \\* Horse Odds\n\n`+
+                         `You will be given the Race deposit address and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to place your bet\\.`;
+    await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'MarkdownV2' });
 }
 
 // /slots command (MarkdownV2) - Info only
