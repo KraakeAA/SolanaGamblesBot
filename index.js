@@ -3352,77 +3352,76 @@ async function handleWarInfoCommand(msg) {
  async function handleBetRouletteCommand(msg, args) {
       const chatId = msg.chat.id; const userId = String(msg.from.id); const config = GAME_CONFIG.roulette;
       const parts = args.trim().split(/\s+/);
-      if (parts.length === 0 || parts.length % 2 !== 0) { await safeSendMessage(chatId, "⚠️ Invalid format\\. Use: `/betroulette <bet_spec1> <amount1> [<bet_spec2> <amount2>...]`\nExample: `/betroulette R 0\\.1 S17 0\\.05`", { parse_mode: 'MarkdownV2', disable_web_page_preview: true }); return; } // Escaped examples just in case
+      if (parts.length === 0 || parts.length % 2 !== 0) { await safeSendMessage(chatId, "⚠️ Invalid format\\. Use: `/betroulette <bet_spec1> <amount1> [<bet_spec2> <amount2>...]`\nExample: `/betroulette R 0\\.1 S17 0\\.05`", { parse_mode: 'MarkdownV2', disable_web_page_preview: true }); return; }
       const bets = {}; let totalExpectedLamports = 0n; let totalBetAmountSOL = 0;
 
       for (let i = 0; i < parts.length; i += 2) {
           const betSpec = parts[i].toUpperCase(); const betAmount = parseFloat(parts[i+1]);
-          // Escape betSpec early for safe use in messages
-          const escapedBetSpec = escapeMarkdownV2(betSpec);
+          const escapedBetSpec = escapeMarkdownV2(betSpec); // Escape early
 
           if (isNaN(betAmount) || betAmount <= 0) {
-              // parts[i+1] is the raw input amount string
               await safeSendMessage(chatId, `⚠️ Invalid amount for bet ${escapedBetSpec}: "${escapeMarkdownV2(parts[i+1])}"\\. Amount must be positive\\.`, { parse_mode: 'MarkdownV2' });
               return;
           }
           if (betAmount < config.minBet || betAmount > config.maxBet) {
-              // Use escapedBetSpec here
               await safeSendMessage(chatId, `⚠️ Bet amount for ${escapedBetSpec} (${escapeMarkdownV2(betAmount.toFixed(3))}) is out of range \\(${escapeMarkdownV2(config.minBet.toFixed(3))} \\- ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL\\)\\.`, { parse_mode: 'MarkdownV2' });
               return;
           }
           let betKey = '';
-          // Standard bet key validation logic...
           if (/^(R|B|E|O|L|H)$/.test(betSpec)) { betKey = betSpec; }
           else if (/^D([1-3])$/.test(betSpec)) { betKey = betSpec; }
           else if (/^C([1-3])$/.test(betSpec)) { betKey = betSpec; }
           else if (/^S(0|[1-9]|[12]\d|3[0-6])$/.test(betSpec)) { betKey = betSpec; }
           else {
-              // Use escapedBetSpec here
               await safeSendMessage(chatId, `⚠️ Invalid Bet Specification: \`${escapedBetSpec}\`\\. Use codes like R, B, E, O, L, H, D1-3, C1-3, S0-36\\.`, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
               return;
           }
           const betLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
-          // Accumulate bets - betKey is safe here as it passed validation
           bets[betKey] = (BigInt(bets[betKey] || '0') + betLamports).toString();
           totalExpectedLamports += betLamports;
           totalBetAmountSOL += betAmount;
       } // End for loop
 
       if (totalExpectedLamports <= 0n) {
-          await safeSendMessage(chatId, "⚠️ No valid bets were specified\\.", { parse_mode: 'MarkdownV2'}); // Escaped period
+          await safeSendMessage(chatId, "⚠️ No valid bets were specified\\.", { parse_mode: 'MarkdownV2'});
           return;
       }
 
       const linkedWallet = await getLinkedWallet(userId);
       if (!linkedWallet) {
-          await safeSendMessage(chatId, `⚠️ Please link your wallet first using \`/link YOUR_WALLET_ADDRESS\` before placing a bet\\.`, { parse_mode: 'MarkdownV2' }); // Escaped period
+          await safeSendMessage(chatId, `⚠️ Please link your wallet first using \`/link YOUR_WALLET_ADDRESS\` before placing a bet\\.`, { parse_mode: 'MarkdownV2' });
           return;
       }
 
       const memoId = generateMemoId('RL');
       const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
-      const betDetails = { bets: bets, totalBetAmountSOL: totalBetAmountSOL }; // Store raw betAmountSOL
+      const betDetails = { bets: bets, totalBetAmountSOL: totalBetAmountSOL };
 
       const saveResult = await savePendingBet( userId, chatId, 'roulette', betDetails, totalExpectedLamports, memoId, expiresAt );
       if (!saveResult.success) {
-          await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' }); // Escaped period
+          await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' });
           return;
       }
 
-      const depositAddress = process.env.MAIN_WALLET_ADDRESS; // Use MAIN
+      const depositAddress = process.env.MAIN_WALLET_ADDRESS;
       if (!depositAddress) {
           console.error("CRITICAL: MAIN_WALLET_ADDRESS environment variable is not set!");
-          await safeSendMessage(chatId, `⚠️ Bot configuration error: Main deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' }); // Escaped period
+          await safeSendMessage(chatId, `⚠️ Bot configuration error: Main deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' });
           return;
       }
 
-      // Escape bet keys when creating the display string
-      let betsPlacedString = Object.entries(bets).map(([key, value]) =>
-          `\`${escapeMarkdownV2(key)}\` \\(${(Number(value) / LAMPORTS_PER_SOL).toFixed(3)}\\)`
-      ).join(', ');
-      const totalBetAmountString = escapeMarkdownV2(totalBetAmountSOL.toFixed(3)); // Use the stored float for display formatting
+      // Escape bet keys AND the formatted amount string containing a period
+      let betsPlacedString = Object.entries(bets).map(([key, value]) => {
+          // Format the amount first
+          const amountSOLString = (Number(value) / LAMPORTS_PER_SOL).toFixed(3);
+          // THEN escape the resulting string before inserting into the final message part
+          return `\`${escapeMarkdownV2(key)}\` \\(${escapeMarkdownV2(amountSOLString)}\\)`
+      }).join(', ');
 
-       // Using original reply text structure + wallet label - **WITH ESCAPED PERIODS**
+      // Escape the total amount as well (which also comes from toFixed)
+      const totalBetAmountString = escapeMarkdownV2(totalBetAmountSOL.toFixed(3));
+
+       // Construct the final message with all necessary escapes
       const message = `✅ Roulette bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
                       `Bets Placed: ${betsPlacedString}\n` +
                       `Total Amount: *${totalBetAmountString} SOL*\n\n` +
