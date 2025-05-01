@@ -2856,54 +2856,37 @@ async function handleWarGame(bet) {
 // --- End of Game Logic Implementation ---
 
 // --- End of Part 3a ---
-// index.js - Part 3b (Corrected for TWO WALLETS & **Original Command Handling Structure**)
+// index.js - Part 3b (FIXED: HTML for Slots/Roulette Info ONLY, minimal change)
 // --- VERSION: 2.6.1 ---
 
-// index.js - Part 3b (Corrected: Minimal Text Edits, HTML for Slots/Roulette Info ONLY, Original Structure)
-// --- VERSION: 2.6.1 ---
-
-// (Code continues directly from the end of Part 3a)
+// (Code continues directly from the end of Part 3a - assuming Part 3a from user's last paste is used)
 
 // --- Helper function for HTML escaping ---
+// (Ensure this is defined somewhere before the handlers that use it, e.g., start of this file or end of 2b)
 const escapeHtml = (text) => {
      if (typeof text !== 'string') text = String(text);
-     // Basic escaping for characters problematic in HTML
      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 };
 
 
 // --- Payout Job Handler ---
-// (Remains unchanged from the previous correct version - passes gameType to sendSol)
+// (As provided in user's v2.6.1 paste - Passes gameType to sendSol)
 async function handlePayoutJob(job) {
     const { betId, recipient, amount, gameType, chatId, displayName, memoId } = job;
     const logPrefix = `PayoutJob Bet ${betId} (${memoId.slice(0,6)}...) Type: ${gameType}`;
     console.log(`${logPrefix}: Starting payout processing...`);
-
     try {
-        // 1. Validate input (basic checks)
-        if (!recipient || !amount || BigInt(amount) <= 0n) {
-             throw new Error(`Invalid payout parameters: Recipient or Amount invalid. Amount: ${amount}`);
-        }
-        if (!gameType || !['coinflip', 'race', 'slots', 'roulette', 'war'].includes(gameType)) {
-             throw new Error(`Invalid or missing gameType for payout: ${gameType}`);
-        }
-
-        // 2. Call sendSol, passing the originating gameType
+        if (!recipient || !amount || BigInt(amount) <= 0n) { throw new Error(`Invalid payout parameters: Recipient or Amount invalid. Amount: ${amount}`); }
+        if (!gameType || !['coinflip', 'race', 'slots', 'roulette', 'war'].includes(gameType)) { throw new Error(`Invalid or missing gameType for payout: ${gameType}`); }
         const result = await sendSol(recipient, BigInt(amount), gameType);
-
-        // 3. Update bet status on successful send
         if (result.success && result.signature) {
             const payoutSOL = (Number(amount) / LAMPORTS_PER_SOL).toFixed(3);
-            let finalStatus = 'completed_win_paid'; // Default
+            let finalStatus = 'completed_win_paid';
             try {
                  const betCheckResult = await pool.query('SELECT bet_details FROM bets WHERE id = $1', [betId]);
                  const outcome = betCheckResult.rows[0]?.bet_details?.outcome;
-                 if (outcome === 'push') {
-                      finalStatus = 'completed_push_paid';
-                 }
+                 if (outcome === 'push') { finalStatus = 'completed_push_paid'; }
             } catch(dbErr){ console.error("Error fetching bet details to determine final payout status:", dbErr);}
-
-
             const updated = await recordPayout(betId, finalStatus, result.signature);
             if (updated) {
                 console.log(`${logPrefix}: ✅ Payout successful & recorded. TX: ${result.signature}`);
@@ -2918,17 +2901,17 @@ async function handlePayoutJob(job) {
         }
     } catch (error) {
          console.error(`${logPrefix}: ❌ Payout job failed: ${error.message}`);
-         throw error; // Re-throw for PaymentProcessor retry logic
+         throw error;
     }
 }
 
 
-// --- Telegram Bot Error Handlers --- (Unchanged)
+// --- Telegram Bot Error Handlers --- (As provided in user's v2.6.1 paste)
 bot.on('polling_error', (error) => {
     console.error(`❌ Polling error: ${error.code} - ${error.message}`);
-    if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) { /* ... */ shutdown('POLLING_CONFLICT', false).catch(() => process.exit(1)); setTimeout(() => process.exit(1), 5000).unref(); }
+    if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) { shutdown('POLLING_CONFLICT', false).catch(() => process.exit(1)); setTimeout(() => process.exit(1), 5000).unref(); }
     else if (error.code === 'ECONNRESET') { console.warn("⚠️ Polling connection reset. Attempting to continue..."); }
-    else if (error.response && error.response.statusCode === 401) { /* ... */ shutdown('BOT_TOKEN_INVALID', false).catch(() => process.exit(1)); setTimeout(() => process.exit(1), 5000).unref(); }
+    else if (error.response && error.response.statusCode === 401) { shutdown('BOT_TOKEN_INVALID', false).catch(() => process.exit(1)); setTimeout(() => process.exit(1), 5000).unref(); }
     else { console.error(`Unhandled Polling Error: Code ${error.code}, Status ${error.response?.statusCode}`); }
 });
 bot.on('webhook_error', (error) => {
@@ -2940,7 +2923,7 @@ bot.on('error', (error) => { console.error('❌ General Bot Error:', error); per
 
 
 // --- Main Message Handler ---
-// ** Uses original commandHandlers map structure **
+// ** Using original commandHandlers map structure from user's v2.6.1 paste **
 async function handleMessage(msg) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
@@ -2956,7 +2939,7 @@ async function handleMessage(msg) {
             const now = Date.now();
             if (confirmCooldown.has(userId)) {
                 const lastTime = confirmCooldown.get(userId);
-                if (now - lastTime < cooldownInterval) { return; }
+                if (now - lastTime < cooldownInterval) return;
             }
             confirmCooldown.set(userId, now);
             setTimeout(() => { if (confirmCooldown.get(userId) === now) confirmCooldown.delete(userId); }, cooldownInterval);
@@ -2970,9 +2953,10 @@ async function handleMessage(msg) {
         const args = commandMatch[2]?.trim() || '';
 
         // --- Command Handler Map ---
+        // ** Using original structure, but Slots/Roulette INFO now use HTML **
         const commandHandlers = {
-            'start': handleStartCommand,           // HTML (Simple)
-            'help': handleHelpCommand,             // HTML (Simple)
+            'start': handleStartCommand,           // HTML (As defined below)
+            'help': handleHelpCommand,             // HTML (As defined below)
             'wallet': handleWalletCommand,         // MarkdownV2
             'link': handleLinkWalletCommand,       // MarkdownV2 reply
 
@@ -2997,9 +2981,8 @@ async function handleMessage(msg) {
             // Admin Check
             if (command === 'admin') {
                 const adminIds = (process.env.ADMIN_USER_IDS || '').split(',').map(id=>id.trim()).filter(id => id);
-                if (adminIds.includes(userId)) {
-                    await handler(msg, args);
-                } else { /* Ignore */ }
+                if (adminIds.includes(userId)) { await handler(msg, args); }
+                else { /* Ignore */ }
             } else {
                  // Regular command execution
                  if (typeof handler === 'function') {
@@ -3010,158 +2993,133 @@ async function handleMessage(msg) {
                           await handler(msg);
                      }
                      performanceMonitor.logRequest(true);
-                 } else {
-                     console.warn(`Handler for command /${command} is not a function.`);
-                 }
+                 } else { console.warn(`Handler for command /${command} is not a function.`); }
             }
         } else {
              if (msg.chat.type === 'private') {
                  await safeSendMessage(chatId, "❓ Unknown command\\. Type `/help` to see available commands\\!", { parse_mode: 'MarkdownV2' });
              }
         }
-
     } catch (error) {
         console.error(`❌ Error processing command "/${command || 'UNKNOWN'}" for user ${userId} ("${messageText}"):`, error);
         performanceMonitor.logRequest(false);
-        try {
-             await safeSendMessage(chatId, "⚠️ An unexpected error occurred processing your request\\. Please try again later or contact support if the issue persists\\.", { parse_mode: 'MarkdownV2'});
-        } catch (tgError) { /* safeSendMessage already logs its own errors */ }
+        try { await safeSendMessage(chatId, "⚠️ An unexpected error occurred processing your request\\. Please try again later or contact support if the issue persists\\.", { parse_mode: 'MarkdownV2'}); }
+        catch (tgError) { /* ignore */ }
     }
 }
 
 
 // --- Specific Command Handler Implementations ---
 
-// /start command (HTML) - Simplified Text
+// /start command (HTML - As provided in user's v2.6.1 paste)
 async function handleStartCommand(msg) {
-     const chatId = msg.chat.id;
-     const firstName = msg.from.first_name || 'there';
-     const sanitizedFirstName = escapeHtml(firstName);
-     const welcomeText = `👋 Welcome, <b>${sanitizedFirstName}</b>!\n\n` +
-                         `🎰 <b>Solana Gambles Bot</b> (v2.6.1)\n\n` +
-                         `Use <code>/help</code> to see available commands.\n` +
-                         `Remember to <code>/link YOUR_WALLET</code> first to receive payouts.`;
-     try {
-         await safeSendMessage(chatId, welcomeText, { parse_mode: 'HTML' });
-     } catch (error) {
-         console.error("Error in handleStartCommand:", error);
-     }
- }
-
-// /help command (HTML) - Simplified Text
-async function handleHelpCommand(msg) {
-    const chatId = msg.chat.id;
-     const helpText = `<b>Solana Gambles Bot Help</b>\n\n` +
-         `<b>Wallet:</b>\n`+
-         `<code>/link &lt;address&gt;</code> - Link payout wallet\n` +
-         `<code>/wallet</code> - View linked wallet\n\n` +
-         `<b>Game Info:</b>\n` +
-         `<code>/coinflip</code> | <code>/race</code> | <code>/slots</code> | <code>/roulette</code> | <code>/war</code>\n\n` +
-         `<b>Betting Commands:</b>\n` +
-         `<code>/betcf &lt;amt&gt; heads/tails</code>\n` +
-         `<code>/betrace &lt;amt&gt; &lt;horse&gt;</code>\n` +
-         `<code>/betslots &lt;amt&gt;</code>\n` +
-         `<code>/betroulette &lt;bet&gt; &lt;amt&gt; ...</code>\n` +
-         `<code>/betwar &lt;amt&gt;</code>`;
-    try {
-         await safeSendMessage(chatId, helpText, { parse_mode: 'HTML', disable_web_page_preview: true });
-    } catch (error) {
-         console.error("Error in handleHelpCommand:", error);
-         await safeSendMessage(chatId, "Sorry, couldn't display help information.");
-    }
+    const firstName = msg.from.first_name || 'there';
+    const sanitizedFirstName = firstName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const welcomeText = `👋 Welcome, <b>${sanitizedFirstName}</b>!\n\n` +
+                         `🎰 <b>Solana Gambles Bot</b>\n\n` +
+                         `Use the commands below to play:\n` +
+                         `/coinflip - Simple Heads/Tails\n` +
+                         `/race - Bet on Horse Races\n` +
+                         `/slots - Play the Slot Machine\n` +
+                         `/roulette - Play European Roulette\n` +
+                         `/war - Play Casino War (Tie is Push)\n\n` +
+                         `/wallet - View/Link your Solana wallet\n` +
+                         `/help - See all commands & rules\n\n` +
+                         `<i>Remember to gamble responsibly!</i>`;
+    try {
+        await safeSendMessage(msg.chat.id, welcomeText, { parse_mode: 'HTML' });
+    } catch (error) {
+        console.error("Error in handleStartCommand:", error);
+    }
 }
 
-// /wallet command (MarkdownV2 - unchanged)
-async function handleWalletCommand(msg) {
-     const chatId = msg.chat.id;
-     const userId = String(msg.from.id);
-     const walletAddress = await getLinkedWallet(userId);
-     if (walletAddress) {
-         await safeSendMessage(chatId, `Your linked wallet address is: \`${escapeMarkdownV2(walletAddress)}\`\\.`, { parse_mode: 'MarkdownV2' });
-     } else {
-         await safeSendMessage(chatId, "You haven't linked a wallet yet\\. Use `/link YOUR\\_WALLET\\_ADDRESS` to set one up\\.", { parse_mode: 'MarkdownV2' });
-     }
-}
-
-// /link command (MarkdownV2 reply - unchanged)
-async function handleLinkWalletCommand(msg, args) {
-     const chatId = msg.chat.id;
-     const userId = String(msg.from.id);
-     const walletAddress = args?.trim();
-     if (!walletAddress) {
-         await safeSendMessage(chatId, "Usage: `/link YOUR\\_WALLET\\_ADDRESS`", { parse_mode: 'MarkdownV2' });
-        return;
-     }
-     try {
-         new PublicKey(walletAddress);
-         const result = await linkUserWallet(userId, walletAddress);
-         if (result.success) {
-             await safeSendMessage(chatId, `✅ Wallet linked successfully\\!\nYour payout address is now set to: \`${escapeMarkdownV2(result.wallet)}\`\\.\nPayouts for wins will be sent here\\.`, { parse_mode: 'MarkdownV2' });
-         } else {
-             await safeSendMessage(chatId, `⚠️ Failed to link wallet\\. ${escapeMarkdownV2(result.error || 'Please check the address and try again.')}`, { parse_mode: 'MarkdownV2' });
-         }
-     } catch (e) {
-         await safeSendMessage(chatId, `⚠️ Invalid Solana wallet address format\\. Please provide a valid base58 address\\.`, { parse_mode: 'MarkdownV2' });
-     }
-}
-
-
-// --- Game Info Command Handlers ---
-
-// /coinflip command (HTML - Minimal Text)
+// /coinflip command (HTML - As provided in user's v2.6.1 paste)
 async function handleCoinflipCommand(msg) {
-     const chatId = msg.chat.id;
-     try {
-         const config = GAME_CONFIG.coinflip;
-         const messageText = `🪙 <b>Coinflip Game</b> 🪙\n\n` +
-            `Guess Heads or Tails!\n` +
-            `Use: <code>/betcf &lt;amount&gt; heads/tails</code>\n\n`+
-            `Min: ${escapeHtml(config.minBet)} | Max: ${escapeHtml(config.maxBet)} | Payout: 2x`;
-         await safeSendMessage(chatId, messageText, { parse_mode: 'HTML' });
-     } catch (error) {
-         console.error("Error in handleCoinflipCommand:", error);
-         await safeSendMessage(chatId, "Sorry, couldn't display Coinflip info right now.");
-     }
- }
+    try {
+        const config = GAME_CONFIG.coinflip;
+        const payoutMultiplier = '2.00'; // Fixed 2x
+        const houseEdgePercent = (config.houseEdge * 100).toFixed(1);
 
- // /race command (HTML - Minimal Text - Functionally Unchanged)
- async function handleRaceCommand(msg) {
+        const messageText = `🪙 <b>Coinflip Game</b> 🪙\n\n` +
+             `Bet on Heads or Tails! Simple and quick.\n\n` +
+             `<b>How to play:</b>\n` +
+             `1. Type <code>/betcf amount heads</code> (e.g., <code>/betcf 0.1 heads</code>)\n` +
+             `2. Type <code>/betcf amount tails</code> (e.g., <code>/betcf 0.1 tails</code>)\n\n` +
+             `<b>Rules:</b>\n` +
+             `- Min Bet: ${config.minBet} SOL\n` +
+             `- Max Bet: ${config.maxBet} SOL\n` +
+             `- House Edge: Approx ${houseEdgePercent}% house auto-win chance\n` +
+             `- Payout on Win: <b>${payoutMultiplier}x</b> <i>(Stake returned + 1x Stake Won)</i>\n\n` +
+             `You will be given the Coinflip deposit address and a <b>unique Memo ID</b>. Send the <b>exact</b> SOL amount with the memo to place your bet.\n\n`+ // Text from original
+             `<i>Good luck!</i>`;
+        await safeSendMessage(msg.chat.id, messageText, { parse_mode: 'HTML' });
+    } catch (error) {
+        console.error("Error in handleCoinflipCommand:", error);
+        await safeSendMessage(msg.chat.id, "Sorry, couldn't display Coinflip info right now.");
+    }
+}
+
+// /race command (HTML - Using HTML as requested, Text preserved from user's MD version)
+async function handleRaceCommand(msg) {
      const chatId = msg.chat.id;
      try {
-         const horses = [ { name: 'Yellow', odds: 2.0 }, { name: 'Orange', odds: 3.0 }, { name: 'Blue', odds: 4.0 }, { name: 'Cyan', odds: 5.0 }, { name: 'White', odds: 6.0 }, { name: 'Red', odds: 7.0 }, { name: 'Black', odds: 8.0 }, { name: 'Pink', odds: 9.0 }, { name: 'Purple', odds: 10.0 }, { name: 'Green', odds: 15.0 }, { name: 'Silver', odds: 25.0 } ];
-         let raceMessage = `🐎 <b>Horse Race Game</b> 🐎\n\n`;
-         horses.forEach(horse => { raceMessage += `<b>${escapeHtml(horse.name)}</b> (${horse.odds.toFixed(1)}x), `; });
-         raceMessage = raceMessage.slice(0, -2); // Remove trailing comma/space
-         const config = GAME_CONFIG.race;
-         raceMessage += `\n\nUse: <code>/betrace &lt;amount&gt; &lt;horse_name&gt;</code>\n` +
-                        `Min: ${escapeHtml(config.minBet)} | Max: ${escapeHtml(config.maxBet)}`;
-         await safeSendMessage(chatId, raceMessage, { parse_mode: 'HTML' });
+        const horses = [ { name: 'Yellow', emoji: '🟡', odds: 2.0 }, { name: 'Orange', emoji: '🟠', odds: 3.0 }, { name: 'Blue', emoji: '🔵', odds: 4.0 }, { name: 'Cyan', emoji: '💧', odds: 5.0 }, { name: 'White', emoji: '⚪️', odds: 6.0 }, { name: 'Red', emoji: '🔴', odds: 7.0 }, { name: 'Black', emoji: '⚫️', odds: 8.0 }, { name: 'Pink', emoji: '🌸', odds: 9.0 }, { name: 'Purple', emoji: '🟣', odds: 10.0 }, { name: 'Green', emoji: '🟢', odds: 15.0 }, { name: 'Silver', emoji: '💎', odds: 25.0 } ];
+        let raceMessage = `🐎 <b>Horse Race Game</b> 🐎\n\nBet on the winning horse!\n\n<b>Available Horses &amp; Payout Multiplier</b> (Stake * Multiplier):\n`; // Use &amp;
+        horses.forEach(horse => {
+            const displayMultiplier = horse.odds.toFixed(2);
+            raceMessage += `- ${horse.emoji} <b>${escapeHtml(horse.name)}</b> (${displayMultiplier}x Payout)\n`;
+        });
+        const config = GAME_CONFIG.race;
+        const minBetHtml = escapeHtml(config.minBet);
+        const maxBetHtml = escapeHtml(config.maxBet);
+        const houseEdgePercent = (config.houseEdge * 100).toFixed(1);
+        raceMessage += `\n<b>How to play:</b>\n` +
+                        `1. Type <code>/betrace amount horse_name</code>\n` +
+                        `   (e.g., <code>/betrace 0.1 Yellow</code>)\n\n` +
+                        `<b>Rules:</b>\n` +
+                        `- Min Bet: ${minBetHtml} SOL\n` +
+                        `- Max Bet: ${maxBetHtml} SOL\n` +
+                        `- House Edge: Applied via win probability (Approx ${houseEdgePercent}% house auto-win chance + skewed horse weights)\n` +
+                        `- Payout on Win: Stake * Horse Odds\n\n`+
+                        `You will be given the Race deposit address and a <b>unique Memo ID</b>. Send the <b>exact</b> SOL amount with the memo to place your bet.`;
+        await safeSendMessage(chatId, raceMessage, { parse_mode: 'HTML' });
      } catch (error) {
          console.error("Error in handleRaceCommand:", error);
          await safeSendMessage(chatId, "Sorry, couldn't display Horse Race info right now.");
      }
  }
 
-// /slots command (HTML - FIXED to HTML, Minimal Text, No &verbar;)
+// /slots command (HTML - FIXED, Minimal Text Edits, No &verbar;)
 async function handleSlotsCommand(msg) {
      const chatId = msg.chat.id;
      try {
          const config = GAME_CONFIG.slots;
+         const hiddenEdgePercent = parseFloat(process.env.SLOTS_HIDDEN_EDGE || '0.10') * 100;
+         // Base text structure from original Markdown version, converted to HTML
          const paylines = [
-             `🍒 | 🍒 | 🍒 = ${escapeHtml(SLOTS_SYMBOLS.CHERRY.payout[3])}x`,
-             `🍊 | 🍊 | 🍊 = ${escapeHtml(SLOTS_SYMBOLS.ORANGE.payout[3])}x`,
-             `🍫 | 🍫 | 🍫 = ${escapeHtml(SLOTS_SYMBOLS.BAR.payout[3])}x`,
-             `7️⃣ | ? | ? = 2x`,
-             `🎰 | 🎰 | 🎰 = ${escapeHtml(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}x Jackpot!`
+             `🍒 | 🍒 | 🍒 = ${escapeHtml(SLOTS_SYMBOLS.CHERRY.payout[3])}x Stake`,
+             `🍊 | 🍊 | 🍊 = ${escapeHtml(SLOTS_SYMBOLS.ORANGE.payout[3])}x Stake`,
+             `🍫 | 🍫 | 🍫 = ${escapeHtml(SLOTS_SYMBOLS.BAR.payout[3])}x Stake`,
+             `7️⃣ | ? | ? = 2x Stake`, // Adjusted from original slightly for clarity
+             `🎰 | 🎰 | 🎰 = ${escapeHtml(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}x Stake (Jackpot!)`
          ];
          const minBetHtml = escapeHtml(config.minBet.toFixed(3));
          const maxBetHtml = escapeHtml(config.maxBet.toFixed(3));
 
          let message = `🎰 <b>777 Slots Game</b> 🎰\n\n` +
-                         `<b>Payouts (Multiplier x Stake):</b>\n` +
+                         `Spin the 3 reels and match symbols on the center line!\n\n`+
+                         `<b>Symbols:</b>\n`+
+                         `🍒 Cherry, 🍊 Orange, 🍫 BAR, 7️⃣ Seven, 🎰 777, ➖ Blank\n\n` +
+                         `<b>Payouts (Win Amount / Bet Amount):</b>\n` +
                          paylines.map(line => `- ${line}`).join('\n') + `\n\n` +
-                         `Use: <code>/betslots &lt;amount&gt;</code>\n`+
-                         `Min: ${minBetHtml} | Max: ${maxBetHtml} SOL`;
+                         `<b>How to Play:</b>\n` +
+                         `- Type <code>/betslots amount</code> (e.g., <code>/betslots 0.05</code>)\n\n` +
+                         `<b>Rules:</b>\n` +
+                         `- Min Bet: ${minBetHtml} SOL\n` +
+                         `- Max Bet: ${maxBetHtml} SOL\n` +
+                         `- House Edge: Applied via symbol weights &amp; hidden ${hiddenEdgePercent.toFixed(1)}% forced loss chance.\n`+
+                         `- Payout on Win: Stake + (Stake * Multiplier)\n\n`+
+                         `Use the <code>/betslots</code> command to get the <b>Main Deposit Address</b> and a <b>unique Memo ID</b>. Send the <b>exact</b> SOL amount with the memo to spin.`;
 
          await safeSendMessage(chatId, message, { parse_mode: 'HTML' });
 
@@ -3171,19 +3129,34 @@ async function handleSlotsCommand(msg) {
      }
 }
 
-// /roulette command (HTML - FIXED to HTML, Minimal Text)
+// /roulette command (HTML - FIXED, Minimal Text Edits)
 async function handleRouletteCommand(msg) {
       const chatId = msg.chat.id;
       try {
           const config = GAME_CONFIG.roulette;
+          const hiddenEdgePercent = parseFloat(process.env.ROULETTE_HIDDEN_EDGE || '0.65') * 100;
           const minBetHtml = escapeHtml(config.minBet.toFixed(3));
           const maxBetHtml = escapeHtml(config.maxBet.toFixed(3));
 
+          // Base text structure from original Markdown version, converted to HTML
           const message = `⚪️ <b>European Roulette Game</b> ⚪️\n\n`+
-              `Use: <code>/betroulette &lt;bet&gt; &lt;amt&gt; ...</code>\n`+
-              `(e.g. /betroulette R 0.1 S17 0.05)\n\n`+
-              `<b>Bets:</b> S&lt;0-36&gt;(35:1), R/B(1:1), E/O(1:1), L/H(1:1), D1/D2/D3(2:1), C1/C2/C3(2:1)\n`+ // Simplified bets
-              `Min/Max per bet: ${minBetHtml} / ${maxBetHtml} SOL`;
+              `Place bets on the outcome of the wheel spin (numbers 0-36).\n\n`+
+              `<b>Bet Types & Payouts</b> (Odds N:1 - Payout is Stake * (N+1))*:<br/>\n`+
+              `- <code>S&lt;number&gt;</code>: Straight (35:1)<br/>\n`+
+              `- <code>R</code>: Red (1:1) / <code>B</code>: Black (1:1)<br/>\n`+
+              `- <code>E</code>: Even (1:1) / <code>O</code>: Odd (1:1)<br/>\n`+
+              `- <code>L</code>: Low 1-18 (1:1) / <code>H</code>: High 19-36 (1:1)<br/>\n`+
+              `- <code>D1/D2/D3</code>: Dozens (2:1)<br/>\n`+
+              `- <code>C1/C2/C3</code>: Columns (2:1)\n\n`+
+              `<b>How to Play</b>:\n`+
+              `- Type <code>/betroulette &lt;bet1&gt; &lt;amount1&gt; [...]</code>\n`+
+              `  (e.g., <code>/betroulette R 0.1 S17 0.05</code>)\n\n`+
+              `<b>Rules</b>:\n`+
+              `- Min Bet (per placement): ${minBetHtml} SOL\n`+
+              `- Max Bet (per placement): ${maxBetHtml} SOL\n`+
+              `- House Edge: Applied via win probability (Approx ${hiddenEdgePercent.toFixed(1)}% chance of forced '0' result).\n`+
+              `- Payout on Win: Standard Roulette Payouts\n\n`+
+              `Use the <code>/betroulette</code> command to get the <b>Main Deposit Address</b> and a <b>unique Memo ID</b>. Send the <b>total</b> SOL amount with the memo.`;
 
           await safeSendMessage(chatId, message, { parse_mode: 'HTML', disable_web_page_preview: true });
 
@@ -3208,273 +3181,134 @@ async function handleWarInfoCommand(msg) {
 
 
  // --- Betting Command Handlers (MarkdownV2 Replies) ---
- // (Unchanged functionality from previous correct version, including wallet labels)
+ // (Unchanged functionality from user's v2.6.1 paste, including wallet labels)
 
  // /betcf command
- async function handleBetCommand(msg, args) { // Original name for /betcf
-      const chatId = msg.chat.id;
-      const userId = String(msg.from.id);
+ async function handleBetCommand(msg, args) { /* ... As in user's v2.6.1 paste ... */
+      const chatId = msg.chat.id; const userId = String(msg.from.id);
       const match = args.trim().match(/^(\d+\.?\d*)\s+(heads|tails)/i);
-      if (!match) { /* ... error msg ... */ return; }
-      const config = GAME_CONFIG.coinflip;
-      const betAmount = parseFloat(match[1]);
-      if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) { /* ... error msg ... */ return; }
-      const userChoice = match[2].toLowerCase();
-      const linkedWallet = await getLinkedWallet(userId);
-      if (!linkedWallet) { /* ... error msg ... */ return; }
-      const memoId = generateMemoId('CF');
-      const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
-      const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
+      if (!match) { await safeSendMessage(chatId, `⚠️ Invalid format\\. Use: \`/betcf <amount> <heads|tails>\`\nExample: \`/betcf 0\\.100 heads\``, { parse_mode: 'MarkdownV2' }); return; }
+      const config = GAME_CONFIG.coinflip; const betAmount = parseFloat(match[1]);
+      if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) { await safeSendMessage(chatId, `⚠️ Invalid bet amount\\. Please bet between ${escapeMarkdownV2(config.minBet.toFixed(3))} and ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const userChoice = match[2].toLowerCase(); const linkedWallet = await getLinkedWallet(userId);
+      if (!linkedWallet) { await safeSendMessage(chatId, `⚠️ Please link your wallet first using \`/link YOUR_WALLET_ADDRESS\` before placing a bet\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const memoId = generateMemoId('CF'); const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL)); const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
       const saveResult = await savePendingBet( userId, chatId, 'coinflip', { choice: userChoice }, expectedLamports, memoId, expiresAt );
-      if (!saveResult.success) { /* ... error msg ... */ return; }
+      if (!saveResult.success) { await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' }); return; }
       const depositAddress = process.env.MAIN_WALLET_ADDRESS; // Use MAIN
-      if (!depositAddress) { /* ... error msg ... */ return; }
+      if (!depositAddress) { console.error("CRITICAL: MAIN_WALLET_ADDRESS environment variable is not set!"); await safeSendMessage(chatId, `⚠️ Bot configuration error: Main deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' }); return; }
       const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
-      const message = `✅ Coinflip bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
-                      `You chose: *${escapeMarkdownV2(userChoice)}*\n` +
-                      `Amount: *${betAmountString} SOL*\n\n` +
-                      `➡️ Send *exactly ${betAmountString} SOL* to \\(Main Deposit\\):\n` + // Label as Main
-                      `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
-                      `📎 *Include MEMO:* \`${memoId}\`\n\n` +
-                      `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
-                      `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
+      const message = `✅ Coinflip bet registered\\! \\(ID: \`${memoId}\`\\)\n\nYou chose: *${escapeMarkdownV2(userChoice)}*\nAmount: *${betAmountString} SOL*\n\n➡️ Send *exactly ${betAmountString} SOL* to \\(Main Deposit\\):\n\`${escapeMarkdownV2(depositAddress)}\`\n\n📎 *Include MEMO:* \`${memoId}\`\n\n⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
       await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
  }
 
  // /betrace command (Functionally Unchanged)
- async function handleBetRaceCommand(msg, args) {
-      const chatId = msg.chat.id;
-      const userId = String(msg.from.id);
+ async function handleBetRaceCommand(msg, args) { /* ... As in user's v2.6.1 paste ... */
+      const chatId = msg.chat.id; const userId = String(msg.from.id);
       const match = args.trim().match(/^(\d+\.?\d*)\s+([\w\s]+)/i);
-      if (!match) { /* ... error handling ... */ return; }
-      const config = GAME_CONFIG.race;
-      const betAmount = parseFloat(match[1]);
-      if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) { /* ... error handling ... */ return; }
-      const chosenHorseNameInput = match[2].trim();
-      const horses = [ { name: 'Yellow', emoji: '🟡', odds: 2.0 }, { name: 'Orange', emoji: '🟠', odds: 3.0 }, { name: 'Blue', emoji: '🔵', odds: 4.0 }, { name: 'Cyan', emoji: '💧', odds: 5.0 }, { name: 'White', emoji: '⚪️', odds: 6.0 }, { name: 'Red', emoji: '🔴', odds: 7.0 }, { name: 'Black', emoji: '⚫️', odds: 8.0 }, { name: 'Pink', emoji: '🌸', odds: 9.0 }, { name: 'Purple', emoji: '🟣', odds: 10.0 }, { name: 'Green', emoji: '🟢', odds: 15.0 }, { name: 'Silver', emoji: '💎', odds: 25.0 } ];
+      if (!match) { await safeSendMessage(chatId, `⚠️ Invalid format\\. Use: \`/betrace <amount> <horse_name>\`\\.\nExample: \`/betrace 0.1 Yellow\``, { parse_mode: 'MarkdownV2' }); return; }
+      const config = GAME_CONFIG.race; const betAmount = parseFloat(match[1]);
+      if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) { await safeSendMessage(chatId, `⚠️ Invalid bet amount\\. Race bets must be between ${escapeMarkdownV2(config.minBet)} and ${escapeMarkdownV2(config.maxBet)} SOL\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const chosenHorseNameInput = match[2].trim(); const horses = [ { name: 'Yellow', emoji: '🟡', odds: 2.0 }, { name: 'Orange', emoji: '🟠', odds: 3.0 }, { name: 'Blue', emoji: '🔵', odds: 4.0 }, { name: 'Cyan', emoji: '💧', odds: 5.0 }, { name: 'White', emoji: '⚪️', odds: 6.0 }, { name: 'Red', emoji: '🔴', odds: 7.0 }, { name: 'Black', emoji: '⚫️', odds: 8.0 }, { name: 'Pink', emoji: '🌸', odds: 9.0 }, { name: 'Purple', emoji: '🟣', odds: 10.0 }, { name: 'Green', emoji: '🟢', odds: 15.0 }, { name: 'Silver', emoji: '💎', odds: 25.0 } ];
       const chosenHorse = horses.find(h => h.name.toLowerCase() === chosenHorseNameInput.toLowerCase());
-      if (!chosenHorse) { /* ... error handling ... */ return; }
-      const linkedWallet = await getLinkedWallet(userId);
-      if (!linkedWallet) { /* ... error handling ... */ return; }
-      const memoId = generateMemoId('RA');
-      const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
-      const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
-      const potentialPayoutLamports = (expectedLamports * BigInt(Math.round(chosenHorse.odds * 100))) / 100n;
-      const potentialPayoutSOL = escapeMarkdownV2((Number(potentialPayoutLamports) / LAMPORTS_PER_SOL).toFixed(3));
-      const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
+      if (!chosenHorse) { await safeSendMessage(chatId, `⚠️ Invalid horse name: "${escapeMarkdownV2(chosenHorseNameInput)}"\\. Use one of the listed horse names\\. See /race\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const linkedWallet = await getLinkedWallet(userId); if (!linkedWallet) { await safeSendMessage(chatId, `⚠️ Please link your wallet first using \`/link YOUR_WALLET_ADDRESS\` before placing a bet\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const memoId = generateMemoId('RA'); const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL)); const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
+      const potentialPayoutLamports = (expectedLamports * BigInt(Math.round(chosenHorse.odds * 100))) / 100n; const potentialPayoutSOL = escapeMarkdownV2((Number(potentialPayoutLamports) / LAMPORTS_PER_SOL).toFixed(3)); const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
       const saveResult = await savePendingBet( userId, chatId, 'race', { horse: chosenHorse.name, odds: chosenHorse.odds }, expectedLamports, memoId, expiresAt );
-      if (!saveResult.success) { /* ... error handling ... */ return; }
+      if (!saveResult.success) { await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' }); return; }
       const depositAddress = process.env.RACE_WALLET_ADDRESS; // Use RACE
-      if (!depositAddress) { /* ... error handling ... */ return; }
-      const message = `✅ Race bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
-                      `You chose: ${chosenHorse.emoji} *${escapeMarkdownV2(chosenHorse.name)}*\n` +
-                      `Amount: *${betAmountString} SOL*\n` +
-                      `Potential Payout: ${potentialPayoutSOL} SOL \\(Stake \\* ${escapeMarkdownV2(chosenHorse.odds.toFixed(2))}x\\)\n\n`+
-                      `➡️ Send *exactly ${betAmountString} SOL* to \\(Race Deposit\\):\n` + // Label as Race
-                      `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
-                      `📎 *Include MEMO:* \`${memoId}\`\n\n` +
-                      `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
-                      `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
+      if (!depositAddress) { console.error("CRITICAL: RACE_WALLET_ADDRESS environment variable is not set!"); await safeSendMessage(chatId, `⚠️ Bot configuration error: Race deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const message = `✅ Race bet registered\\! \\(ID: \`${memoId}\`\\)\n\nYou chose: ${chosenHorse.emoji} *${escapeMarkdownV2(chosenHorse.name)}*\nAmount: *${betAmountString} SOL*\nPotential Payout: ${potentialPayoutSOL} SOL \\(Stake \\* ${escapeMarkdownV2(chosenHorse.odds.toFixed(2))}x\\)\n\n➡️ Send *exactly ${betAmountString} SOL* to \\(Race Deposit\\):\n\`${escapeMarkdownV2(depositAddress)}\`\n\n📎 *Include MEMO:* \`${memoId}\`\n\n⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
       await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
  }
 
  // /betslots command - Uses MAIN_WALLET_ADDRESS
- async function handleBetSlotsCommand(msg, args) {
-      const chatId = msg.chat.id;
-      const userId = String(msg.from.id);
-      const match = args.trim().match(/^(\d+\.?\d*)$/);
-      if (!match) { /* ... error handling ... */ return; }
-      const config = GAME_CONFIG.slots;
-      const betAmount = parseFloat(match[1]);
-      if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) { /* ... error handling ... */ return; }
-      const linkedWallet = await getLinkedWallet(userId);
-      if (!linkedWallet) { /* ... error handling ... */ return; }
-      const memoId = generateMemoId('SL');
-      const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
-      const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
+ async function handleBetSlotsCommand(msg, args) { /* ... As in user's v2.6.1 paste, uses MAIN ... */
+      const chatId = msg.chat.id; const userId = String(msg.from.id); const match = args.trim().match(/^(\d+\.?\d*)$/);
+      if (!match) { await safeSendMessage(chatId, `⚠️ Invalid format\\. Use: \`/betslots <amount>\`\nExample: \`/betslots 0\\.050\``, { parse_mode: 'MarkdownV2' }); return; }
+      const config = GAME_CONFIG.slots; const betAmount = parseFloat(match[1]);
+      if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) { await safeSendMessage(chatId, `⚠️ Invalid bet amount\\. Slots bets must be between ${escapeMarkdownV2(config.minBet.toFixed(3))} and ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const linkedWallet = await getLinkedWallet(userId); if (!linkedWallet) { await safeSendMessage(chatId, `⚠️ Please link your wallet first using \`/link YOUR_WALLET_ADDRESS\` before placing a bet\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const memoId = generateMemoId('SL'); const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL)); const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
       const saveResult = await savePendingBet( userId, chatId, 'slots', {}, expectedLamports, memoId, expiresAt );
-      if (!saveResult.success) { /* ... error handling ... */ return; }
+      if (!saveResult.success) { await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' }); return; }
       const depositAddress = process.env.MAIN_WALLET_ADDRESS; // Use MAIN
-      if (!depositAddress) { /* ... error handling ... */ return; }
+      if (!depositAddress) { console.error("CRITICAL: MAIN_WALLET_ADDRESS environment variable is not set!"); await safeSendMessage(chatId, `⚠️ Bot configuration error: Main deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' }); return; }
       const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
-      const message = `✅ Slots bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
-                      `Spin Amount: *${betAmountString} SOL*\n\n` +
-                      `➡️ Send *exactly ${betAmountString} SOL* to \\(Main Deposit\\):\n` + // Label as Main
-                      `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
-                      `📎 *Include MEMO:* \`${memoId}\`\n\n` +
-                      `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
-                      `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
+      const message = `✅ Slots bet registered\\! \\(ID: \`${memoId}\`\\)\n\nSpin Amount: *${betAmountString} SOL*\n\n➡️ Send *exactly ${betAmountString} SOL* to \\(Main Deposit\\):\n\`${escapeMarkdownV2(depositAddress)}\`\n\n📎 *Include MEMO:* \`${memoId}\`\n\n⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
       await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
  }
 
  // /betroulette command - Uses MAIN_WALLET_ADDRESS
- async function handleBetRouletteCommand(msg, args) {
-      const chatId = msg.chat.id;
-      const userId = String(msg.from.id);
-      const config = GAME_CONFIG.roulette;
+ async function handleBetRouletteCommand(msg, args) { /* ... As in user's v2.6.1 paste, uses MAIN ... */
+      const chatId = msg.chat.id; const userId = String(msg.from.id); const config = GAME_CONFIG.roulette;
       const parts = args.trim().split(/\s+/);
-      if (parts.length === 0 || parts.length % 2 !== 0) { /* ... error handling ... */ return; }
-      const bets = {};
-      let totalExpectedLamports = 0n;
-      let totalBetAmountSOL = 0;
-      for (let i = 0; i < parts.length; i += 2) { /* ... parsing logic ... */
-         const betSpec = parts[i].toUpperCase();
-         const betAmount = parseFloat(parts[i+1]);
-         if (isNaN(betAmount) || betAmount <= 0) { /* ... error handling ... */ return; }
-         if (betAmount < config.minBet || betAmount > config.maxBet) { /* ... error handling ... */ return; }
-         let betKey = '';
-         if (/^(R|B|E|O|L|H)$/.test(betSpec)) { betKey = betSpec; }
-         else if (/^D([1-3])$/.test(betSpec)) { betKey = betSpec; }
-         else if (/^C([1-3])$/.test(betSpec)) { betKey = betSpec; }
-         else if (/^S(0|[1-9]|[12]\d|3[0-6])$/.test(betSpec)) { betKey = betSpec; }
-         else { /* ... error handling ... */ return; }
-         const betLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
-         bets[betKey] = (BigInt(bets[betKey] || '0') + betLamports).toString(); // Combine bets
-         totalExpectedLamports += betLamports;
-         totalBetAmountSOL += betAmount;
-       }
-      if (totalExpectedLamports <= 0n) { /* ... error handling ... */ return; }
-      const linkedWallet = await getLinkedWallet(userId);
-      if (!linkedWallet) { /* ... error handling ... */ return; }
-      const memoId = generateMemoId('RL');
-      const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
-      const betDetails = { bets: bets, totalBetAmountSOL: totalBetAmountSOL };
+      if (parts.length === 0 || parts.length % 2 !== 0) { await safeSendMessage(chatId, "⚠️ Invalid format\\. Use: `/betroulette <bet_spec1> <amount1> [<bet_spec2> <amount2>...]`\nExample: `/betroulette R 0.1 S17 0.05`", { parse_mode: 'MarkdownV2', disable_web_page_preview: true }); return; }
+      const bets = {}; let totalExpectedLamports = 0n; let totalBetAmountSOL = 0;
+      for (let i = 0; i < parts.length; i += 2) {
+          const betSpec = parts[i].toUpperCase(); const betAmount = parseFloat(parts[i+1]);
+          if (isNaN(betAmount) || betAmount <= 0) { await safeSendMessage(chatId, `⚠️ Invalid amount for bet ${betSpec}: "${escapeMarkdownV2(parts[i+1])}"\\. Amount must be positive\\.`, { parse_mode: 'MarkdownV2' }); return; }
+          if (betAmount < config.minBet || betAmount > config.maxBet) { await safeSendMessage(chatId, `⚠️ Bet amount for ${betSpec} (${escapeMarkdownV2(betAmount)}) is out of range \\(${escapeMarkdownV2(config.minBet.toFixed(3))} \\- ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL\\)\\.`, { parse_mode: 'MarkdownV2' }); return; }
+          let betKey = '';
+          if (/^(R|B|E|O|L|H)$/.test(betSpec)) { betKey = betSpec; } else if (/^D([1-3])$/.test(betSpec)) { betKey = betSpec; } else if (/^C([1-3])$/.test(betSpec)) { betKey = betSpec; } else if (/^S(0|[1-9]|[12]\d|3[0-6])$/.test(betSpec)) { betKey = betSpec; }
+          else { await safeSendMessage(chatId, `⚠️ Invalid Bet Specification: \`${escapeMarkdownV2(betSpec)}\`\\. Use codes like R, B, E, O, L, H, D1-3, C1-3, S0-36\\.`, { parse_mode: 'MarkdownV2', disable_web_page_preview: true }); return; }
+          const betLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL)); bets[betKey] = (BigInt(bets[betKey] || '0') + betLamports).toString(); totalExpectedLamports += betLamports; totalBetAmountSOL += betAmount;
+      }
+      if (totalExpectedLamports <= 0n) { await safeSendMessage(chatId, "⚠️ No valid bets were specified.", { parse_mode: 'MarkdownV2'}); return; }
+      const linkedWallet = await getLinkedWallet(userId); if (!linkedWallet) { await safeSendMessage(chatId, `⚠️ Please link your wallet first using \`/link YOUR_WALLET_ADDRESS\` before placing a bet\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const memoId = generateMemoId('RL'); const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000); const betDetails = { bets: bets, totalBetAmountSOL: totalBetAmountSOL };
       const saveResult = await savePendingBet( userId, chatId, 'roulette', betDetails, totalExpectedLamports, memoId, expiresAt );
-      if (!saveResult.success) { /* ... error handling ... */ return; }
+      if (!saveResult.success) { await safeSendMessage(chatId, `⚠️ Error registering bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' }); return; }
       const depositAddress = process.env.MAIN_WALLET_ADDRESS; // Use MAIN
-      if (!depositAddress) { /* ... error handling ... */ return; }
+      if (!depositAddress) { console.error("CRITICAL: MAIN_WALLET_ADDRESS environment variable is not set!"); await safeSendMessage(chatId, `⚠️ Bot configuration error: Main deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' }); return; }
       let betsPlacedString = Object.entries(bets).map(([key, value]) => `\`${key}\` \\(${(Number(value) / LAMPORTS_PER_SOL).toFixed(3)}\\)`).join(', ');
       const totalBetAmountString = escapeMarkdownV2(totalBetAmountSOL.toFixed(3));
-      const message = `✅ Roulette bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
-                      `Bets Placed: ${betsPlacedString}\n` +
-                      `Total Amount: *${totalBetAmountString} SOL*\n\n` +
-                      `➡️ Send *exactly ${totalBetAmountString} SOL* to \\(Main Deposit\\):\n` + // Label as Main
-                      `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
-                      `📎 *Include MEMO:* \`${memoId}\`\n\n` +
-                      `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
-                      `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
+      const message = `✅ Roulette bet registered\\! \\(ID: \`${memoId}\`\\)\n\nBets Placed: ${betsPlacedString}\nTotal Amount: *${totalBetAmountString} SOL*\n\n➡️ Send *exactly ${totalBetAmountString} SOL* to \\(Main Deposit\\):\n\`${escapeMarkdownV2(depositAddress)}\`\n\n📎 *Include MEMO:* \`${memoId}\`\n\n⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
       await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
  }
 
  // /betwar command - Uses MAIN_WALLET_ADDRESS
- async function handleBetWarCommand(msg, args) {
-      const chatId = msg.chat.id;
-      const userId = String(msg.from.id);
-      const match = args.trim().match(/^(\d+\.?\d*)$/);
-      if (!match) { /* ... error handling ... */ return; }
-      const config = GAME_CONFIG.war;
-      const betAmount = parseFloat(match[1]);
-      if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) { /* ... error handling ... */ return; }
-      const linkedWallet = await getLinkedWallet(userId);
-      if (!linkedWallet) { /* ... error handling ... */ return; }
-      const memoId = generateMemoId('WA');
-      const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL));
-      const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
+ async function handleBetWarCommand(msg, args) { /* ... As in user's v2.6.1 paste, uses MAIN ... */
+      const chatId = msg.chat.id; const userId = String(msg.from.id); const match = args.trim().match(/^(\d+\.?\d*)$/);
+      if (!match) { await safeSendMessage(chatId, `⚠️ Invalid format\\. Use: \`/betwar <amount>\`\nExample: \`/betwar 0\\.100\``, { parse_mode: 'MarkdownV2' }); return; }
+      const config = GAME_CONFIG.war; const betAmount = parseFloat(match[1]);
+      if (isNaN(betAmount) || betAmount < config.minBet || betAmount > config.maxBet) { await safeSendMessage(chatId, `⚠️ Invalid bet amount\\. War bets must be between ${escapeMarkdownV2(config.minBet.toFixed(3))} and ${escapeMarkdownV2(config.maxBet.toFixed(3))} SOL\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const linkedWallet = await getLinkedWallet(userId); if (!linkedWallet) { await safeSendMessage(chatId, `⚠️ Please link your wallet first using \`/link YOUR_WALLET_ADDRESS\` before placing a bet\\.`, { parse_mode: 'MarkdownV2' }); return; }
+      const memoId = generateMemoId('WA'); const expectedLamports = BigInt(Math.round(betAmount * LAMPORTS_PER_SOL)); const expiresAt = new Date(Date.now() + config.expiryMinutes * 60 * 1000);
       const saveResult = await savePendingBet( userId, chatId, 'war', {}, expectedLamports, memoId, expiresAt );
-      if (!saveResult.success) { /* ... error handling ... */ return; }
+      if (!saveResult.success) { await safeSendMessage(chatId, `⚠️ Error registering War bet: ${escapeMarkdownV2(saveResult.error || 'Unknown')}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' }); return; }
       const depositAddress = process.env.MAIN_WALLET_ADDRESS; // Use MAIN
-      if (!depositAddress) { /* ... error handling ... */ return; }
+      if (!depositAddress) { console.error("CRITICAL: MAIN_WALLET_ADDRESS environment variable is not set!"); await safeSendMessage(chatId, `⚠️ Bot configuration error: Main deposit address not set\\. Please contact support\\.`, { parse_mode: 'MarkdownV2' }); return; }
       const betAmountString = escapeMarkdownV2(betAmount.toFixed(3));
-      const message = `✅ Casino War bet registered\\! \\(ID: \`${memoId}\`\\)\n\n` +
-                      `Bet Amount: *${betAmountString} SOL*\n\n` +
-                      `➡️ Send *exactly ${betAmountString} SOL* to \\(Main Deposit\\):\n` + // Label as Main
-                      `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
-                      `📎 *Include MEMO:* \`${memoId}\`\n\n` +
-                      `⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n` +
-                      `*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
+      const message = `✅ Casino War bet registered\\! \\(ID: \`${memoId}\`\\)\n\nBet Amount: *${betAmountString} SOL*\n\n➡️ Send *exactly ${betAmountString} SOL* to \\(Main Deposit\\):\n\`${escapeMarkdownV2(depositAddress)}\`\n\n📎 *Include MEMO:* \`${memoId}\`\n\n⏱️ This request expires in ${config.expiryMinutes} minutes\\.\n\n*IMPORTANT:* Send from your own wallet \\(not an exchange\\)\\. Ensure you include the memo correctly\\.`;
       await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
  }
 
- // /admin command - (Unchanged functionally)
+ // /admin command - (Unchanged functionally from user's v2.6.1 paste)
  async function handleAdminCommand(msg, args) {
-     const chatId = msg.chat.id;
-     const userId = String(msg.from.id);
+     const chatId = msg.chat.id; const userId = String(msg.from.id);
      const adminUserIds = (process.env.ADMIN_USER_IDS || '').split(',').map(id => id.trim()).filter(id => id);
-     if (!adminUserIds.includes(String(userId))) {
-          await safeSendMessage(chatId, "🚫 Unauthorized.", { parse_mode: 'MarkdownV2' });
-         return;
-     }
-
-     const subCommand = args?.split(' ')[0]?.toLowerCase();
-     const subArgs = args?.split(' ').slice(1) || [];
-
-     if (!subCommand) {
-          await safeSendMessage(chatId, "Admin commands: `status`, `setrpcconcurrency <num>`, `forcerotate`, `getconfig`", { parse_mode: 'MarkdownV2' });
-         return;
-     }
-
+     if (!adminUserIds.includes(String(userId))) { await safeSendMessage(chatId, "🚫 Unauthorized.", { parse_mode: 'MarkdownV2' }); return; }
+     const subCommand = args?.split(' ')[0]?.toLowerCase(); const subArgs = args?.split(' ').slice(1) || [];
+     if (!subCommand) { await safeSendMessage(chatId, "Admin commands: `status`, `setrpcconcurrency <num>`, `forcerotate`, `getconfig`", { parse_mode: 'MarkdownV2' }); return; }
      try {
          switch(subCommand) {
-              case 'status': {
-                   const processor = paymentProcessor;
-                   let connectionStats = null;
-                   try { connectionStats = typeof solanaConnection?.getRequestStats === 'function' ? solanaConnection.getRequestStats() : null; } catch(e){ /* ignore */ }
-                   const messageQueueSize = messageQueue?.size || 0; const messageQueuePending = messageQueue?.pending || 0;
-                   const telegramSendQueueSize = telegramSendQueue?.size || 0; const telegramSendQueuePending = telegramSendQueue?.pending || 0;
-                   const paymentHighPriQueueSize = processor?.highPriorityQueue?.size || 0; const paymentHighPriQueuePending = processor?.highPriorityQueue?.pending || 0;
-                   const paymentNormalQueueSize = processor?.normalQueue?.size || 0; const paymentNormalQueuePending = processor?.normalQueue?.pending || 0;
-                   let statsMsg = `*Bot Statistics* \\(v${escapeMarkdownV2('2.6.1')}\\)\n\n`;
-                   statsMsg += `*Uptime:* ${escapeMarkdownV2(Math.floor(process.uptime() / 60))} minutes\n`;
-                   statsMsg += `*Performance:* Req:${performanceMonitor.requests}, Err:${performanceMonitor.errors}\n`;
-                   statsMsg += `*Queues:*\n`;
-                   statsMsg += `  \\- Msg: P:${messageQueueSize} A:${messageQueuePending}\n`;
-                   statsMsg += `  \\- TG Send: P:${telegramSendQueueSize} A:${telegramSendQueuePending}\n`;
-                   statsMsg += `  \\- Pay HP: P:${paymentHighPriQueueSize} A:${paymentHighPriQueuePending}\n`;
-                   statsMsg += `  \\- Pay Norm: P:${paymentNormalQueueSize} A:${paymentNormalQueuePending}\n`;
-                   statsMsg += `*Caches:*\n`;
-                   statsMsg += `  \\- Wallets: ${walletCache.size}\n`;
-                   statsMsg += `  \\- Processed Sigs: ${processedSignaturesThisSession.size} / ${MAX_PROCESSED_SIGNATURES}\n`;
-                   statsMsg += `  \\- Memo Cache: ${paymentProcessor.memoCache.size}\n`;
+              case 'status': { /* ... Status logic as provided ... */
+                   const processor = paymentProcessor; let connectionStats = null; try { connectionStats = typeof solanaConnection?.getRequestStats === 'function' ? solanaConnection.getRequestStats() : null; } catch(e){ console.error("Error getting conn stats for botstats:", e.message); }
+                   const messageQueueSize = messageQueue?.size || 0; const messageQueuePending = messageQueue?.pending || 0; const telegramSendQueueSize = telegramSendQueue?.size || 0; const telegramSendQueuePending = telegramSendQueue?.pending || 0; const paymentHighPriQueueSize = processor?.highPriorityQueue?.size || 0; const paymentHighPriQueuePending = processor?.highPriorityQueue?.pending || 0; const paymentNormalQueueSize = processor?.normalQueue?.size || 0; const paymentNormalQueuePending = processor?.normalQueue?.pending || 0;
+                   let statsMsg = `*Bot Statistics* \\(v${escapeMarkdownV2('2.6.1')}\\)\n\n`; statsMsg += `*Uptime:* ${escapeMarkdownV2(Math.floor(process.uptime() / 60))} minutes\n`; statsMsg += `*Performance:* Req:${performanceMonitor.requests}, Err:${performanceMonitor.errors}\n`; statsMsg += `*Queues:*\n`; statsMsg += `  \\- Msg: P:${messageQueueSize} A:${messageQueuePending}\n`; statsMsg += `  \\- TG Send: P:${telegramSendQueueSize} A:${telegramSendQueuePending}\n`; statsMsg += `  \\- Pay HP: P:${paymentHighPriQueueSize} A:${paymentHighPriQueuePending}\n`; statsMsg += `  \\- Pay Norm: P:${paymentNormalQueueSize} A:${paymentNormalQueuePending}\n`; statsMsg += `*Caches:*\n`; statsMsg += `  \\- Wallets: ${walletCache.size}\n`; statsMsg += `  \\- Processed Sigs: ${processedSignaturesThisSession.size} / ${MAX_PROCESSED_SIGNATURES}\n`; statsMsg += `  \\- Memo Cache: ${paymentProcessor.memoCache.size}\n`;
                    if (connectionStats?.status && connectionStats?.stats) {
-                       statsMsg += `*Solana Connection:*\n`;
-                       statsMsg += `  \\- Endpoint: ${escapeMarkdownV2(connectionStats.status.currentEndpointUrl || 'N/A')}\n`;
-                       statsMsg += `  \\- Q:${connectionStats.status.queueSize ?? 'N/A'}, A:${connectionStats.status.activeRequests ?? 'N/A'}\n`;
-                       statsMsg += `  \\- Consecutive RL: ${connectionStats.status.consecutiveRateLimits ?? 'N/A'}\n`;
-                       statsMsg += `  \\- Last RL: ${escapeMarkdownV2(connectionStats.status.lastRateLimitTimestamp ? new Date(connectionStats.status.lastRateLimitTimestamp).toISOString() : 'None')}\n`;
-                       statsMsg += `  \\- Tot Req: S:${connectionStats.stats.totalRequestsSucceeded ?? 'N/A'}, F:${connectionStats.stats.totalRequestsFailed ?? 'N/A'}\n`;
-                       statsMsg += `  \\- RL Events: ${connectionStats.stats.rateLimitEvents ?? 'N/A'}\n`;
-                       statsMsg += `  \\- Rotations: ${connectionStats.stats.endpointRotations ?? 'N/A'}\n`;
-                       const successRateNum = connectionStats.stats.successRate;
-                       statsMsg += `  \\- Success Rate: ${escapeMarkdownV2(successRateNum !== null && successRateNum !== undefined ? successRateNum.toFixed(1) + '%' : 'N/A')}\n`;
+                       statsMsg += `*Solana Connection:*\n`; statsMsg += `  \\- Endpoint: ${escapeMarkdownV2(connectionStats.status.currentEndpointUrl || 'N/A')}\n`; statsMsg += `  \\- Q:${connectionStats.status.queueSize ?? 'N/A'}, A:${connectionStats.status.activeRequests ?? 'N/A'}\n`; statsMsg += `  \\- Consecutive RL: ${connectionStats.status.consecutiveRateLimits ?? 'N/A'}\n`; statsMsg += `  \\- Last RL: ${escapeMarkdownV2(connectionStats.status.lastRateLimitTimestamp ? new Date(connectionStats.status.lastRateLimitTimestamp).toISOString() : 'None')}\n`; statsMsg += `  \\- Tot Req: S:${connectionStats.stats.totalRequestsSucceeded ?? 'N/A'}, F:${connectionStats.stats.totalRequestsFailed ?? 'N/A'}\n`; statsMsg += `  \\- RL Events: ${connectionStats.stats.rateLimitEvents ?? 'N/A'}\n`; statsMsg += `  \\- Rotations: ${connectionStats.stats.endpointRotations ?? 'N/A'}\n`; const successRateNum = connectionStats.stats.successRate; statsMsg += `  \\- Success Rate: ${escapeMarkdownV2(successRateNum !== null && successRateNum !== undefined ? successRateNum.toFixed(1) + '%' : 'N/A')}\n`;
                    } else { statsMsg += `*Solana Connection:* Stats unavailable\\.\n`; }
-                   try { statsMsg += `*DB Pool:*\n`; statsMsg += `  \\- Total: ${pool.totalCount}, Idle: ${pool.idleCount}, Waiting: ${pool.waitingCount}\n`; } catch (e) { statsMsg += `*DB Pool:* Stats unavailable\\.\n`; }
+                   try { statsMsg += `*DB Pool:*\n`; statsMsg += `  \\- Total: ${pool.totalCount}, Idle: ${pool.idleCount}, Waiting: ${pool.waitingCount}\n`; } catch (e) { statsMsg += `*DB Pool:* Stats unavailable\\.\n`; }
                    await safeSendMessage(chatId, statsMsg, { parse_mode: 'MarkdownV2' });
                    break;
               }
-             case 'forcerotate': { /* ... unchanged ... */
-                  console.log(`[Admin] User ${userId} forcing RPC endpoint rotation.`);
-                  if (typeof solanaConnection?._rotateEndpoint === 'function') {
-                       solanaConnection._rotateEndpoint();
-                       await safeSendMessage(chatId, "RPC endpoint rotation forced\\.", { parse_mode: 'MarkdownV2' });
-                  } else { await safeSendMessage(chatId, "Error: Rotate function not available\\.", { parse_mode: 'MarkdownV2' }); }
-                  break;
-             }
-              case 'getconfig': { /* ... unchanged ... */
-                  let configText = "*Current Config (Non\\-Secret Env Vars):*\n\n";
-                  const safeVars = Object.keys(OPTIONAL_ENV_DEFAULTS).concat(['RPC_URLS', 'MAIN_WALLET_ADDRESS', 'RACE_WALLET_ADDRESS']);
-                  safeVars.forEach(key => {
-                       if (key.includes('TOKEN') || key.includes('DATABASE_URL') || key.includes('KEY') || key.includes('SECRET') || key.includes('PASSWORD')) {
-                           if (key !== 'RPC_URLS' && key !== 'DATABASE_URL') return;
-                           if (key === 'DATABASE_URL') { configText += `${key}: [Set, Redacted]\n`; return; }
-                       }
-                      configText += `${key}: ${process.env[key] || '(Not Set / Using Default)'}\n`;
-                  });
-                   await safeSendMessage(chatId, escapeMarkdownV2(configText), { parse_mode: 'MarkdownV2' });
-                  break;
-              }
-              case 'setrpcconcurrency': { /* ... unchanged ... */
-                  const newConcurrency = parseInt(subArgs[0], 10);
-                  if (!isNaN(newConcurrency) && newConcurrency >= 1 && newConcurrency <= 50) {
-                      console.log(`[Admin] User ${userId} setting RPC concurrency to ${newConcurrency}.`);
-                      if (solanaConnection && typeof solanaConnection.setMaxConcurrent === 'function') {
-                          solanaConnection.setMaxConcurrent(newConcurrency);
-                          await safeSendMessage(chatId, `RPC Max Concurrency set to ${newConcurrency}\\.`, { parse_mode: 'MarkdownV2' });
-                      } else { await safeSendMessage(chatId, "Error: Solana connection not initialized or setMaxConcurrent not available\\.", { parse_mode: 'MarkdownV2' }); }
-                  } else { await safeSendMessage(chatId, "Invalid number\\. Usage: `/admin setrpcconcurrency <number>` \\(1\\-50\\)", { parse_mode: 'MarkdownV2' }); }
-                  break;
-              }
-             default:
-                  await safeSendMessage(chatId, `Unknown admin command: \`${escapeMarkdownV2(subCommand)}\``, { parse_mode: 'MarkdownV2' });
+             case 'forcerotate': { /* ... unchanged ... */ if (typeof solanaConnection?._rotateEndpoint === 'function') { solanaConnection._rotateEndpoint(); await safeSendMessage(chatId, "RPC endpoint rotation forced\\.", { parse_mode: 'MarkdownV2' }); } else { await safeSendMessage(chatId, "Error: Rotate function not available\\.", { parse_mode: 'MarkdownV2' }); } break; }
+             case 'getconfig': { /* ... unchanged ... */ let configText = "*Current Config (Non\\-Secret Env Vars):*\n\n"; const safeVars = Object.keys(OPTIONAL_ENV_DEFAULTS).concat(['RPC_URLS', 'MAIN_WALLET_ADDRESS', 'RACE_WALLET_ADDRESS']); safeVars.forEach(key => { if (key.includes('TOKEN') || key.includes('DATABASE_URL') || key.includes('KEY') || key.includes('SECRET') || key.includes('PASSWORD')) { if (key !== 'RPC_URLS' && key !== 'DATABASE_URL') return; if (key === 'DATABASE_URL') { configText += `${key}: [Set, Redacted]\n`; return; } } configText += `${key}: ${process.env[key] || '(Not Set / Using Default)'}\n`; }); await safeSendMessage(chatId, escapeMarkdownV2(configText), { parse_mode: 'MarkdownV2' }); break; }
+             case 'setrpcconcurrency': { /* ... unchanged ... */ const newConcurrency = parseInt(subArgs[0], 10); if (!isNaN(newConcurrency) && newConcurrency >= 1 && newConcurrency <= 50) { console.log(`[Admin] User ${userId} setting RPC concurrency to ${newConcurrency}.`); if (solanaConnection && typeof solanaConnection.setMaxConcurrent === 'function') { solanaConnection.setMaxConcurrent(newConcurrency); await safeSendMessage(chatId, `RPC Max Concurrency set to ${newConcurrency}\\.`, { parse_mode: 'MarkdownV2' }); } else { await safeSendMessage(chatId, "Error: Solana connection not initialized or setMaxConcurrent not available\\.", { parse_mode: 'MarkdownV2' }); } } else { await safeSendMessage(chatId, "Invalid number\\. Usage: `/admin setrpcconcurrency <number>` \\(1\\-50\\)", { parse_mode: 'MarkdownV2' }); } break; }
+             default: await safeSendMessage(chatId, `Unknown admin command: \`${escapeMarkdownV2(subCommand)}\``, { parse_mode: 'MarkdownV2' });
          }
      } catch (adminError) {
          console.error(`Admin command error (${subCommand}):`, adminError);
