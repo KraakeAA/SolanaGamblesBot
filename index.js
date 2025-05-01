@@ -2998,7 +2998,8 @@ async function handleMessage(msg) {
                      }
                      performanceMonitor.logRequest(true);
                  } else { console.warn(`Handler for command /${command} is not a function.`); }
-      _template__vars: {current_datetime: 'Thursday, May 1, 2025 at 11:42:45 PM BST', current_location: 'Ramsgate, England, United Kingdom'}
+            }
+            // REMOVED ERRONEOUS LINE THAT WAS HERE
         } else {
              if (msg.chat.type === 'private') {
                  await safeSendMessage(chatId, "❓ Unknown command\\. Type `/help` to see available commands\\!", { parse_mode: 'MarkdownV2' });
