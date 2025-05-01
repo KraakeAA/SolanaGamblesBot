@@ -3208,25 +3208,24 @@ async function handleRouletteCommand(msg) {
           const maxBetHtml = escapeHtml(config.maxBet.toFixed(3));
 
           // Using original text structure from the user's v2.6.0 code (implied)
-          const message = `⚪️ <b>European Roulette Game</b> ⚪️\n\n`+
-              `Place bets on the outcome of the wheel spin (numbers 0-36).\n\n`+
-              `<b>Bet Types &amp; Payouts</b> (Odds N:1 - Payout is Stake * (N+1))*:<br>\n`+ // Corrected tag
-              `- <code>S&lt;number&gt;</code>: Straight (35:1)<br>\n`+ // Corrected tag
-              `- <code>R</code>: Red (1:1) / <code>B</code>: Black (1:1)<br>\n`+ // Corrected tag
-              `- <code>E</code>: Even (1:1) / <code>O</code>: Odd (1:1)<br>\n`+ // Corrected tag
-              `- <code>L</code>: Low 1-18 (1:1) / <code>H</code>: High 19-36 (1:1)<br>\n`+ // Corrected tag
-              `- <code>D1/D2/D3</code>: Dozens (2:1)<br>\n`+ // Corrected tag
-              `- <code>C1/C2/C3</code>: Columns (2:1)\n\n`+
-              `<b>How to Play</b>:\n`+
-              `- Type <code>/betroulette &lt;bet1&gt; &lt;amount1&gt; [...]</code>\n`+
-              `  (e.g., <code>/betroulette R 0.1 S17 0.05</code>)\n\n`+
-              `<b>Rules</b>:\n`+
-              `- Min Bet (per placement): ${minBetHtml} SOL\n`+
-              `- Max Bet (per placement): ${maxBetHtml} SOL\n`+
-              `- House Edge: Applied via win probability.\n`+ // MODIFIED LINE (Kept from previous)
-              `- Payout on Win: Standard Roulette Payouts (see above)\n\n`+
-              `Use the <code>/betroulette</code> command to get the <b>Main Deposit Address</b> and a <b>unique Memo ID</b>. Send the <b>total</b> SOL amount for all your bets with the memo.`;
-
+          const message = `⚪️ <b>European Roulette Game</b> ⚪️\n\n` +
+    `Place bets on the outcome of the wheel spin (numbers 0-36).\n\n` +
+    `<b>Bet Types &amp; Payouts</b> (Odds N:1 - Payout is Stake * (N+1))*:\n` +
+    `- <code>S&lt;number&gt;</code>: Straight (35:1)\n` +
+    `- <code>R</code>: Red (1:1) / <code>B</code>: Black (1:1)\n` +
+    `- <code>E</code>: Even (1:1) / <code>O</code>: Odd (1:1)\n` +
+    `- <code>L</code>: Low 1-18 (1:1) / <code>H</code>: High 19-36 (1:1)\n` +
+    `- <code>D1/D2/D3</code>: Dozens (2:1)\n` +
+    `- <code>C1/C2/C3</code>: Columns (2:1)\n\n` +
+    `<b>How to Play</b>:\n` +
+    `- Type <code>/betroulette &lt;bet1&gt; &lt;amount1&gt; [...]</code>\n` +
+    `  (e.g., <code>/betroulette R 0.1 S17 0.05</code>)\n\n` +
+    `<b>Rules</b>:\n` +
+    `- Min Bet (per placement): ${minBetHtml} SOL\n` +
+    `- Max Bet (per placement): ${maxBetHtml} SOL\n` +
+    `- House Edge: Applied via win probability.\n` +
+    `- Payout on Win: Standard Roulette Payouts (see above)\n\n` +
+    `Use the <code>/betroulette</code> command to get the <b>Main Deposit Address</b> and a <b>unique Memo ID</b>. Send the <b>total</b> SOL amount for all your bets with the memo.`;
           await safeSendMessage(chatId, message, { parse_mode: 'HTML', disable_web_page_preview: true });
 
       } catch (error) {
