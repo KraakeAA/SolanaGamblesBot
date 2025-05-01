@@ -3210,12 +3210,12 @@ async function handleRouletteCommand(msg) {
           // Using original text structure from the user's v2.6.0 code (implied)
           const message = `⚪️ <b>European Roulette Game</b> ⚪️\n\n`+
               `Place bets on the outcome of the wheel spin (numbers 0-36).\n\n`+
-              `<b>Bet Types &amp; Payouts</b> (Odds N:1 - Payout is Stake * (N+1))*:<br/>\n`+ // Use &amp;
-              `- <code>S&lt;number&gt;</code>: Straight (35:1)<br/>\n`+
-              `- <code>R</code>: Red (1:1) / <code>B</code>: Black (1:1)<br/>\n`+
-              `- <code>E</code>: Even (1:1) / <code>O</code>: Odd (1:1)<br/>\n`+
-              `- <code>L</code>: Low 1-18 (1:1) / <code>H</code>: High 19-36 (1:1)<br/>\n`+
-              `- <code>D1/D2/D3</code>: Dozens (2:1)<br/>\n`+
+              `<b>Bet Types &amp; Payouts</b> (Odds N:1 - Payout is Stake * (N+1))*:<br>\n`+ // Corrected tag
+              `- <code>S&lt;number&gt;</code>: Straight (35:1)<br>\n`+ // Corrected tag
+              `- <code>R</code>: Red (1:1) / <code>B</code>: Black (1:1)<br>\n`+ // Corrected tag
+              `- <code>E</code>: Even (1:1) / <code>O</code>: Odd (1:1)<br>\n`+ // Corrected tag
+              `- <code>L</code>: Low 1-18 (1:1) / <code>H</code>: High 19-36 (1:1)<br>\n`+ // Corrected tag
+              `- <code>D1/D2/D3</code>: Dozens (2:1)<br>\n`+ // Corrected tag
               `- <code>C1/C2/C3</code>: Columns (2:1)\n\n`+
               `<b>How to Play</b>:\n`+
               `- Type <code>/betroulette &lt;bet1&gt; &lt;amount1&gt; [...]</code>\n`+
@@ -3231,6 +3231,10 @@ async function handleRouletteCommand(msg) {
 
       } catch (error) {
            console.error("Error in handleRouletteCommand:", error);
+           // Log the specific error from Telegram API if available
+           if (error.response && error.response.body) {
+               console.error("Telegram API Error Body:", error.response.body);
+           }
            await safeSendMessage(chatId, "Sorry, couldn't display Roulette info right now.");
       }
  }
