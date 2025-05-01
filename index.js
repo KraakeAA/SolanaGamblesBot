@@ -1913,6 +1913,7 @@ console.log("✅ Payment Processor instantiated.");
 
 // --- Payment Monitoring Loop ---
 // ** MODIFIED: Monitors only MAIN_WALLET_ADDRESS and RACE_WALLET_ADDRESS **
+// ** MODIFIED: Added logging for failed RPC endpoint URL in catch block **
 let isMonitorRunning = false;
 const botStartupTime = Math.floor(Date.now() / 1000);
 let monitorIntervalId = null;
@@ -1971,7 +1972,7 @@ async function monitorPayments() {
                 const targetPublicKey = new PublicKey(walletAddress); // <<< Validate PublicKey creation
 
                 // <<< Log before the call >>>
-                console.log(`[Monitor Debug] Attempting getSignaturesForAddress: Wallet=${walletInfo.type} (${targetPublicKey.toBase58().slice(0,6)}...), Limit=${fetchLimit}, Commitment=${options.commitment}`);
+                // console.log(`[Monitor Debug] Attempting getSignaturesForAddress: Wallet=${walletInfo.type} (${targetPublicKey.toBase58().slice(0,6)}...), Limit=${fetchLimit}, Commitment=${options.commitment}`);
 
                 signaturesForWallet = await solanaConnection.getSignaturesForAddress(
                     targetPublicKey,
@@ -2006,18 +2007,31 @@ async function monitorPayments() {
 
             } catch (error) {
                 const fetchFailTime = Date.now(); // <<< Timing End Failure
-                console.error(`[Monitor Debug] FAILURE during getSignaturesForAddress for ${walletInfo.type} (${walletAddress.slice(0,6)}...) after ${fetchFailTime - fetchStartTime}ms.`);
+                // *** MODIFICATION START: Log the endpoint URL on failure ***
+                let failedEndpoint = 'N/A';
+                try {
+                    // Attempt to get the current endpoint URL from the connection object
+                    // Replace 'getCurrentEndpointUrl' with the actual method name if different
+                    if (typeof solanaConnection?.getCurrentEndpointUrl === 'function') {
+                        failedEndpoint = solanaConnection.getCurrentEndpointUrl();
+                    } else if (solanaConnection?.currentEndpoint) { // Fallback if it's a property
+                         failedEndpoint = solanaConnection.currentEndpoint;
+                    }
+                } catch (e) { console.error("Error retrieving current endpoint URL:", e.message); }
+                console.error(`[Monitor Debug] FAILURE during getSignaturesForAddress for ${walletInfo.type} (${walletAddress.slice(0,6)}...) using RPC: ${failedEndpoint} after ${fetchFailTime - fetchStartTime}ms.`);
+                // *** MODIFICATION END ***
+
                 // <<< Log the FULL error object >>>
                 console.error('[Monitor Debug] Full Error Object:', error);
                 performanceMonitor.logRequest(false);
 
                 // Original logging (kept for context)
-                if (error.message.includes('long-term storage')) {
-                     console.warn(`[Monitor] RPC Node Storage Error for ${walletInfo.type} wallet. Consider checking RPC node health/history support.`);
+                if (error.message && error.message.includes('long-term storage')) {
+                     console.warn(`[Monitor] RPC Node Storage Error for ${walletInfo.type} wallet (${failedEndpoint}). Consider checking RPC node health/history support.`);
                  } else if (!isRetryableError(error)) {
-                     console.warn(`[Monitor] Non-retryable RPC error for ${walletInfo.type} wallet. Error: ${error.message}`);
+                     console.warn(`[Monitor] Non-retryable RPC error for ${walletInfo.type} wallet (${failedEndpoint}). Error: ${error.message}`);
                  } else {
-                     console.warn(`[Monitor] Retryable RPC error for ${walletInfo.type} wallet. Error: ${error.message}. Connection library should handle retries.`);
+                     console.warn(`[Monitor] Retryable RPC error for ${walletInfo.type} wallet (${failedEndpoint}). Error: ${error.message}. Connection library should handle retries.`);
                  }
             }
         } // End loop through wallets
@@ -2029,7 +2043,7 @@ async function monitorPayments() {
         isMonitorRunning = false;
         const duration = Date.now() - mainStartTime;
         if (signaturesFoundThisCycle > 0 || duration > (parseInt(process.env.MONITOR_INTERVAL_SECONDS, 10) * 1000 / 2) ) {
-            console.log(`[Monitor] Cycle completed in ${duration}ms. Found:${signaturesFoundThisCycle}. Queued:${signaturesQueuedThisCycle}.`);
+            // console.log(`[Monitor] Cycle completed in ${duration}ms. Found:${signaturesFoundThisCycle}. Queued:${signaturesQueuedThisCycle}.`); // Reduce noise unless needed
         }
     }
 }
