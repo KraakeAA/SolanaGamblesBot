@@ -3160,70 +3160,87 @@ async function handleRaceCommand(msg) {
     await safeSendMessage(msg.chat.id, raceMessage, { parse_mode: 'MarkdownV2' });
 }
 
-// /slots command (MarkdownV2) - Info only
+// /slots command (HTML) - Info only
 async function handleSlotsCommand(msg) {
      const chatId = msg.chat.id;
-     const config = GAME_CONFIG.slots;
-     const hiddenEdgePercent = parseFloat(process.env.SLOTS_HIDDEN_EDGE || '0.10') * 100;
-     const paylines = [ /* ... same paylines ... */
-       `🍒 Cherry \\| 🍒 Cherry \\| 🍒 Cherry \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.CHERRY.payout[3])}x Stake`,
-       `🍊 Orange \\| 🍊 Orange \\| 🍊 Orange \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.ORANGE.payout[3])}x Stake`,
-       `🍫 BAR \\| 🍫 BAR \\| 🍫 BAR \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.BAR.payout[3])}x Stake`,
-       `7️⃣ Seven \\| \\(Any\\) \\| \\(Any\\) \\= 2x Stake`,
-       `🎰 777 \\| 🎰 777 \\| 🎰 777 \\= ${escapeMarkdownV2(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}x Stake \\(Jackpot\\!\\)`
-     ];
+     try {
+         const config = GAME_CONFIG.slots;
+         const hiddenEdgePercent = parseFloat(process.env.SLOTS_HIDDEN_EDGE || '0.10') * 100;
+         const paylines = [
+             // Using HTML entities for pipe just in case, though usually fine
+             `🍒 Cherry &verbar; 🍒 Cherry &verbar; 🍒 Cherry = ${escapeHtml(SLOTS_SYMBOLS.CHERRY.payout[3])}x Stake`,
+             `🍊 Orange &verbar; 🍊 Orange &verbar; 🍊 Orange = ${escapeHtml(SLOTS_SYMBOLS.ORANGE.payout[3])}x Stake`,
+             `🍫 BAR &verbar; 🍫 BAR &verbar; 🍫 BAR = ${escapeHtml(SLOTS_SYMBOLS.BAR.payout[3])}x Stake`,
+             `7️⃣ Seven &verbar; (Any) &verbar; (Any) = 2x Stake`, // Parentheses are fine in HTML text
+             `🎰 777 &verbar; 🎰 777 &verbar; 🎰 777 = ${escapeHtml(SLOTS_SYMBOLS.TRIPLE_SEVEN.payout[3])}x Stake (Jackpot!)`
+         ];
 
-     const message = `🎰 *777 Slots Game* 🎰\n\n` +
-                     `Spin the 3 reels and match symbols on the center line\\!\n\n`+
-                     `*Symbols:*\n`+
-                     `🍒 Cherry, 🍊 Orange, 🍫 BAR, 7️⃣ Seven, 🎰 777, ➖ Blank\n\n` +
-                     `*Payouts \\(Win Amount / Bet Amount\\):*\n` +
-                     paylines.map(line => `\\- ${line}`).join('\n') + `\n\n` +
-                     `*How to Play:*\n` +
-                      `1\\. Link wallet: \`/link YOUR\\_WALLET\` (if not done)\n` +
-                      `2\\. Type \`/betslots amount\` \\(e\\.g\\., \`/betslots 0\\.05\`\\)\n\n` +
-                     `*Rules:*\n` +
-                     `\\- Min Bet: ${escapeMarkdownV2(config.minBet)} SOL\n` +
-                     `\\- Max Bet: ${escapeMarkdownV2(config.maxBet)} SOL\n` +
-                     `\\- House Edge: Applied via symbol weights \\& hidden ${escapeMarkdownV2(hiddenEdgePercent.toFixed(1))}% forced loss chance\\.\n`+
-                     `\\- Payout on Win: Stake \\+ \\(Stake \\* Multiplier\\)\n\n`+
-                     `Use the \`/betslots\` command to get the *Main Deposit Address* and a *unique Memo ID*\\. Send the *exact* SOL amount with the memo to spin\\.`; // Clarified wallet
+         // Escape config values just in case
+         const minBetHtml = escapeHtml(config.minBet.toFixed(3));
+         const maxBetHtml = escapeHtml(config.maxBet.toFixed(3));
 
-     await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2' });
+         let message = `🎰 <b>777 Slots Game</b> 🎰\n\n` +
+                         `Spin the 3 reels and match symbols on the center line!\n\n`+
+                         `<b>Symbols:</b>\n`+
+                         `🍒 Cherry, 🍊 Orange, 🍫 BAR, 7️⃣ Seven, 🎰 777, ➖ Blank\n\n` +
+                         `<b>Payouts (Win Amount / Bet Amount):</b>\n` + // Parentheses are fine here
+                         paylines.map(line => `- ${line}`).join('\n') + `\n\n` + // Use simple hyphen
+                         `<b>How to Play:</b>\n` +
+                         `1. Link wallet: <code>/link YOUR_WALLET</code> (if not done)\n` +
+                         `2. Type <code>/betslots amount</code> (e.g., <code>/betslots 0.05</code>)\n\n` + // Use code tags
+                         `<b>Rules:</b>\n` +
+                         `- Min Bet: ${minBetHtml} SOL\n` +
+                         `- Max Bet: ${maxBetHtml} SOL\n` +
+                         `- House Edge: Applied via symbol weights &amp; hidden ${hiddenEdgePercent.toFixed(1)}% forced loss chance.\n`+ // Use &amp; for ampersand
+                         `- Payout on Win: Stake + (Stake * Multiplier)\n\n`+ // Parentheses are fine here
+                         `Use the <code>/betslots</code> command to get the <b>Main Deposit Address</b> and a <b>unique Memo ID</b>. Send the <b>exact</b> SOL amount with the memo to spin.`;
+
+         await safeSendMessage(chatId, message, { parse_mode: 'HTML' });
+
+     } catch (error) {
+          console.error("Error in handleSlotsCommand:", error);
+          await safeSendMessage(chatId, "Sorry, couldn't display Slots info right now."); // Plain text fallback
+     }
 }
 
-// /roulette command (MarkdownV2) - Info only
+// /roulette command (HTML) - Info only
 async function handleRouletteCommand(msg) {
      const chatId = msg.chat.id;
-     const config = GAME_CONFIG.roulette;
-     const hiddenEdgePercent = parseFloat(process.env.ROULETTE_HIDDEN_EDGE || '0.65') * 100;
-     const message = `⚪️ *European Roulette Game* ⚪️
+     try {
+         const config = GAME_CONFIG.roulette;
+         const hiddenEdgePercent = parseFloat(process.env.ROULETTE_HIDDEN_EDGE || '0.65') * 100;
 
-Place bets on the outcome of the wheel spin \\(numbers 0\\-36\\)\\.
+         // Escape config values just in case
+         const minBetHtml = escapeHtml(config.minBet.toFixed(3));
+         const maxBetHtml = escapeHtml(config.maxBet.toFixed(3));
 
-*How to Play*:
-1\\. Link wallet: \`/link YOUR\\_WALLET\` (if not done)
-2\\. Use \`/betroulette <bet1> <amount1> [<bet2> <amount2> ...]\`
-    \\(e\\.g\\., \`/betroulette R 0\\.1\`\\)
-    \\(e\\.g\\., \`/betroulette S17 0\\.05 D1 0\\.2\`\\)
+         const message = `⚪️ <b>European Roulette Game</b> ⚪️\n\n`+
+             `Place bets on the outcome of the wheel spin (numbers 0-36).\n\n`+
+             `<b>How to Play</b>:\n`+
+             `1. Link wallet: <code>/link YOUR_WALLET</code> (if not done)\n`+
+             `2. Use <code>/betroulette &lt;bet1&gt; &lt;amount1&gt; [&lt;bet2&gt; &lt;amount2&gt; ...]</code>\n`+ // Use &lt; and &gt; for angle brackets
+             `   (e.g., <code>/betroulette R 0.1</code>)\n`+
+             `   (e.g., <code>/betroulette S17 0.05 D1 0.2</code>)\n\n`+
+             `<b>Bet Types & Payouts</b> (Odds N:1 - Payout is Stake * (N+1))*:<br/>\n`+ // Use <br/> for line break in HTML
+             `- <code>S&lt;number&gt;</code>: Straight (35:1)<br/>\n`+
+             `- <code>R</code>: Red (1:1) / <code>B</code>: Black (1:1)<br/>\n`+
+             `- <code>E</code>: Even (1:1) / <code>O</code>: Odd (1:1)<br/>\n`+
+             `- <code>L</code>: Low 1-18 (1:1) / <code>H</code>: High 19-36 (1:1)<br/>\n`+
+             `- <code>D1/D2/D3</code>: Dozens (2:1)<br/>\n`+
+             `- <code>C1/C2/C3</code>: Columns (2:1)\n\n`+
+             `<b>Rules</b>:\n`+
+             `- Min Bet (per placement): ${minBetHtml} SOL\n`+
+             `- Max Bet (per placement): ${maxBetHtml} SOL\n`+
+             `- House Edge: Applied via win probability (Approx ${hiddenEdgePercent.toFixed(1)}% chance of forced '0' result).\n`+ // Simple text fine here
+             `- Payout on Win: Standard Roulette Payouts (see above)\n\n`+
+             `Use the <code>/betroulette</code> command to get the <b>Main Deposit Address</b> and a <b>unique Memo ID</b>. Send the <b>total</b> SOL amount for all your bets with the memo.`; // Clarified wallet
 
-*Bet Types & Payouts* \\(Odds N:1 \\- Payout is Stake * \\(N+1\\))*:
-\\- \`S<number>\`: Straight \\(35:1\\)
-\\- \`R\`: Red \\(1:1\\) / \`B\`: Black \\(1:1\\)
-\\- \`E\`: Even \\(1:1\\) / \`O\`: Odd \\(1:1\\)
-\\- \`L\`: Low 1\\-18 \\(1:1\\) / \`H\`: High 19\\-36 \\(1:1\\)
-\\- \`D1/D2/D3\`: Dozens \\(2:1\\)
-\\- \`C1/C2/C3\`: Columns \\(2:1\\)
+         await safeSendMessage(chatId, message, { parse_mode: 'HTML', disable_web_page_preview: true });
 
-*Rules*:
-\\- Min Bet \\(per placement\\): ${escapeMarkdownV2(config.minBet)} SOL
-\\- Max Bet \\(per placement\\): ${escapeMarkdownV2(config.maxBet)} SOL
-\\- House Edge: Applied via win probability \\(Approx ${escapeMarkdownV2(hiddenEdgePercent.toFixed(1))}% chance of forced '0' result\\)\\.
-\\- Payout on Win: Standard Roulette Payouts \\(see above\\)
-
-Use the \`/betroulette\` command to get the *Main Deposit Address* and a *unique Memo ID*\\. Send the *total* SOL amount for all your bets with the memo\\.`; // Clarified wallet
-
-     await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
+     } catch (error) {
+          console.error("Error in handleRouletteCommand:", error);
+          await safeSendMessage(chatId, "Sorry, couldn't display Roulette info right now."); // Plain text fallback
+     }
 }
 
 // /war command (HTML) - Info only
