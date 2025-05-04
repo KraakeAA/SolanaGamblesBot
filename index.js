@@ -377,7 +377,7 @@ console.log("✅ Game Config Loaded and Validated.");
 
 // --- End of Part 1 ---
 // index.js - Part 2: Database Operations
-// --- VERSION: 3.1.0 ---
+// --- VERSION: 3.1.0 --- (Moved getNextDepositAddressIndex here)
 
 // --- Helper Function for DB Operations ---
 /**
@@ -485,7 +485,7 @@ async function linkUserWallet(userId, externalAddress) {
 
         if (!currentReferralCode) {
             console.log(`${logPrefix} User missing referral code, generating one.`);
-            currentReferralCode = generateReferralCode(); // generateReferralCode defined later in utils
+            currentReferralCode = generateReferralCode(); // generateReferralCode defined later in utils (Part 3)
             needsCodeUpdate = true;
         }
 
@@ -505,7 +505,7 @@ async function linkUserWallet(userId, externalAddress) {
         console.log(`${logPrefix} External withdrawal address set/updated to ${externalAddress}. Referral Code: ${currentReferralCode}`);
 
         // Update cache
-        updateWalletCache(userId, { withdrawalAddress: externalAddress, referralCode: currentReferralCode });
+        updateWalletCache(userId, { withdrawalAddress: externalAddress, referralCode: currentReferralCode }); // Cache helpers defined in Part 3
 
         return { success: true, wallet: externalAddress, referralCode: currentReferralCode };
 
@@ -573,7 +573,7 @@ async function getUserWalletDetails(userId) {
  */
 async function getLinkedWallet(userId) {
     userId = String(userId);
-    const cached = getWalletCache(userId);
+    const cached = getWalletCache(userId); // Cache helpers defined in Part 3
     if (cached?.withdrawalAddress) {
         return cached.withdrawalAddress;
     }
@@ -639,6 +639,7 @@ async function linkReferral(refereeUserId, referrerUserId, client) {
         const currentReferrer = checkRes.rows[0].referred_by_user_id;
 
         if (currentReferrer === referrerUserId) {
+            console.log(`[DB linkReferral] User ${refereeUserId} already linked to referrer ${referrerUserId}.`)
             return true; // Already linked correctly
         } else if (currentReferrer) {
             console.warn(`[DB linkReferral] User ${refereeUserId} already referred by ${currentReferrer}. Cannot link to ${referrerUserId}.`);
@@ -860,7 +861,7 @@ async function createDepositAddressRecord(userId, depositAddress, derivationPath
         if (res.rowCount > 0) {
             const depositAddressId = res.rows[0].id;
             // Add to cache immediately
-            addActiveDepositAddressCache(depositAddress, userId, expiresAt.getTime());
+            addActiveDepositAddressCache(depositAddress, userId, expiresAt.getTime()); // Cache helpers defined in Part 3
             return { success: true, id: depositAddressId };
         } else {
             return { success: false, error: 'Failed to insert deposit address record (no ID returned).' };
@@ -881,7 +882,7 @@ async function createDepositAddressRecord(userId, depositAddress, derivationPath
  * @returns {Promise<{userId: string, status: string, id: number, expiresAt: Date} | null>}
  */
 async function findDepositAddressInfo(depositAddress) {
-    const cached = getActiveDepositAddressCache(depositAddress);
+    const cached = getActiveDepositAddressCache(depositAddress); // Cache helpers defined in Part 3
     const now = Date.now();
 
     // If cached and not expired, we still need the latest *status* from DB
@@ -897,12 +898,12 @@ async function findDepositAddressInfo(depositAddress) {
                 const dbExpiresAt = new Date(dbInfo.expires_at).getTime();
                 if (cached.expiresAt !== dbExpiresAt) {
                     console.warn(`[DB FindDepositAddr] Cache expiry mismatch for ${depositAddress}. Updating cache.`);
-                    addActiveDepositAddressCache(depositAddress, cached.userId, dbExpiresAt);
+                    addActiveDepositAddressCache(depositAddress, cached.userId, dbExpiresAt); // Cache helpers defined in Part 3
                 }
                 return { userId: cached.userId, status: dbInfo.status, id: dbInfo.id, expiresAt: new Date(dbInfo.expires_at) };
             } else {
                 // Not found in DB, remove from cache
-                removeActiveDepositAddressCache(depositAddress);
+                removeActiveDepositAddressCache(depositAddress); // Cache helpers defined in Part 3
                 console.warn(`[DB FindDepositAddr] Address ${depositAddress} was cached but not found in DB.`);
                 return null;
             }
@@ -953,7 +954,7 @@ async function markDepositAddressUsed(client, depositAddressId) {
             // Invalidate cache entry for this address
              const addressRes = await queryDatabase('SELECT deposit_address FROM deposit_addresses WHERE id = $1', [depositAddressId], client);
              if (addressRes.rowCount > 0) {
-                removeActiveDepositAddressCache(addressRes.rows[0].deposit_address);
+                removeActiveDepositAddressCache(addressRes.rows[0].deposit_address); // Cache helpers defined in Part 3
              }
             return true;
         } else {
@@ -998,6 +999,29 @@ async function recordConfirmedDeposit(client, userId, depositAddressId, txSignat
         }
         // Let calling transaction handle rollback
         return { success: false, error: `Database error recording deposit (${err.code || 'N/A'})` };
+    }
+}
+
+// ** MOVED FROM PART 5 **
+/**
+ * Gets the next available index for deriving a deposit address for a user.
+ * Counts existing addresses for the user.
+ * @param {string} userId
+ * @returns {Promise<number>} The next index (e.g., 0 for the first address).
+ * @throws {Error} If the database query fails.
+ */
+async function getNextDepositAddressIndex(userId) {
+    try {
+        const res = await queryDatabase(
+            'SELECT COUNT(*) as count FROM deposit_addresses WHERE user_id = $1',
+            [String(userId)]
+        );
+        // Use count as the next zero-based index
+        return parseInt(res.rows[0]?.count || '0', 10);
+    } catch (err) {
+        console.error(`[DB GetNextDepositIndex] Error fetching count for user ${userId}:`, err);
+        // Throwing is safer than returning a potentially incorrect index like 0
+        throw new Error(`Failed to determine next deposit address index: ${err.message}`);
     }
 }
 
@@ -1140,7 +1164,9 @@ async function createBetRecord(client, userId, chatId, gameType, betDetails, wag
         RETURNING id;
     `;
     try {
-        const res = await queryDatabase(query, [String(userId), String(chatId), gameType, betDetails, BigInt(wagerAmountLamports), priority], client);
+        // Ensure betDetails is valid JSON before inserting
+        const validBetDetails = betDetails && typeof betDetails === 'object' ? betDetails : {};
+        const res = await queryDatabase(query, [String(userId), String(chatId), gameType, validBetDetails, BigInt(wagerAmountLamports), priority], client);
         if (res.rowCount > 0) {
             return { success: true, betId: res.rows[0].id };
         } else {
@@ -1171,8 +1197,11 @@ async function updateBetStatus(client, betId, status, payoutAmountLamports = nul
 
     // Validate input based on status
     if (['completed_win', 'completed_push'].includes(status) && (payoutAmountLamports === null || BigInt(payoutAmountLamports) <= 0n)) {
-        console.error(`${logPrefix} Invalid payout amount ${payoutAmountLamports} for status ${status}.`);
-        return false;
+        // Allow payout == wager for push
+        if (status !== 'completed_push' || payoutAmountLamports === null) {
+           console.error(`${logPrefix} Invalid payout amount ${payoutAmountLamports} for status ${status}.`);
+           return false;
+        }
     }
     if (['completed_loss', 'error_game_logic'].includes(status)) {
         payoutAmountLamports = 0n; // Ensure payout is zero for loss/error
@@ -1270,8 +1299,9 @@ async function recordPendingReferralPayout(referrerUserId, refereeUserId, payout
             referrer_user_id, referee_user_id, payout_type, payout_amount_lamports,
             triggering_bet_id, milestone_reached_lamports, status, created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())
+        ON CONFLICT ON CONSTRAINT unique_milestone_payout DO NOTHING -- Ignore duplicate milestone attempts
         RETURNING id;
-    `;
+    `; // Added ON CONFLICT clause
     const values = [
         String(referrerUserId),
         String(refereeUserId),
@@ -1282,20 +1312,21 @@ async function recordPendingReferralPayout(referrerUserId, refereeUserId, payout
     ];
     try {
         const res = await queryDatabase(query, values);
-        if (res.rows.length > 0) {
+        if (res.rows.length > 0) { // Row returned, insert was successful
             const payoutId = res.rows[0].id;
             console.log(`[DB Referral] Recorded pending ${payoutType} payout ID ${payoutId} for referrer ${referrerUserId} (triggered by ${refereeUserId}).`);
             return { success: true, payoutId: payoutId };
-        } else {
-            console.error("[DB Referral] Failed to insert pending referral payout, no ID returned.");
-            return { success: false, error: "Failed to insert pending referral payout." };
+        } else { // No row returned, likely due to ON CONFLICT DO NOTHING
+             if (payoutType === 'milestone') {
+                 console.warn(`[DB Referral] Duplicate milestone payout attempt for referrer ${referrerUserId}, referee ${refereeUserId}, milestone ${milestoneReachedLamports}. Ignoring.`);
+                 return { success: false, error: 'Duplicate milestone payout attempt.' };
+             } else {
+                  console.error("[DB Referral] Failed to insert pending referral payout, RETURNING clause gave no ID (and not a milestone conflict).");
+                  return { success: false, error: "Failed to insert pending referral payout." };
+             }
         }
     } catch (err) {
-        // Check for duplicate milestone payouts
-         if (err.code === '23505' && err.constraint === 'idx_refpayout_milestone_check') { // Assuming index name, adjust if needed
-             console.warn(`[DB Referral] Duplicate milestone payout attempt for referrer ${referrerUserId}, referee ${refereeUserId}, milestone ${milestoneReachedLamports}. Ignoring.`);
-            return { success: false, error: 'Duplicate milestone payout attempt.' };
-         }
+        // Catch other errors besides the handled conflict
         console.error(`[DB Referral] Error recording pending ${payoutType} payout for referrer ${referrerUserId} (triggered by ${refereeUserId}):`, err.message);
         return { success: false, error: `Database error recording referral payout (${err.code || 'N/A'})` };
     }
@@ -2626,7 +2657,7 @@ async function handleWarGame(userId, chatId, wagerAmountLamports, betRecordId) {
 
 // --- End of Part 4 ---
 // index.js - Part 5: Telegram Command & Callback Handlers
-// --- VERSION: 3.1.0 --- (MarkdownV2 Escaping Fixed)
+// --- VERSION: 3.1.0 --- (MarkdownV2 Escaping Fixed, Moved getNextDepositAddressIndex)
 
 // --- Main Message Handler ---
 
@@ -2860,9 +2891,7 @@ async function handleCallbackQuery(callbackQuery) {
 
             // --- Game Actions (Example: Coinflip Choice) ---
             case 'cf_choice':
-                if (!currentState || currentState.state !== 'awaiting_cf_choice' || !currentState.data?.amountLamports) {
-                    throw new Error("Invalid state for coinflip choice or missing wager amount.");
-                }
+                if (!currentState || currentState.state !== 'awaiting_cf_choice' || !currentState.data?.amountLamports) { throw new Error("Invalid state for coinflip choice or missing wager amount."); }
                 const choice = params[0];
                 if (choice !== 'heads' && choice !== 'tails') { throw new Error(`Invalid coinflip choice received: ${choice}`); }
                 const cfWager = BigInt(currentState.data.amountLamports);
@@ -2880,9 +2909,7 @@ async function handleCallbackQuery(callbackQuery) {
 
             // Example: Race Choice
             case 'race_choice':
-                 if (!currentState || currentState.state !== 'awaiting_race_choice' || !currentState.data?.amountLamports) {
-                     throw new Error("Invalid state for race choice or missing wager amount.");
-                 }
+                 if (!currentState || currentState.state !== 'awaiting_race_choice' || !currentState.data?.amountLamports) { throw new Error("Invalid state for race choice or missing wager amount."); }
                  const chosenHorseName = params[0];
                  if (!RACE_HORSES.some(h => h.name === chosenHorseName)) { throw new Error(`Invalid horse choice received: ${chosenHorseName}`); }
                  const raceWager = BigInt(currentState.data.amountLamports);
@@ -2929,6 +2956,7 @@ async function handleCallbackQuery(callbackQuery) {
                  const warGameSuccess = await handleWarGame(userId, String(chatId), warWager, warBetId);
                  if (warGameSuccess) { await _handleReferralChecks(userId, warBetId, warWager, logPrefix); }
                  break;
+
 
              // --- Withdrawal Confirmation ---
             case 'withdraw_confirm':
@@ -3125,8 +3153,8 @@ async function handleAmountInput(msg, currentState) {
     // --- Game Amount Handling ---
     let gameKey = '', nextState = '', gameName = '', confirmationCallback = '', choicePrompt = null;
 
-    if (stateType === 'awaiting_cf_amount') { gameKey = 'coinflip'; nextState = 'awaiting_cf_choice'; gameName = 'Coinflip'; choicePrompt = `🪙 Betting ${escapeMarkdownV2(amountSOL.toFixed(SOL_DECIMALS))} SOL on Coinflip\\. Choose Heads or Tails:`; } // Escaped .
-    else if (stateType === 'awaiting_race_amount') { gameKey = 'race'; nextState = 'awaiting_race_choice'; gameName = 'Race'; choicePrompt = `🐎 Betting ${escapeMarkdownV2(amountSOL.toFixed(SOL_DECIMALS))} SOL on the Race\\. Choose your horse:`; } // Escaped .
+    if (stateType === 'awaiting_cf_amount') { gameKey = 'coinflip'; nextState = 'awaiting_cf_choice'; gameName = 'Coinflip'; choicePrompt = `🪙 Betting ${escapeMarkdownV2(amountSOL.toFixed(SOL_DECIMALS))} SOL on Coinflip\\. Choose Heads or Tails:`; } // Escaped . :
+    else if (stateType === 'awaiting_race_amount') { gameKey = 'race'; nextState = 'awaiting_race_choice'; gameName = 'Race'; choicePrompt = `🐎 Betting ${escapeMarkdownV2(amountSOL.toFixed(SOL_DECIMALS))} SOL on the Race\\. Choose your horse:`; } // Escaped . :
     else if (stateType === 'awaiting_slots_amount') { gameKey = 'slots'; nextState = 'awaiting_slots_confirm'; gameName = 'Slots'; confirmationCallback = 'slots_spin_confirm'; }
     else if (stateType === 'awaiting_war_amount') { gameKey = 'war'; nextState = 'awaiting_war_confirm'; gameName = 'Casino War'; confirmationCallback = 'war_confirm'; }
 
@@ -3159,7 +3187,8 @@ async function handleAmountInput(msg, currentState) {
             let keyboard = [];
             if (gameKey === 'coinflip') { keyboard = [[{ text: 'Heads', callback_data: 'cf_choice:heads' }, { text: 'Tails', callback_data: 'cf_choice:tails' }], [{ text: 'Cancel', callback_data: 'cancel_action' }]]; }
             else if (gameKey === 'race') {
-                 const horseButtons = RACE_HORSES.map(h => ({ text: `${escapeMarkdownV2(h.name)} \\(${escapeMarkdownV2(h.payoutMultiplier)}x\\)`, callback_data: `race_choice:${h.name}` })); // Escape dynamic horse names/mult too
+                 // Escape horse names/multipliers in button text
+                 const horseButtons = RACE_HORSES.map(h => ({ text: `${escapeMarkdownV2(h.name)} \\(${escapeMarkdownV2(h.payoutMultiplier)}x\\)`, callback_data: `race_choice:${h.name}` }));
                  for (let i = 0; i < horseButtons.length; i += 2) { keyboard.push(horseButtons.slice(i, i + 2)); }
                  keyboard.push([{ text: 'Cancel', callback_data: 'cancel_action' }]);
             }
@@ -3168,7 +3197,7 @@ async function handleAmountInput(msg, currentState) {
         } else if (confirmationCallback) { // For games needing simple confirmation
             const options = { reply_markup: { inline_keyboard: [[{ text: `✅ Confirm ${gameName} Bet`, callback_data: confirmationCallback }], [{ text: '❌ Cancel', callback_data: 'cancel_action' }]] }, parse_mode: 'MarkdownV2' };
              // Escaped Message
-             await safeSendMessage(chatId, `Confirm ${escapeMarkdownV2(gameName)} bet of ${escapeMarkdownV2(amountSOL.toFixed(SOL_DECIMALS))} SOL\\?`, options);
+             await safeSendMessage(chatId, `Confirm ${escapeMarkdownV2(gameName)} bet of ${escapeMarkdownV2(amountSOL.toFixed(SOL_DECIMALS))} SOL\\?`, options); // Escaped ?
         } else { console.error(`${logPrefix} No next step defined for game ${gameKey}`); userStateCache.delete(userId); }
     } else { console.warn(`${logPrefix} Amount received in unexpected state: ${stateType}`); userStateCache.delete(userId); }
 }
@@ -3260,9 +3289,9 @@ async function handleStartCommand(msg, args) {
         },
         parse_mode: 'MarkdownV2' };
     // Escaped Message
-    const welcomeMsg = `👋 Welcome, ${escapeMarkdownV2(firstName)}\\!\n\n` +
-                       `I am a Solana\\-based gaming bot\\. Use the buttons below to play, manage funds, or get help\\.\n\n` +
-                       `*Remember to gamble responsibly\\!*`;
+    const welcomeMsg = `👋 Welcome, ${escapeMarkdownV2(firstName)}\\!\n\n` + // Escaped !
+                       `I am a Solana\\-based gaming bot\\. Use the buttons below to play, manage funds, or get help\\.\n\n` + // Escaped -, . (x2)
+                       `*Remember to gamble responsibly\\!*`; // Escaped !
     await safeSendMessage(chatId, welcomeMsg, options);
 }
 
@@ -3273,30 +3302,30 @@ async function handleHelpCommand(msg, args) {
     const minWithdrawSOL = (Number(MIN_WITHDRAWAL_LAMPORTS) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
     const refRewardPercent = (REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(2);
 
-    // Escaped Help Message (Escape all ., -, !, \, /, <, >, %, +, =)
-    const helpMsg = `*Solana Gambles Bot Help* 🤖 \\(v3\\.1\\.0\\)\n\n` + // Escaped ( and ) and .
+    // Escaped Help Message (Escape all ., -, !, \, /, <, >, %, +, =, |)
+    const helpMsg = `*Solana Gambles Bot Help* 🤖 \\(v3\\.1\\.0\\)\n\n` + // Escaped ( ) .
                     `This bot uses a *custodial* model\\. Deposit SOL to play instantly using your internal balance\\. Winnings are added to your balance, and you can withdraw anytime\\. \n\n`+ // Escaped . (x3)
                     `*How to Play:*\n` +
                     `1\\. Use \`/deposit\` to get a unique address & send SOL\\. Wait for confirmation\\. \n` + // Escaped . (x2)
-                    `2\\. Use \`/start\` or the game commands \\(\`/coinflip\`, \`/slots\`, etc\\.\\) or menu buttons\\. \n` + // Escaped (, ), .
+                    `2\\. Use \`/start\` or the game commands \\(\`/coinflip\`, \`/slots\`, etc\\.\\) or menu buttons\\. \n` + // Escaped ( ) . (x2)
                     `3\\. Enter your bet amount when prompted\\. \n` + // Escaped .
                     `4\\. Confirm your bet & play\\!\n\n` + // Escaped !
                     `*Core Commands:*\n` +
                     `/start \\- Show main menu \n` + // Escaped -
                     `/help \\- Show this message \n` + // Escaped -
                     `/wallet \\- View balance & withdrawal address \n` + // Escaped -
-                    `/wallet <YourSolAddress> \\- Set/update withdrawal address \n` + // Escaped -
+                    `/wallet <YourSolAddress> \\- Set/update withdrawal address \n` + // Escaped - < >
                     `/deposit \\- Get deposit address \n` + // Escaped -
                     `/withdraw \\- Start withdrawal process \n` + // Escaped -
                     `/referral \\- View your referral stats & link \n\n` + // Escaped -
-                    `*Game Commands:* Initiate a game \\(e\\.g\\., \`/coinflip\`\\)\n\n` + // Escaped (, ., )
+                    `*Game Commands:* Initiate a game \\(e\\.g\\., \`/coinflip\`\\)\n\n` + // Escaped ( ., )
                     `*Referral Program:* 🤝\n` +
-                    `Use \`/referral\` to get your code/link\\. New users start with \`/start <YourCode>\`\\. You earn SOL based on their first bet and their total wager volume \\(${escapeMarkdownV2(refRewardPercent)}\\% milestone bonus\\)\\. Rewards are paid to your linked wallet\\.\n\n` + // Escaped . (x4), % (requires double escape \\%), (, )
+                    `Use \`/referral\` to get your code/link\\. New users start with \`/start <YourCode>\`\\. You earn SOL based on their first bet and their total wager volume \\(${escapeMarkdownV2(refRewardPercent)}\\% milestone bonus\\)\\. Rewards are paid to your linked wallet\\.\n\n` + // Escaped . (x4) % ( )
                     `*Important Notes:*\n` +
-                    `\\- Only deposit to addresses given by \`/deposit\`\\. Each address is temporary and for one deposit only\\. \n` + // Escaped -, . (x2)
-                    `\\- You *must* set a withdrawal address using \`/wallet <address>\` before withdrawing\\. \n` + // Escaped -, .
-                    `\\- Withdrawals have a fee \\(${escapeMarkdownV2(feeSOL)} SOL\\) and minimum \\(${escapeMarkdownV2(minWithdrawSOL)} SOL\\)\\.\n` + // Escaped -, (, ), (, ), .
-                    `\\- Please gamble responsibly\\. Contact support if you encounter issues\\.`; // Escaped -, . (x2)
+                    `\\- Only deposit to addresses given by \`/deposit\`\\. Each address is temporary and for one deposit only\\. \n` + // Escaped - . (x2)
+                    `\\- You *must* set a withdrawal address using \`/wallet <address>\` before withdrawing\\. \n` + // Escaped - . < >
+                    `\\- Withdrawals have a fee \\(${escapeMarkdownV2(feeSOL)} SOL\\) and minimum \\(${escapeMarkdownV2(minWithdrawSOL)} SOL\\)\\.\n` + // Escaped - ( ) ( ) .
+                    `\\- Please gamble responsibly\\. Contact support if you encounter issues\\.`; // Escaped - . (x2)
 
     await safeSendMessage(chatId, helpMsg, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
@@ -3325,13 +3354,13 @@ async function handleWalletCommand(msg, args) {
         if (userDetails?.external_withdrawal_address) {
             walletMsg += `*Withdrawal Address:* \`${escapeMarkdownV2(userDetails.external_withdrawal_address)}\`\n`;
         } else {
-            walletMsg += `*Withdrawal Address:* Not Set \\(Use \`/wallet <YourSolAddress>\`\\)\n`; // Escaped ( and )
+            walletMsg += `*Withdrawal Address:* Not Set \\(Use \`/wallet <YourSolAddress>\`\\)\n`; // Escaped ( ) < >
         }
         if (userDetails?.referral_code) {
             walletMsg += `*Referral Code:* \`${escapeMarkdownV2(userDetails.referral_code)}\`\n`;
         } else {
             const generatedCode = generateReferralCode();
-            walletMsg += `*Referral Code:* \`N/A\` \\(Generating now\\?: \`${escapeMarkdownV2(generatedCode)}\` \\- Link wallet or deposit to confirm\\)\n`; // Escaped ?, -, )
+            walletMsg += `*Referral Code:* \`N/A\` \\(Generating now\\?: \`${escapeMarkdownV2(generatedCode)}\` \\- Link wallet or deposit to confirm\\)\n`; // Escaped ? - )
              if (userDetails) { /* ... (assign code logic as before) ... */ }
         }
         walletMsg += `*Successful Referrals:* ${escapeMarkdownV2(userDetails?.referral_count || 0)}\n\n`;
@@ -3355,26 +3384,26 @@ async function handleReferralCommand(msg, args) {
     const totalEarningsLamports = await getTotalReferralEarnings(userId);
     const totalEarningsSOL = (Number(totalEarningsLamports) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
     let botUsername = 'YourBotUsername'; try { const me = await bot.getMe(); if (me.username) { botUsername = me.username; }} catch (err) { /* ignore */ }
-    const referralLink = `https://t\\.me/${botUsername}?start=${userDetails.referral_code}`; // Escape . in t.me
+    const referralLink = `https://t\\.me/${botUsername}?start=${userDetails.referral_code}`; // Escape .
     const minBetSOL = (Number(REFERRAL_INITIAL_BET_MIN_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
     const milestonePercent = (REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(2);
     let tiersText = REFERRAL_INITIAL_BONUS_TIERS.map(tier => { /* ... (tier text generation as before) ... */
         const range = tier.maxCount === Infinity ? `${tier.maxCount === 101 ? 101 : (REFERRAL_INITIAL_BONUS_TIERS[REFERRAL_INITIAL_BONUS_TIERS.length - 2].maxCount + 1)}\\+` : `${tier.maxCount - (tier.maxCount === 10 ? 9 : REFERRAL_INITIAL_BONUS_TIERS[REFERRAL_INITIAL_BONUS_TIERS.indexOf(tier)-1].maxCount)}\\-${tier.maxCount}`;
         const countLabel = REFERRAL_INITIAL_BONUS_TIERS.indexOf(tier) === 0 ? `1\\-${tier.maxCount}` : range;
-        return `  \\- ${escapeMarkdownV2(countLabel)} refs: ${escapeMarkdownV2((tier.percent * 100).toFixed(0))}\\%`; // Escape -, %
+        return `  \\- ${escapeMarkdownV2(countLabel)} refs: ${escapeMarkdownV2((tier.percent * 100).toFixed(0))}\\%`; // Escape - %
      }).join('\n');
 
     // Escaped Multi-line Message
     let referralMsg = `*Your Referral Stats* 📊\n\n` +
                       `*Your Code:* \`${escapeMarkdownV2(userDetails.referral_code)}\`\n` +
-                      `*Your Referral Link \\(Share this\\!\\):*\n`+ // Escaped (, !, )
-                      `\`${escapeMarkdownV2(referralLink)}\`\n\n` +
+                      `*Your Referral Link \\(Share this\\!\\):*\n`+ // Escaped ( ! )
+                      `\`${escapeMarkdownV2(referralLink)}\`\n\n` + // Link itself is escaped
                       `*Successful Referrals:* ${escapeMarkdownV2(userDetails.referral_count)}\n` +
                       `*Total Referral Earnings Paid:* ${escapeMarkdownV2(totalEarningsSOL)} SOL\n\n` +
                       `*How Rewards Work:*\n` +
-                      `1\\. *Initial Bonus:* Earn a tiered percentage of your referral's *first* completed bet \\(min ${escapeMarkdownV2(minBetSOL)} SOL wager\\)\\.\n` + // Escaped . (x2), (, )
-                      `2\\. *Milestone Bonus:* Earn ${escapeMarkdownV2(milestonePercent)}\\% of the total amount wagered by your referrals as they hit wagering milestones \\(e\\.g\\., 1, 5, 10 SOL etc\\.\\)\\.\n\n`+ // Escaped ., % (requires \\%), (, ., ., )
-                      `*Your Initial Bonus Tier \\(based on your ref count *before* their first bet\\):*\n` + // Escaped (, )
+                      `1\\. *Initial Bonus:* Earn a tiered percentage of your referral's *first* completed bet \\(min ${escapeMarkdownV2(minBetSOL)} SOL wager\\)\\.\n` + // Escaped . ( ) .
+                      `2\\. *Milestone Bonus:* Earn ${escapeMarkdownV2(milestonePercent)}\\% of the total amount wagered by your referrals as they hit wagering milestones \\(e\\.g\\., 1, 5, 10 SOL etc\\.\\)\\.\n\n`+ // Escaped . % ( ) . .
+                      `*Your Initial Bonus Tier \\(based on your ref count *before* their first bet\\):*\n` + // Escaped ( )
                       `${tiersText}\n\n` + // Already escaped in generation loop
                       `Payouts are sent automatically to your linked wallet: \`${escapeMarkdownV2(userDetails.external_withdrawal_address)}\``; // Escaped .
 
@@ -3389,7 +3418,7 @@ async function handleDepositCommand(msg, args) {
     const logPrefix = `[DepositCmd User ${userId}]`;
     try {
         await getUserBalance(userId);
-        const addressIndex = await getNextDepositAddressIndex(userId);
+        const addressIndex = await getNextDepositAddressIndex(userId); // Uses function moved to Part 2
         const derivedInfo = await generateUniqueDepositAddress(userId, addressIndex);
         if (!derivedInfo) { throw new Error("Failed to generate a unique deposit address. Master seed phrase might be invalid or derivation failed."); }
         const depositAddress = derivedInfo.publicKey.toBase58();
@@ -3438,7 +3467,7 @@ async function handleWithdrawCommand(msg, args) {
         userStateCache.set(userId, { state: 'awaiting_withdrawal_amount', chatId: String(chatId), messageId: msg.message_id, timestamp: Date.now(), data: {} });
         // Escaped Message
         await safeSendMessage(chatId, `💸 Your withdrawal address: \`${escapeMarkdownV2(linkedAddress)}\`\n` +
-                                     `Minimum withdrawal: ${escapeMarkdownV2((Number(MIN_WITHDRAWAL_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. Fee: ${escapeMarkdownV2((Number(WITHDRAWAL_FEE_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. \n\n` + // Escaped . (x2)
+                                     `Minimum withdrawal: ${escapeMarkdownV2((Number(MIN_WITHDRAWAL_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. Fee: ${escapeMarkdownV2((Number(WITHDRAWAL_FEE_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. \n\n` + // Escaped . (x2) :
                                      `Please enter the amount of SOL you wish to withdraw:`, // Escaped :
                                      { parse_mode: 'MarkdownV2' });
     } catch (error) {
@@ -3447,6 +3476,7 @@ async function handleWithdrawCommand(msg, args) {
         await safeSendMessage(chatId, `❌ Error starting withdrawal process\\. Please try again later\\.`, { parse_mode: 'MarkdownV2' });
     }
 }
+
 
 // --- Game Command Handlers (Initiate Input Flows) ---
 
@@ -3479,6 +3509,7 @@ async function handleWarCommand(msg, args) {
      // Escaped Message
     await safeSendMessage(chatId, `🃏 Enter Casino War bet amount \\(SOL\\):`, { parse_mode: 'MarkdownV2' }); // Escaped ( ) :
 }
+
 
 // --- Admin Command --- (Basic structure, needs detailed implementation based on requirements)
 async function handleAdminCommand(msg, args) {
