@@ -1,5 +1,5 @@
 // index.js - Part 1: Imports, Environment Configuration, Core Initializations
-// --- VERSION: 3.1.0 --- (Updated Imports for @noble/scure)
+// --- VERSION: 3.1.0 --- (Updated Imports for @metamask/key-tree)
 
 // --- All Imports MUST come first ---
 import 'dotenv/config'; // Keep for local development via .env file
@@ -18,17 +18,13 @@ import {
     SendTransactionError
 } from '@solana/web3.js';
 import bs58 from 'bs58';
-import * as crypto from 'crypto'; // Keep Node's crypto
+import * as crypto from 'crypto';
 import PQueue from 'p-queue';
 import { Buffer } from 'buffer';
-import bip39 from 'bip39'; // Keep for mnemonic seed phrase generation/validation
-// import { SLIP10Node } from '@metamask/key-tree'; // <-- REMOVED previous library
-import { ed25519 } from '@noble/curves/ed25519';      // <-- ADDED Noble curve
-import { sha512 } from '@noble/hashes/sha512';       // <-- ADDED Noble hash
-import { hmac } from '@noble/hashes/hmac';           // <-- ADDED Noble hash util
-import { bytesToHex } from '@noble/hashes/utils';    // <-- ADDED Noble hash util
-import { BIP32Factory } from '@scure/bip32';       // <-- ADDED bip32 implementation
-import nacl from 'tweetnacl';                     // Keep for keypair generation from derived seed
+import bip39 from 'bip39'; // For mnemonic seed phrase generation/validation
+// import { derivePath } from 'ed25519-hd-key'; // <-- REMOVED OLD LIBRARY IMPORT
+import { SLIP10Node } from '@metamask/key-tree'; // <-- ADDED NEW LIBRARY IMPORT
+import nacl from 'tweetnacl'; // Keep for keypair generation from derived seed
 
 // Assuming RateLimitedConnection exists and works as intended
 import RateLimitedConnection from './lib/solana-connection.js';
@@ -41,49 +37,180 @@ console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} ---
 console.log("⏳ Starting Solana Gambles Bot (Custodial, Buttons, v3.1.0)... Checking environment variables...");
 
 // --- Environment Variable Configuration ---
-// ... (Rest of Environment Variable checks, REQUIRED_ENV_VARS, OPTIONAL_ENV_DEFAULTS remain the same as in the last correct Part 1) ...
 const REQUIRED_ENV_VARS = [
-    'BOT_TOKEN', 'DATABASE_URL', 'DEPOSIT_MASTER_SEED_PHRASE',
-    'MAIN_BOT_PRIVATE_KEY', 'REFERRAL_PAYOUT_PRIVATE_KEY', 'RPC_URLS',
+    'BOT_TOKEN',
+    'DATABASE_URL',
+    'DEPOSIT_MASTER_SEED_PHRASE', // Expect BIP39 Mnemonic Seed Phrase (SECRET)
+    'MAIN_BOT_PRIVATE_KEY',       // Used for general payouts (Withdrawals) (SECRET)
+    // Optional separate key for referral payouts (falls back to MAIN_BOT_PRIVATE_KEY)
+    'REFERRAL_PAYOUT_PRIVATE_KEY',// (SECRET) - Presence checked, but allowed to be empty
+    'RPC_URLS',                     // Comma-separated list of RPC URLs
 ];
-if (process.env.RAILWAY_ENVIRONMENT) { REQUIRED_ENV_VARS.push('RAILWAY_PUBLIC_DOMAIN'); }
+
+// Check for Railway-specific variables if deployed there
+if (process.env.RAILWAY_ENVIRONMENT) {
+    REQUIRED_ENV_VARS.push('RAILWAY_PUBLIC_DOMAIN');
+}
+
+// Validate required environment variables
 let missingVars = false;
-REQUIRED_ENV_VARS.forEach((key) => { /* ... validation logic ... */
+REQUIRED_ENV_VARS.forEach((key) => {
+    // Allow REFERRAL_PAYOUT_PRIVATE_KEY to be optional (it falls back)
     if (key === 'REFERRAL_PAYOUT_PRIVATE_KEY') return;
+    // Check Railway var only if in Railway env
     if (key === 'RAILWAY_PUBLIC_DOMAIN' && !process.env.RAILWAY_ENVIRONMENT) return;
-    if (!process.env[key]) { console.error(`❌ Environment variable ${key} is missing.`); missingVars = true; }
+
+    if (!process.env[key]) {
+        console.error(`❌ Environment variable ${key} is missing.`);
+        missingVars = true;
+    }
 });
-if (process.env.DEPOSIT_MASTER_SEED_PHRASE && !bip39.validateMnemonic(process.env.DEPOSIT_MASTER_SEED_PHRASE)) { console.error(`❌ DEPOSIT_MASTER_SEED_PHRASE is not a valid BIP39 mnemonic.`); missingVars = true;}
-else if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) { console.error(`❌ DEPOSIT_MASTER_SEED_PHRASE is missing.`); missingVars = true; }
+
+// Specific check for valid Seed Phrase
+if (process.env.DEPOSIT_MASTER_SEED_PHRASE && !bip39.validateMnemonic(process.env.DEPOSIT_MASTER_SEED_PHRASE)) {
+    console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is set but is not a valid BIP39 mnemonic.`);
+    missingVars = true;
+} else if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) {
+    // This case was missed if DEPOSIT_MASTER_SEED_PHRASE was not in REQUIRED_ENV_VARS check above (it should be)
+    // Double check it's required
+     if (!REQUIRED_ENV_VARS.includes('DEPOSIT_MASTER_SEED_PHRASE')) REQUIRED_ENV_VARS.push('DEPOSIT_MASTER_SEED_PHRASE'); // Ensure it's checked
+     if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) {
+        // Now this error will trigger if it wasn't caught initially
+         console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is missing.`);
+         missingVars = true;
+     }
+}
+
+
+// Specific check for RPC_URLS content
 const parsedRpcUrls = (process.env.RPC_URLS || '').split(',').map(u => u.trim()).filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
-if (parsedRpcUrls.length === 0) { console.error(`❌ RPC_URLS missing or invalid.`); missingVars = true; }
-else if (parsedRpcUrls.length === 1) { console.warn(`⚠️ RPC_URLS only contains one URL.`);}
-const validateBase58Key = (keyName, isRequired) => { /* ... validation logic ... */
-    const key = process.env[keyName]; if (key) { try { const decoded = bs58.decode(key); if (decoded.length !== 64) { console.error(`❌ ${keyName} invalid length (Expected 64, Got ${decoded.length}).`); return false; } } catch (e) { console.error(`❌ Failed to decode ${keyName}: ${e.message}`); return false; } } else if (isRequired) { return false; } return true; };
+if (parsedRpcUrls.length === 0) {
+    console.error(`❌ Environment variable RPC_URLS is missing or contains no valid URLs.`);
+    missingVars = true;
+} else if (parsedRpcUrls.length === 1) {
+    console.warn(`⚠️ Environment variable RPC_URLS only contains one URL. Multi-RPC features may not be fully utilized.`);
+}
+
+// Validate private keys format (basic check for base58)
+const validateBase58Key = (keyName, isRequired) => {
+    const key = process.env[keyName];
+    if (key) { // If key is present, validate it
+        try {
+            const decoded = bs58.decode(key);
+            if (decoded.length !== 64 && decoded.length !== 32) { // Allow 32 byte seed phrase equivalent or 64 byte secret key
+                // Refined check: Solana Keypair.fromSecretKey expects 64 bytes.
+                if (decoded.length !== 64) {
+                   console.error(`❌ Environment variable ${keyName} has incorrect length after base58 decoding (Expected 64 bytes for Secret Key, Got ${decoded.length}).`);
+                   return false;
+                }
+            }
+        } catch (e) {
+            console.error(`❌ Failed to decode environment variable ${keyName} as base58: ${e.message}`);
+            return false;
+        }
+    } else if (isRequired) { // If key is required but not present
+        // This is already caught by the main missingVars check, but good to be explicit
+        return false;
+    }
+    return true; // Valid format, or optional and not set
+};
+
+// MAIN_BOT_PRIVATE_KEY is required
 if (!validateBase58Key('MAIN_BOT_PRIVATE_KEY', true)) missingVars = true;
+// REFERRAL_PAYOUT_PRIVATE_KEY is optional, only validate if present
 if (!validateBase58Key('REFERRAL_PAYOUT_PRIVATE_KEY', false)) missingVars = true;
-if (missingVars) { console.error("⚠️ Please set all required environment variables correctly. Exiting."); process.exit(1); }
-const OPTIONAL_ENV_DEFAULTS = { /* ... all optional defaults ... */
-    'ADMIN_USER_IDS': '', 'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60', 'DEPOSIT_CONFIRMATIONS': 'confirmed', 'WITHDRAWAL_FEE_LAMPORTS': '5000', 'MIN_WITHDRAWAL_LAMPORTS': '10000000',
-    'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '1000', 'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000', 'PAYOUT_COMPUTE_UNIT_LIMIT': '200000', 'PAYOUT_JOB_RETRIES': '3', 'PAYOUT_JOB_RETRY_DELAY_MS': '5000',
-    'CF_MIN_BET_LAMPORTS': '10000000', 'CF_MAX_BET_LAMPORTS': '1000000000', 'RACE_MIN_BET_LAMPORTS': '10000000', 'RACE_MAX_BET_LAMPORTS': '1000000000', 'SLOTS_MIN_BET_LAMPORTS': '10000000', 'SLOTS_MAX_BET_LAMPORTS': '500000000', 'ROULETTE_MIN_BET_LAMPORTS': '10000000', 'ROULETTE_MAX_BET_LAMPORTS': '1000000000', 'WAR_MIN_BET_LAMPORTS': '10000000', 'WAR_MAX_BET_LAMPORTS': '1000000000',
-    'CF_HOUSE_EDGE': '0.03', 'RACE_HOUSE_EDGE': '0.05', 'SLOTS_HOUSE_EDGE': '0.10', 'ROULETTE_HOUSE_EDGE': '0.05', 'WAR_HOUSE_EDGE': '0.02',
-    'REFERRAL_INITIAL_BET_MIN_LAMPORTS': '10000000', 'REFERRAL_MILESTONE_REWARD_PERCENT': '0.005',
-    'RPC_MAX_CONCURRENT': '8', 'RPC_RETRY_BASE_DELAY': '600', 'RPC_MAX_RETRIES': '3', 'RPC_RATE_LIMIT_COOLOFF': '1500', 'RPC_RETRY_MAX_DELAY': '15000', 'RPC_RETRY_JITTER': '0.2', 'RPC_COMMITMENT': 'confirmed',
-    'MSG_QUEUE_CONCURRENCY': '5', 'MSG_QUEUE_TIMEOUT_MS': '10000', 'CALLBACK_QUEUE_CONCURRENCY': '8', 'CALLBACK_QUEUE_TIMEOUT_MS': '15000', 'PAYOUT_QUEUE_CONCURRENCY': '3', 'PAYOUT_QUEUE_TIMEOUT_MS': '60000', 'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '4', 'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '30000',
-    'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', 'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', 'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1',
-    'DEPOSIT_MONITOR_INTERVAL_MS': '20000', 'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '50', 'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '5',
-    'DB_POOL_MAX': '25', 'DB_POOL_MIN': '5', 'DB_IDLE_TIMEOUT': '30000', 'DB_CONN_TIMEOUT': '5000', 'DB_SSL': 'true', 'DB_REJECT_UNAUTHORIZED': 'true',
-    'USER_STATE_CACHE_TTL_MS': '300000', 'WALLET_CACHE_TTL_MS': '600000', 'DEPOSIT_ADDR_CACHE_TTL_MS': '3660000', 'MAX_PROCESSED_TX_CACHE': '5000', 'USER_COMMAND_COOLDOWN_MS': '1000',
-    'INIT_DELAY_MS': '1000', 'SHUTDOWN_QUEUE_TIMEOUT_MS': '20000', 'SHUTDOWN_FAIL_TIMEOUT_MS': '8000', 'WEBHOOK_MAX_CONN': '10',
- };
-Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => { if (process.env[key] === undefined) { process.env[key] = defaultValue; } });
+
+
+if (missingVars) {
+    console.error("⚠️ Please set all required environment variables correctly. Exiting.");
+    process.exit(1);
+}
+
+// Optional vars with defaults (using BigInt where appropriate)
+const OPTIONAL_ENV_DEFAULTS = {
+    // --- Operational ---
+    'ADMIN_USER_IDS': '',
+    'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60', // How long a unique deposit address is valid
+    'DEPOSIT_CONFIRMATIONS': 'confirmed',   // Solana commitment level ('confirmed' or 'finalized')
+    'WITHDRAWAL_FEE_LAMPORTS': '5000',      // Flat withdrawal fee (can be 0)
+    'MIN_WITHDRAWAL_LAMPORTS': '10000000',  // Minimum withdrawal amount (0.01 SOL)
+    // --- Payouts (Withdrawals, Referral Rewards) ---
+    'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '1000',   // Min priority fee for payouts
+    'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000', // Max priority fee for payouts
+    'PAYOUT_COMPUTE_UNIT_LIMIT': '200000',             // Default compute unit limit for transfers
+    'PAYOUT_JOB_RETRIES': '3',                          // Retries for Withdrawals/Referral payouts
+    'PAYOUT_JOB_RETRY_DELAY_MS': '5000',                // Base delay for payout retries
+    // --- Game Limits ---
+    'CF_MIN_BET_LAMPORTS': '10000000',   // 0.01 SOL
+    'CF_MAX_BET_LAMPORTS': '1000000000',  // 1 SOL
+    'RACE_MIN_BET_LAMPORTS': '10000000',
+    'RACE_MAX_BET_LAMPORTS': '1000000000',
+    'SLOTS_MIN_BET_LAMPORTS': '10000000',
+    'SLOTS_MAX_BET_LAMPORTS': '500000000', // 0.5 SOL
+    'ROULETTE_MIN_BET_LAMPORTS': '10000000',
+    'ROULETTE_MAX_BET_LAMPORTS': '1000000000',
+    'WAR_MIN_BET_LAMPORTS': '10000000',
+    'WAR_MAX_BET_LAMPORTS': '1000000000',
+    // --- Game Logic Parameters ---
+    'CF_HOUSE_EDGE': '0.03',            // 3% edge
+    'RACE_HOUSE_EDGE': '0.05',          // 5% edge
+    'SLOTS_HOUSE_EDGE': '0.10',         // Effective edge for slots payouts
+    'ROULETTE_HOUSE_EDGE': '0.05',      // Standard Roulette edge (0, 00) ~5.26%, simplified
+    'WAR_HOUSE_EDGE': '0.02',           // Approx edge in War (mainly from ties)
+    // --- Referral System ---
+    'REFERRAL_INITIAL_BET_MIN_LAMPORTS': '10000000', // Min first bet size to trigger initial reward (0.01 SOL)
+    'REFERRAL_MILESTONE_REWARD_PERCENT': '0.005',   // 0.5% of wagered amount for milestones
+    // --- Technical / Performance ---
+    'RPC_MAX_CONCURRENT': '8',          // Concurrent requests for RateLimitedConnection
+    'RPC_RETRY_BASE_DELAY': '600',
+    'RPC_MAX_RETRIES': '3',
+    'RPC_RATE_LIMIT_COOLOFF': '1500',
+    'RPC_RETRY_MAX_DELAY': '15000',
+    'RPC_RETRY_JITTER': '0.2',
+    'RPC_COMMITMENT': 'confirmed',       // Default commitment for reads
+    'MSG_QUEUE_CONCURRENCY': '5',        // Incoming Telegram message processing
+    'MSG_QUEUE_TIMEOUT_MS': '10000',
+    'CALLBACK_QUEUE_CONCURRENCY': '8',   // Button callback processing
+    'CALLBACK_QUEUE_TIMEOUT_MS': '15000',
+    'PAYOUT_QUEUE_CONCURRENCY': '3',     // Withdrawal/Referral payout processing
+    'PAYOUT_QUEUE_TIMEOUT_MS': '60000',  // Longer timeout for payouts
+    'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '4', // Processing confirmed deposit transactions
+    'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '30000',
+    'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', // MUST BE 1 for rate limits
+    'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', // ~1 message per second allowance
+    'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1',
+    'DEPOSIT_MONITOR_INTERVAL_MS': '20000', // How often to check for deposits (polling method)
+    'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '50', // How many pending addresses to check per cycle
+    'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '5', // How many recent signatures to check per address
+    'DB_POOL_MAX': '25',                 // Max DB connections
+    'DB_POOL_MIN': '5',
+    'DB_IDLE_TIMEOUT': '30000',
+    'DB_CONN_TIMEOUT': '5000',
+    'DB_SSL': 'true',
+    'DB_REJECT_UNAUTHORIZED': 'true',
+    'USER_STATE_CACHE_TTL_MS': '300000', // 5 minutes for conversational state
+    'WALLET_CACHE_TTL_MS': '600000',     // 10 minutes for user wallet/ref code cache
+    'DEPOSIT_ADDR_CACHE_TTL_MS': '3660000', // ~1 hour for active deposit addresses cache
+    'MAX_PROCESSED_TX_CACHE': '5000',    // Max deposit TX sigs to keep in memory this session
+    'USER_COMMAND_COOLDOWN_MS': '1000',  // 1 second cooldown
+    'INIT_DELAY_MS': '1000',             // Delay before starting background tasks
+    'SHUTDOWN_QUEUE_TIMEOUT_MS': '20000', // Max time to wait for queues during shutdown
+    'SHUTDOWN_FAIL_TIMEOUT_MS': '8000',  // Timeout before force exit on critical failure
+    'WEBHOOK_MAX_CONN': '10',            // Max connections for Telegram webhook
+};
+
+// Assign defaults for optional vars if they are missing
+Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
+    if (process.env[key] === undefined) { // Check for undefined specifically
+        process.env[key] = defaultValue;
+    }
+});
+
 console.log("✅ Environment variables checked/defaults applied.");
 // --- END: Environment Variable Configuration ---
 
 
 // --- Global Constants & State ---
-// ... (All constants like SOL_DECIMALS, DEPOSIT_ADDRESS_EXPIRY_MS, REFERRAL tiers/thresholds etc. remain the same) ...
 const SOL_DECIMALS = 9;
 const DEPOSIT_ADDRESS_EXPIRY_MS = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000;
 const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS === 'finalized' ? 'finalized' : 'confirmed';
@@ -96,47 +223,167 @@ const WALLET_CACHE_TTL_MS = parseInt(process.env.WALLET_CACHE_TTL_MS, 10);
 const DEPOSIT_ADDR_CACHE_TTL_MS = parseInt(process.env.DEPOSIT_ADDR_CACHE_TTL_MS, 10);
 const REFERRAL_INITIAL_BET_MIN_LAMPORTS = BigInt(process.env.REFERRAL_INITIAL_BET_MIN_LAMPORTS);
 const REFERRAL_MILESTONE_REWARD_PERCENT = parseFloat(process.env.REFERRAL_MILESTONE_REWARD_PERCENT);
-const REFERRAL_INITIAL_BONUS_TIERS = [ { maxCount: 10, percent: 0.05 }, { maxCount: 25, percent: 0.10 }, { maxCount: 50, percent: 0.15 }, { maxCount: 100, percent: 0.20 }, { maxCount: Infinity, percent: 0.25 } ];
-const REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS = [ BigInt(1 * LAMPORTS_PER_SOL), BigInt(5 * LAMPORTS_PER_SOL), BigInt(10 * LAMPORTS_PER_SOL), BigInt(25 * LAMPORTS_PER_SOL), BigInt(50 * LAMPORTS_PER_SOL), BigInt(100 * LAMPORTS_PER_SOL), BigInt(250 * LAMPORTS_PER_SOL), BigInt(500 * LAMPORTS_PER_SOL), BigInt(1000 * LAMPORTS_PER_SOL) ];
-const userStateCache = new Map(); const walletCache = new Map(); const activeDepositAddresses = new Map();
-const processedDepositTxSignatures = new Set(); const commandCooldown = new Map(); const pendingReferrals = new Map();
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000;
-let isFullyInitialized = false; let server; let depositMonitorIntervalId = null;
+// Define Referral Tiers (Example) - Based on referrer's *current* count BEFORE this referral's first bet
+const REFERRAL_INITIAL_BONUS_TIERS = [
+    { maxCount: 10, percent: 0.05 },  // 0-10 referrals -> 5%
+    { maxCount: 25, percent: 0.10 },  // 11-25 referrals -> 10%
+    { maxCount: 50, percent: 0.15 },  // 26-50 referrals -> 15%
+    { maxCount: 100, percent: 0.20 }, // 51-100 referrals -> 20%
+    { maxCount: Infinity, percent: 0.25 } // 101+ referrals -> 25%
+];
+// Define Milestone Thresholds
+const REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS = [
+    BigInt(1 * LAMPORTS_PER_SOL), BigInt(5 * LAMPORTS_PER_SOL), BigInt(10 * LAMPORTS_PER_SOL),
+    BigInt(25 * LAMPORTS_PER_SOL), BigInt(50 * LAMPORTS_PER_SOL), BigInt(100 * LAMPORTS_PER_SOL),
+    BigInt(250 * LAMPORTS_PER_SOL), BigInt(500 * LAMPORTS_PER_SOL), BigInt(1000 * LAMPORTS_PER_SOL)
+];
+
+// In-memory Caches & State
+const userStateCache = new Map(); // Map<userId, { state: string, chatId: string, messageId?: number, data?: any, timestamp: number }>
+const walletCache = new Map(); // Map<userId, { withdrawalAddress?: string, referralCode?: string, timestamp: number }>
+const activeDepositAddresses = new Map(); // Map<deposit_address, { userId: string, expiresAt: number }>
+const processedDepositTxSignatures = new Set(); // Store processed deposit TX sigs this session
+const commandCooldown = new Map(); // Map<userId, timestamp>
+const pendingReferrals = new Map(); // Map<userId, { referrerUserId: string, timestamp: number }>
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+let isFullyInitialized = false;
+let server; // Express server instance
+let depositMonitorIntervalId = null; // Interval ID for the deposit monitor
 // --- End Global Constants & State ---
 
 
 // --- Core Initializations ---
-// ... (Express App, Solana Connection, Queues, DB Pool, Telegram Bot instance, Game Config loading remain the same as in the last correct Part 1) ...
-const app = express(); app.use(express.json({ limit: '10kb' }));
-console.log("⚙️ Initializing Multi-RPC Solana connection..."); console.log(`ℹ️ Using RPC Endpoints: ${parsedRpcUrls.join(', ')}`);
-const solanaConnection = new RateLimitedConnection(parsedRpcUrls, { /* ... options from env vars ... */
-    maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10), retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10), maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
-    rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10), retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10), retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
-    commitment: process.env.RPC_COMMITMENT, httpHeaders: { 'User-Agent': `SolanaGamblesBot/3.1.0` }, });
+
+// Express App
+const app = express();
+app.use(express.json({ limit: '10kb' })); // Keep request size limit reasonable
+
+// Solana Connection (Using RateLimitedConnection wrapper)
+console.log("⚙️ Initializing Multi-RPC Solana connection...");
+console.log(`ℹ️ Using RPC Endpoints: ${parsedRpcUrls.join(', ')}`);
+const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
+    maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
+    retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
+    maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
+    rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
+    retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
+    retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
+    commitment: process.env.RPC_COMMITMENT, // Default 'confirmed'
+    httpHeaders: { 'User-Agent': `SolanaGamblesBot/3.1.0` },
+    // clientId: `SolanaGamblesBot/3.1.0` // Set within RateLimitedConnection now
+});
 console.log("✅ Multi-RPC Solana connection instance created.");
+
+// Queues
 console.log("⚙️ Initializing Processing Queues...");
-const messageQueue = new PQueue({ concurrency: parseInt(process.env.MSG_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.MSG_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
-const callbackQueue = new PQueue({ concurrency: parseInt(process.env.CALLBACK_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.CALLBACK_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
-const payoutProcessorQueue = new PQueue({ concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
-const depositProcessorQueue = new PQueue({ concurrency: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
-const telegramSendQueue = new PQueue({ concurrency: parseInt(process.env.TELEGRAM_SEND_QUEUE_CONCURRENCY, 10), interval: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_MS, 10), intervalCap: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_CAP, 10) });
+const messageQueue = new PQueue({
+    concurrency: parseInt(process.env.MSG_QUEUE_CONCURRENCY, 10),
+    timeout: parseInt(process.env.MSG_QUEUE_TIMEOUT_MS, 10),
+    throwOnTimeout: true
+});
+const callbackQueue = new PQueue({
+    concurrency: parseInt(process.env.CALLBACK_QUEUE_CONCURRENCY, 10),
+    timeout: parseInt(process.env.CALLBACK_QUEUE_TIMEOUT_MS, 10),
+    throwOnTimeout: true
+});
+const payoutProcessorQueue = new PQueue({ // Renamed from paymentProcessorQueue for clarity
+    concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
+    timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10),
+    throwOnTimeout: true
+});
+const depositProcessorQueue = new PQueue({ // Queue for processing confirmed deposits found by monitor
+    concurrency: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_CONCURRENCY, 10),
+    timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10),
+    throwOnTimeout: true
+});
+const telegramSendQueue = new PQueue({ // Separate queue for sending messages respecting Telegram limits
+    concurrency: parseInt(process.env.TELEGRAM_SEND_QUEUE_CONCURRENCY, 10), // Should be 1
+    interval: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_MS, 10),
+    intervalCap: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_CAP, 10) // Should be 1
+});
 console.log("✅ Processing Queues initialized.");
+
+// PostgreSQL Pool
 console.log("⚙️ Setting up PostgreSQL Pool...");
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: parseInt(process.env.DB_POOL_MAX, 10), min: parseInt(process.env.DB_POOL_MIN, 10), idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10), connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT, 10), ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: process.env.DB_REJECT_UNAUTHORIZED === 'true' } : false, });
-pool.on('error', (err, client) => { console.error('❌ Unexpected error on idle PostgreSQL client', err); });
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: parseInt(process.env.DB_POOL_MAX, 10),
+    min: parseInt(process.env.DB_POOL_MIN, 10),
+    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10),
+    connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT, 10),
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: process.env.DB_REJECT_UNAUTHORIZED === 'true' } : false,
+});
+pool.on('error', (err, client) => {
+    console.error('❌ Unexpected error on idle PostgreSQL client', err);
+    // Optional: attempt to remove the client from the pool? pool.remove(client)? Needs testing.
+});
 console.log("✅ PostgreSQL Pool created.");
+
+// Telegram Bot Instance
 console.log("⚙️ Initializing Telegram Bot...");
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: false, request: { timeout: 15000, agentOptions: { keepAlive: true, keepAliveMsecs: 60000, maxSockets: 100, maxFreeSockets: 10, scheduling: 'fifo', } } });
+const bot = new TelegramBot(process.env.BOT_TOKEN, {
+    polling: false, // Set dynamically later based on webhook success
+    request: {      // Adjust request options for stability
+        timeout: 15000, // Increased request timeout
+        agentOptions: {
+            keepAlive: true,
+            keepAliveMsecs: 60000, // Standard keep-alive
+            maxSockets: 100, // Allow more sockets for potentially higher throughput (if needed)
+            maxFreeSockets: 10,
+            scheduling: 'fifo',
+        }
+    }
+});
 console.log("✅ Telegram Bot instance created.");
+
+// Game Configuration Loading
 console.log("⚙️ Loading Game Configuration...");
-const GAME_CONFIG = { /* ... game configs using env vars ... */
-    coinflip: { minBetLamports: BigInt(process.env.CF_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.CF_MAX_BET_LAMPORTS), houseEdge: parseFloat(process.env.CF_HOUSE_EDGE) },
-    race: { minBetLamports: BigInt(process.env.RACE_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.RACE_MAX_BET_LAMPORTS), houseEdge: parseFloat(process.env.RACE_HOUSE_EDGE) },
-    slots: { minBetLamports: BigInt(process.env.SLOTS_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.SLOTS_MAX_BET_LAMPORTS), houseEdge: parseFloat(process.env.SLOTS_HOUSE_EDGE) },
-    roulette: { minBetLamports: BigInt(process.env.ROULETTE_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.ROULETTE_MAX_BET_LAMPORTS), houseEdge: parseFloat(process.env.ROULETTE_HOUSE_EDGE) },
-    war: { minBetLamports: BigInt(process.env.WAR_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.WAR_MAX_BET_LAMPORTS), houseEdge: parseFloat(process.env.WAR_HOUSE_EDGE) } };
-function validateGameConfig(config) { /* ... validation logic ... */ const errors = []; for (const game in config) { const gc = config[game]; if (!gc) { errors.push(`Config ${game} missing.`); continue; } if (typeof gc.minBetLamports !== 'bigint' || gc.minBetLamports <= 0n) errors.push(`${game}.minBet invalid`); if (typeof gc.maxBetLamports !== 'bigint' || gc.maxBetLamports <= 0n) errors.push(`${game}.maxBet invalid`); if (gc.minBetLamports > gc.maxBetLamports) errors.push(`${game} min>max`); if (isNaN(gc.houseEdge) || gc.houseEdge < 0 || gc.houseEdge >= 1) errors.push(`${game}.edge invalid`); } return errors; }
-const configErrors = validateGameConfig(GAME_CONFIG); if (configErrors.length > 0) { console.error(`❌ Invalid game configuration: ${configErrors.join(', ')}.`); process.exit(1); }
+const GAME_CONFIG = {
+    coinflip: {
+        minBetLamports: BigInt(process.env.CF_MIN_BET_LAMPORTS),
+        maxBetLamports: BigInt(process.env.CF_MAX_BET_LAMPORTS),
+        houseEdge: parseFloat(process.env.CF_HOUSE_EDGE)
+    },
+    race: {
+        minBetLamports: BigInt(process.env.RACE_MIN_BET_LAMPORTS),
+        maxBetLamports: BigInt(process.env.RACE_MAX_BET_LAMPORTS),
+        houseEdge: parseFloat(process.env.RACE_HOUSE_EDGE)
+    },
+    slots: {
+        minBetLamports: BigInt(process.env.SLOTS_MIN_BET_LAMPORTS),
+        maxBetLamports: BigInt(process.env.SLOTS_MAX_BET_LAMPORTS),
+        houseEdge: parseFloat(process.env.SLOTS_HOUSE_EDGE)
+    },
+    roulette: {
+        minBetLamports: BigInt(process.env.ROULETTE_MIN_BET_LAMPORTS),
+        maxBetLamports: BigInt(process.env.ROULETTE_MAX_BET_LAMPORTS),
+        houseEdge: parseFloat(process.env.ROULETTE_HOUSE_EDGE)
+    },
+    war: {
+        minBetLamports: BigInt(process.env.WAR_MIN_BET_LAMPORTS),
+        maxBetLamports: BigInt(process.env.WAR_MAX_BET_LAMPORTS),
+        houseEdge: parseFloat(process.env.WAR_HOUSE_EDGE)
+    }
+};
+// Basic validation function (can be expanded)
+function validateGameConfig(config) {
+    const errors = [];
+    for (const game in config) {
+        const gc = config[game];
+        if (!gc) { errors.push(`Config for game "${game}" missing.`); continue; }
+        if (typeof gc.minBetLamports !== 'bigint' || gc.minBetLamports <= 0n) errors.push(`${game}.minBetLamports invalid (${gc.minBetLamports})`);
+        if (typeof gc.maxBetLamports !== 'bigint' || gc.maxBetLamports <= 0n) errors.push(`${game}.maxBetLamports invalid (${gc.maxBetLamports})`);
+        if (gc.minBetLamports > gc.maxBetLamports) errors.push(`${game} minBet > maxBet`);
+        if (isNaN(gc.houseEdge) || gc.houseEdge < 0 || gc.houseEdge >= 1) errors.push(`${game}.houseEdge invalid (${gc.houseEdge})`);
+    }
+    return errors;
+}
+const configErrors = validateGameConfig(GAME_CONFIG);
+if (configErrors.length > 0) {
+    console.error(`❌ Invalid game configuration values: ${configErrors.join(', ')}.`);
+    process.exit(1);
+}
 console.log("✅ Game Config Loaded and Validated.");
 // --- End Core Initializations ---
 
@@ -1196,119 +1443,91 @@ async function getTotalReferralEarnings(userId) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.1.0 --- (Corrected - All Functions Implemented)
+// --- VERSION: 3.1.0 --- (Added Detailed Logging to generateUniqueDepositAddress)
 
 // --- Solana Utilities ---
 
-// Note: The necessary imports for the function below (ed25519, sha512, hmac, BIP32Factory, bip39)
-// should ONLY be present in Part 1 at the top of the file.
-// Imports required *by this file's functions* are listed here for clarity if this were a separate module.
-// import { ed25519 } from '@noble/curves/ed25519';
-// import { sha512 } from '@noble/hashes/sha512';
-// import { hmac } from '@noble/hashes/hmac';
-// import { bytesToHex } from '@noble/hashes/utils';
-// import { BIP32Factory } from '@scure/bip32';
-// import * as bip39 from 'bip39';
-// import { PublicKey, Keypair, SystemProgram, Transaction, ComputeBudgetProgram, SendTransactionError } from '@solana/web3.js';
-// import * as crypto from 'crypto';
-// import nacl from 'tweetnacl';
-
-// Define the curve specifics needed by BIP32Factory for Ed25519 SLIP-10
-const Ed25519_CURVE = {
-  seedBytes: 32,
-  hmac: (key, data) => hmac(sha512, key, data), // Use SHA512 for HMAC as per SLIP-10
-  derivePrivateKey: (seed) => { // Function to get private key from seed
-      return seed.slice(0, 32); // Ed25519 private key is the first 32 bytes of the seed
-  },
-  derivePublicKey: (seed) => { // Function to get public key from seed
-      return ed25519.getPublicKey(seed.slice(0, 32)); // Derive public key from 32-byte private key/seed
-  },
-  isValidPrivateKey: (key) => key instanceof Uint8Array && key.length === 32 && ed25519.utils.isValidPrivateKey(key), // Add validation
-};
-
-const bip32Ed25519 = BIP32Factory(Ed25519_CURVE); // Create a BIP32 instance configured for Ed25519 SLIP-10
-
 /**
  * Derives a unique Solana keypair for deposits based on user ID and an index.
- * Uses BIP39 seed phrase and BIP44 path (m/44'/501'/account'/change'/addressIndex').
- * Uses @noble/crypto and @scure/bip32 library. Includes detailed logging.
+ * Uses BIP39 seed phrase and SLIP-10 path (m/44'/501'/account'/change'/addressIndex').
+ * Uses @metamask/key-tree library. Includes detailed logging.
  * Returns the public key and the 32-byte private key bytes needed for signing.
  * @param {string} userId The user's unique ID.
  * @param {number} addressIndex A unique index for this user's addresses (e.g., 0, 1, 2...).
  * @returns {Promise<{publicKey: PublicKey, privateKeyBytes: Uint8Array, derivationPath: string} | null>} Derived public key, private key bytes, and path, or null on error.
  */
 async function generateUniqueDepositAddress(userId, addressIndex) {
-    const logPrefix = `[Address Gen User ${userId} Index ${addressIndex}]`;
-    console.log(`${logPrefix} --- Starting derivation (using @noble/scure) ---`);
+    const logPrefix = `[Address Gen User ${userId} Index ${addressIndex}]`; // Added index to prefix
+    console.log(`${logPrefix} --- Starting derivation ---`); // Log Start
 
     try {
         // --- Step 0: Validate Inputs ---
         console.log(`${logPrefix} Step 0: Validating inputs...`);
-         if (typeof userId !== 'string' || userId.length === 0 || typeof addressIndex !== 'number' || addressIndex < 0 || !Number.isInteger(addressIndex)) {
-             throw new Error("Invalid input parameters (userId or addressIndex).");
-         }
-         console.log(`${logPrefix} Step 0: Inputs validated.`);
+        if (typeof userId !== 'string' || userId.length === 0 || typeof addressIndex !== 'number' || addressIndex < 0 || !Number.isInteger(addressIndex)) {
+            console.error(`${logPrefix} Invalid userId or addressIndex`, { userId, addressIndex });
+            throw new Error("Invalid input parameters (userId or addressIndex).");
+        }
+        console.log(`${logPrefix} Step 0: Inputs validated.`);
 
         // --- Step 1: Get Seed Phrase ---
         console.log(`${logPrefix} Step 1: Retrieving seed phrase from environment...`);
         const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
-        console.log(`${logPrefix} Step 1: Runtime check - Type of seedPhrase: ${typeof seedPhrase}`); // Keep debug log
-        if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) {
+        console.log(`${logPrefix} Step 1: Runtime check - Type of seedPhrase: ${typeof seedPhrase}`);
+        if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) { // Check if it's a non-empty string
              console.error(`${logPrefix} CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is invalid or empty at runtime! Value: [${seedPhrase}]`);
              throw new Error("DEPOSIT_MASTER_SEED_PHRASE environment variable not read correctly at runtime.");
         }
-        const words = seedPhrase.trim().split(' '); // Keep debug log
+        const words = seedPhrase.trim().split(' ');
         console.log(`${logPrefix} Step 1: Seed phrase retrieved. First word: "${words[0]}", Last word: "${words[words.length - 1]}", Word count: ${words.length}`);
-
 
         // --- Step 2: Generate Master Seed Buffer ---
         console.log(`${logPrefix} Step 2: Generating master seed buffer via bip39.mnemonicToSeed...`);
-        const masterSeedBuffer = await bip39.mnemonicToSeed(seedPhrase);
-        if (!masterSeedBuffer || !(masterSeedBuffer instanceof Buffer) || masterSeedBuffer.length < 16) {
+        const masterSeedBuffer = await bip39.mnemonicToSeed(seedPhrase); // Returns a Buffer
+        if (!masterSeedBuffer || !(masterSeedBuffer instanceof Buffer) || masterSeedBuffer.length < 16) { // Basic validation
              throw new Error(`bip39.mnemonicToSeed failed or returned invalid buffer (length: ${masterSeedBuffer?.length})`);
         }
         console.log(`${logPrefix} Step 2: Master seed buffer generated successfully (length: ${masterSeedBuffer.length}).`);
 
-        // --- Step 3: Calculate Path Component ---
-        console.log(`${logPrefix} Step 3: Calculating path component...`);
+        // --- Step 3: Calculate User-Specific Path Component ---
+        console.log(`${logPrefix} Step 3: Calculating user-specific index...`);
         const hash = crypto.createHash('sha256').update(userId).digest();
         const accountIndex = hash.readUInt32BE(0);
         const hardenedAccountIndex = accountIndex | 0x80000000;
-        console.log(`${logPrefix} Step 3: Hardened Account Index: ${hardenedAccountIndex >>> 0}`);
+        console.log(`${logPrefix} Step 3: Hardened Account Index component: ${hardenedAccountIndex >>> 0}`);
 
         // --- Step 4: Construct Derivation Path ---
-        console.log(`${logPrefix} Step 4: Constructing path...`);
-        // Using standard path m/44'/501'/account'/change'/addressIndex' with hardened segments
+        console.log(`${logPrefix} Step 4: Constructing derivation path...`);
+        // Using standard path m/44'/501'/account'/change'/addressIndex' with hardened account/index
         const derivationPath = `m/44'/501'/${hardenedAccountIndex >>> 0}'/0'/${addressIndex}'`;
         console.log(`${logPrefix} Step 4: Using derivation path: ${derivationPath}`);
 
-        // --- Step 5: Create Root BIP32 Node ---
-        console.log(`${logPrefix} Step 5: Creating root BIP32 node...`);
-        // Use the factory created with Ed25519 parameters
-        const rootNode = bip32Ed25519.fromSeed(masterSeedBuffer);
-        if (!rootNode) { throw new Error("bip32Ed25519.fromSeed failed."); }
-        console.log(`${logPrefix} Step 5: Root node created.`);
+        // --- Step 5: Create Root HD Node ---
+        console.log(`${logPrefix} Step 5: Creating root SLIP10Node from seed buffer with curve ed25519...`);
+        // ** Includes the fix for "Invalid curve" error **
+        const rootNode = await SLIP10Node.fromSeed(masterSeedBuffer, { curve: 'ed25519' });
+        if (!rootNode) { throw new Error("SLIP10Node.fromSeed returned null or undefined."); }
+        console.log(`${logPrefix} Step 5: Root node created successfully.`);
 
-        // --- Step 6: Derive Child Node using Path ---
-        console.log(`${logPrefix} Step 6: Deriving child node with path...`);
-        const childNode = rootNode.derivePath(derivationPath);
-        if (!childNode) { throw new Error("rootNode.derivePath failed."); }
-        console.log(`${logPrefix} Step 6: Child node derived.`);
+        // --- Step 6: Derive Child Node ---
+        console.log(`${logPrefix} Step 6: Deriving child node using path: slip10:${derivationPath}...`);
+        const childNode = await rootNode.derive(`slip10:${derivationPath}`);
+        if (!childNode) { throw new Error("rootNode.derive returned null or undefined."); }
+        console.log(`${logPrefix} Step 6: Child node derived successfully.`);
 
         // --- Step 7: Get Private Key Bytes ---
-        console.log(`${logPrefix} Step 7: Extracting private key bytes...`);
-        // The .privateKey property in @scure/bip32 should be the 32-byte private key
-        const privateKeyBytes = childNode.privateKey;
+        console.log(`${logPrefix} Step 7: Extracting private key bytes from child node...`);
+        const privateKeyBytes = childNode.privateKeyBytes;
         if (!privateKeyBytes || privateKeyBytes.length !== 32) {
-             throw new Error(`Derived private key bytes are invalid (length: ${privateKeyBytes?.length}) using @scure/bip32`);
+             throw new Error(`Derived private key bytes are invalid (length: ${privateKeyBytes?.length}) using @metamask/key-tree`);
         }
-        console.log(`${logPrefix} Step 7: Private key bytes extracted (length: 32).`);
+        console.log(`${logPrefix} Step 7: Private key bytes extracted successfully (length: 32).`);
 
         // --- Step 8: Generate Solana Keypair ---
         console.log(`${logPrefix} Step 8: Generating Solana keypair from seed (private key bytes)...`);
-        const keypair = Keypair.fromSeed(privateKeyBytes); // Uses the 32-byte private key
+        // Keypair.fromSeed expects the 32-byte private key
+        const keypair = Keypair.fromSeed(privateKeyBytes);
         if (!keypair) { throw new Error("Keypair.fromSeed failed."); }
-        console.log(`${logPrefix} Step 8: Solana keypair generated.`);
+        console.log(`${logPrefix} Step 8: Solana keypair generated successfully.`);
 
         // --- Step 9: Get Public Key ---
         console.log(`${logPrefix} Step 9: Extracting public key...`);
@@ -1320,7 +1539,7 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
         console.log(`${logPrefix} Step 10: Preparing result object...`);
         const result = {
             publicKey: publicKey,
-            privateKeyBytes: privateKeyBytes, // Return the 32 bytes needed to reconstruct Keypair
+            privateKeyBytes: privateKeyBytes, // Important: MUST store or handle this securely to sweep funds later
             derivationPath: derivationPath
         };
         console.log(`${logPrefix} --- Derivation successful ---`);
@@ -1329,7 +1548,7 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
     } catch (error) {
         console.error(`${logPrefix} --- ERROR DURING DERIVATION ---`);
         console.error(`${logPrefix} Error in generateUniqueDepositAddress: ${error.message}`);
-        console.error(error.stack);
+        console.error(error.stack); // Log the full stack trace for detailed debugging
         return null; // Return null on failure (command handler will notify user)
     }
 }
@@ -1342,17 +1561,45 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
  */
 function isRetryableSolanaError(error) {
     if (!error) return false;
+
     const message = String(error.message || '').toLowerCase();
-    const code = error?.code || error?.cause?.code;
-    const errorCode = error?.errorCode;
-    const status = error?.response?.status || error?.statusCode || error?.status;
-    const retryableMessages = ['timeout','timed out','econnreset','esockettimedout','network error','fetch','socket hang up','connection terminated','econnrefused','failed to fetch','getaddrinfo enotfound','connection refused','connection reset by peer','etimedout','transaction simulation failed','failed to simulate transaction','blockhash not found','slot leader does not match','node is behind','transaction was not confirmed','block not available','block cleanout','sending transaction','connection closed','load balancer error','backend unhealthy','overloaded','proxy internal error'];
+    const code = error?.code || error?.cause?.code; // Check nested code property
+    const errorCode = error?.errorCode; // Sometimes used by libraries
+    const status = error?.response?.status || error?.statusCode || error?.status; // HTTP status
+
+    // Common retryable keywords/phrases
+    const retryableMessages = [
+        'timeout', 'timed out', 'econnreset', 'esockettimedout', 'network error',
+        'fetch', 'socket hang up', 'connection terminated', 'econnrefused', 'failed to fetch',
+        'getaddrinfo enotfound', 'connection refused', 'connection reset by peer', 'etimedout',
+        'transaction simulation failed', 'failed to simulate transaction',
+        'blockhash not found', 'slot leader does not match', 'node is behind',
+        'transaction was not confirmed', 'block not available', 'block cleanout',
+        'sending transaction', 'connection closed', 'load balancer error',
+        'backend unhealthy', 'overloaded', 'proxy internal error'
+    ];
+
     if (retryableMessages.some(m => message.includes(m))) return true;
+
+    // HTTP Status Codes
     if ([429, 500, 502, 503, 504].includes(Number(status))) return true;
-    const retryableCodes = ['ETIMEDOUT','ECONNRESET','ENETUNREACH','EAI_AGAIN','ECONNABORTED','ECONNREFUSED','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT','FETCH_TIMEOUT','FETCH_ERROR','503','429','-32003','-32005'];
+
+    // Error Codes (can be library-specific or RPC-specific)
+    const retryableCodes = [
+        'ETIMEDOUT', 'ECONNRESET', 'ENETUNREACH', 'EAI_AGAIN', 'ECONNABORTED',
+        'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+        'UND_ERR_BODY_TIMEOUT', 'FETCH_TIMEOUT', 'FETCH_ERROR', '503', '429', '-32003', '-32005' // Solana RPC temporary errors
+    ];
     if (retryableCodes.includes(code) || retryableCodes.includes(errorCode)) return true;
+
+    // Specific error types or reasons
     if (error.reason === 'rpc_error' || error.reason === 'network_error') return true;
-    if (error instanceof SendTransactionError && error.cause) { return isRetryableSolanaError(error.cause); }
+
+    // Handle SendTransactionError specifically (check if underlying cause is retryable)
+    if (error instanceof SendTransactionError && error.cause) {
+        return isRetryableSolanaError(error.cause);
+    }
+
     return false;
 }
 
@@ -1366,55 +1613,451 @@ function isRetryableSolanaError(error) {
  */
 async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     const operationId = `sendSol-${payoutSource}-${Date.now().toString().slice(-6)}`;
-    let recipientPubKey; try { recipientPubKey = (typeof recipientPublicKey === 'string') ? new PublicKey(recipientPublicKey) : recipientPublicKey; if (!(recipientPubKey instanceof PublicKey)) throw new Error("Invalid recipient public key type"); } catch (e) { const errorMsg = `Invalid recipient address format: "${recipientPublicKey}". Error: ${e.message}`; console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`); return { success: false, error: errorMsg, isRetryable: false }; }
-    let amountToSend; try { amountToSend = BigInt(amountLamports); if (amountToSend <= 0n) throw new Error('Amount must be positive'); } catch (e) { const errorMsg = `Invalid amountLamports value: '${amountLamports}'. Error: ${e.message}`; console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`); return { success: false, error: errorMsg, isRetryable: false }; }
-    let privateKeyEnvVar; let keyTypeForLog; if (payoutSource === 'referral' && process.env.REFERRAL_PAYOUT_PRIVATE_KEY) { privateKeyEnvVar = 'REFERRAL_PAYOUT_PRIVATE_KEY'; keyTypeForLog = 'REFERRAL'; } else { privateKeyEnvVar = 'MAIN_BOT_PRIVATE_KEY'; keyTypeForLog = (payoutSource === 'referral') ? 'MAIN (Default for Referral)' : 'MAIN'; }
-    const privateKey = process.env[privateKeyEnvVar]; if (!privateKey) { const errorMsg = `Missing private key env var ${privateKeyEnvVar} for payout source ${payoutSource} (Key Type: ${keyTypeForLog}).`; console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`); return { success: false, error: errorMsg, isRetryable: false }; }
-    let payerWallet; try { payerWallet = Keypair.fromSecretKey(bs58.decode(privateKey)); } catch (e) { const errorMsg = `Failed to decode private key ${keyTypeForLog} (${privateKeyEnvVar}): ${e.message}`; console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`); return { success: false, error: errorMsg, isRetryable: false }; }
-    const amountSOL = Number(amountToSend) / LAMPORTS_PER_SOL; console.log(`[${operationId}] Attempting to send ${amountSOL.toFixed(SOL_DECIMALS)} SOL to ${recipientPubKey.toBase58()} using ${keyTypeForLog} key...`);
+    let recipientPubKey;
     try {
-        const { blockhash, lastValidBlockHeight } = await solanaConnection.getLatestBlockhash(DEPOSIT_CONFIRMATION_LEVEL); if (!blockhash || !lastValidBlockHeight) { throw new Error('Failed to get valid latest blockhash object.'); }
-        const basePriorityFee = parseInt(process.env.PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS, 10); const maxPriorityFee = parseInt(process.env.PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS, 10); let priorityFeeMicroLamports = Math.max(1, Math.min(basePriorityFee, maxPriorityFee)); const computeUnitLimit = parseInt(process.env.PAYOUT_COMPUTE_UNIT_LIMIT, 10);
-        const transaction = new Transaction({ recentBlockhash: blockhash, feePayer: payerWallet.publicKey, });
-        transaction.add( ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnitLimit }) ); transaction.add( ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports }) ); transaction.add( SystemProgram.transfer({ fromPubkey: payerWallet.publicKey, toPubkey: recipientPubKey, lamports: amountToSend }) );
-        const signature = await sendAndConfirmTransaction( solanaConnection, transaction, [payerWallet], { commitment: DEPOSIT_CONFIRMATION_LEVEL, skipPreflight: false, preflightCommitment: DEPOSIT_CONFIRMATION_LEVEL, lastValidBlockHeight: lastValidBlockHeight, } );
-        console.log(`[${operationId}] SUCCESS! ✅ Sent ${amountSOL.toFixed(SOL_DECIMALS)} SOL to ${recipientPubKey.toBase58()} using ${keyTypeForLog} key. TX: ${signature}`); return { success: true, signature: signature };
-    } catch (error) { const isRetryable = isRetryableSolanaError(error); let userFriendlyError = `Send/Confirm error: ${error.message}`; const errorMsgLower = String(error.message || '').toLowerCase(); if (errorMsgLower.includes('insufficient lamports') || errorMsgLower.includes('insufficient funds')) { userFriendlyError = `Insufficient funds in the ${keyTypeForLog} payout wallet.`; } else if (errorMsgLower.includes('blockhash not found') || errorMsgLower.includes('block height exceeded')) { userFriendlyError = 'Transaction expired (blockhash invalid).'; } else if (errorMsgLower.includes('transaction was not confirmed') || errorMsgLower.includes('timed out waiting')) { userFriendlyError = `Transaction confirmation timeout. Status unclear, may succeed later.`; } else if (isRetryable) { userFriendlyError = `Temporary network/RPC error: ${error.message}`; } console.error(`[${operationId}] ❌ SEND FAILED using ${keyTypeForLog} key. Retryable: ${isRetryable}. Error: ${error.message}`); if (error instanceof SendTransactionError && error.logs) { console.error(`[${operationId}] Simulation Logs (last 10):`); error.logs.slice(-10).forEach(log => console.error(`  -> ${log}`)); } else if (error.stack) { } return { success: false, error: userFriendlyError, isRetryable: isRetryable }; }
+        recipientPubKey = (typeof recipientPublicKey === 'string') ? new PublicKey(recipientPublicKey) : recipientPublicKey;
+        if (!(recipientPubKey instanceof PublicKey)) throw new Error("Invalid recipient public key type");
+    } catch (e) {
+        const errorMsg = `Invalid recipient address format: "${recipientPublicKey}". Error: ${e.message}`;
+        console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`);
+        return { success: false, error: errorMsg, isRetryable: false };
+    }
+
+    let amountToSend;
+    try {
+        amountToSend = BigInt(amountLamports);
+        if (amountToSend <= 0n) throw new Error('Amount must be positive');
+    } catch (e) {
+        const errorMsg = `Invalid amountLamports value: '${amountLamports}'. Error: ${e.message}`;
+        console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`);
+        return { success: false, error: errorMsg, isRetryable: false };
+    }
+
+    // Determine which private key to use
+    let privateKeyEnvVar;
+    let keyTypeForLog;
+    if (payoutSource === 'referral' && process.env.REFERRAL_PAYOUT_PRIVATE_KEY) {
+        privateKeyEnvVar = 'REFERRAL_PAYOUT_PRIVATE_KEY';
+        keyTypeForLog = 'REFERRAL';
+    } else {
+        // Default to MAIN key for withdrawals or if referral key isn't set
+        privateKeyEnvVar = 'MAIN_BOT_PRIVATE_KEY';
+        keyTypeForLog = (payoutSource === 'referral') ? 'MAIN (Default for Referral)' : 'MAIN';
+    }
+
+    const privateKey = process.env[privateKeyEnvVar];
+    if (!privateKey) {
+        const errorMsg = `Missing private key env var ${privateKeyEnvVar} for payout source ${payoutSource} (Key Type: ${keyTypeForLog}).`;
+        console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`);
+        // This is a configuration error, not typically retryable in the short term
+        return { success: false, error: errorMsg, isRetryable: false };
+    }
+
+    let payerWallet;
+    try {
+        payerWallet = Keypair.fromSecretKey(bs58.decode(privateKey));
+    } catch (e) {
+         const errorMsg = `Failed to decode private key ${keyTypeForLog} (${privateKeyEnvVar}): ${e.message}`;
+         console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`);
+         return { success: false, error: errorMsg, isRetryable: false };
+    }
+
+    const amountSOL = Number(amountToSend) / LAMPORTS_PER_SOL;
+    console.log(`[${operationId}] Attempting to send ${amountSOL.toFixed(SOL_DECIMALS)} SOL to ${recipientPubKey.toBase58()} using ${keyTypeForLog} key...`);
+
+    try {
+        // 1. Get latest blockhash
+        const { blockhash, lastValidBlockHeight } = await solanaConnection.getLatestBlockhash(DEPOSIT_CONFIRMATION_LEVEL);
+        if (!blockhash || !lastValidBlockHeight) {
+            throw new Error('Failed to get valid latest blockhash object.');
+        }
+
+        // 2. Calculate Priority Fee (Simplified: using fixed base/max for now)
+        const basePriorityFee = parseInt(process.env.PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS, 10);
+        const maxPriorityFee = parseInt(process.env.PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS, 10);
+        let priorityFeeMicroLamports = Math.max(1, Math.min(basePriorityFee, maxPriorityFee)); // Ensure at least 1 microLamport
+        const computeUnitLimit = parseInt(process.env.PAYOUT_COMPUTE_UNIT_LIMIT, 10);
+
+        // 3. Create Transaction
+        const transaction = new Transaction({
+            recentBlockhash: blockhash,
+            feePayer: payerWallet.publicKey,
+        });
+
+        // Add compute budget instructions
+        transaction.add(
+            ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnitLimit })
+        );
+        transaction.add(
+            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports })
+        );
+
+        // Add the transfer instruction
+        transaction.add(
+            SystemProgram.transfer({
+                fromPubkey: payerWallet.publicKey,
+                toPubkey: recipientPubKey,
+                lamports: amountToSend,
+            })
+        );
+
+        // 4. Sign and Send Transaction
+        const signature = await sendAndConfirmTransaction(
+            solanaConnection, // Use the potentially rate-limited connection
+            transaction,
+            [payerWallet], // Signer
+            {
+                commitment: DEPOSIT_CONFIRMATION_LEVEL, // Use consistent confirmation level
+                skipPreflight: false, // Keep preflight checks enabled
+                preflightCommitment: DEPOSIT_CONFIRMATION_LEVEL,
+                lastValidBlockHeight: lastValidBlockHeight, // Include for better confirmation
+            }
+        );
+
+        console.log(`[${operationId}] SUCCESS! ✅ Sent ${amountSOL.toFixed(SOL_DECIMALS)} SOL to ${recipientPubKey.toBase58()} using ${keyTypeForLog} key. TX: ${signature}`);
+        return { success: true, signature: signature };
+
+    } catch (error) {
+        const isRetryable = isRetryableSolanaError(error);
+        let userFriendlyError = `Send/Confirm error: ${error.message}`;
+
+        // Improve user-friendly messages for common errors
+        const errorMsgLower = String(error.message || '').toLowerCase();
+        if (errorMsgLower.includes('insufficient lamports') || errorMsgLower.includes('insufficient funds')) {
+            userFriendlyError = `Insufficient funds in the ${keyTypeForLog} payout wallet.`;
+        } else if (errorMsgLower.includes('blockhash not found') || errorMsgLower.includes('block height exceeded')) {
+            userFriendlyError = 'Transaction expired (blockhash invalid).';
+        } else if (errorMsgLower.includes('transaction was not confirmed') || errorMsgLower.includes('timed out waiting')) {
+            userFriendlyError = `Transaction confirmation timeout. Status unclear, may succeed later.`;
+        } else if (isRetryable) {
+             userFriendlyError = `Temporary network/RPC error: ${error.message}`;
+        }
+
+        console.error(`[${operationId}] ❌ SEND FAILED using ${keyTypeForLog} key. Retryable: ${isRetryable}. Error: ${error.message}`);
+        if (error instanceof SendTransactionError && error.logs) {
+            console.error(`[${operationId}] Simulation Logs (last 10):`);
+            error.logs.slice(-10).forEach(log => console.error(`  -> ${log}`));
+        } else if (error.stack) {
+            // console.error(`[${operationId}] Stack: ${error.stack}`); // Optionally log full stack
+        }
+
+        return { success: false, error: userFriendlyError, isRetryable: isRetryable };
+    }
 }
+
 
 /**
  * Analyzes a fetched Solana transaction to find the SOL amount transferred *to* a target address.
+ * Handles basic SystemProgram transfers.
+ * NOTE: Might need adjustments for complex transactions or different program interactions.
  * @param {ConfirmedTransaction | TransactionResponse | null} tx The fetched transaction object.
  * @param {string} targetAddress The address receiving the funds.
  * @returns {{transferAmount: bigint, payerAddress: string | null}} Amount in lamports and the likely payer.
  */
 function analyzeTransactionAmounts(tx, targetAddress) {
-    let transferAmount = 0n; let payerAddress = null; if (!tx || !targetAddress) { return { transferAmount: 0n, payerAddress: null }; } try { new PublicKey(targetAddress); } catch (e) { console.warn(`[analyzeAmounts] Invalid targetAddress format: ${targetAddress}`); return { transferAmount: 0n, payerAddress: null }; } if (tx.meta?.err) { return { transferAmount: 0n, payerAddress: null }; }
-    if (tx.meta?.preBalances && tx.meta?.postBalances && tx.transaction?.message) { try { const accountKeys = (tx.transaction.message.staticAccountKeys || tx.transaction.message.accountKeys).map(k => k.toBase58()); const header = tx.transaction.message.header; const targetIndex = accountKeys.indexOf(targetAddress); if (targetIndex !== -1 && tx.meta.preBalances.length > targetIndex && tx.meta.postBalances.length > targetIndex) { const preBalance = BigInt(tx.meta.preBalances[targetIndex]); const postBalance = BigInt(tx.meta.postBalances[targetIndex]); const balanceChange = postBalance - preBalance; if (balanceChange > 0n) { transferAmount = balanceChange; const signers = accountKeys.slice(0, header.numRequiredSignatures); for (const signerKey of signers) { const signerIndex = accountKeys.indexOf(signerKey); if (signerIndex !== -1 && signerIndex !== targetIndex && tx.meta.preBalances.length > signerIndex && tx.meta.postBalances.length > signerIndex) { const preSigner = BigInt(tx.meta.preBalances[signerIndex]); const postSigner = BigInt(tx.meta.postBalances[signerIndex]); if (postSigner < preSigner) { payerAddress = signerKey; break; } } } if (!payerAddress && signers.length > 0) { payerAddress = signers[0]; } } } } catch (e) { console.warn(`[analyzeAmounts] Error analyzing balance changes: ${e.message}`); transferAmount = 0n; payerAddress = null; } }
-    if (transferAmount === 0n && tx.meta?.logMessages) { const sysTransferToRegex = /Transfer: src=([1-9A-HJ-NP-Za-km-z]+) dst=([1-9A-HJ-NP-Za-km-z]+) lamports=(\d+)/; let potentialPayer = null; let potentialAmount = 0n; for (const log of tx.meta.logMessages) { const match = log.match(sysTransferToRegex); if (match && match[2] === targetAddress) { potentialPayer = match[1]; potentialAmount = BigInt(match[3]); transferAmount = potentialAmount; payerAddress = potentialPayer; break; } } }
+    let transferAmount = 0n;
+    let payerAddress = null;
+
+    if (!tx || !targetAddress) {
+        return { transferAmount: 0n, payerAddress: null };
+    }
+
+    try {
+        new PublicKey(targetAddress); // Validate target address format
+    } catch (e) {
+        console.warn(`[analyzeAmounts] Invalid targetAddress format: ${targetAddress}`);
+        return { transferAmount: 0n, payerAddress: null };
+    }
+
+    // Check for transaction error
+    if (tx.meta?.err) {
+        // console.log(`[analyzeAmounts] Transaction meta contains error for target ${targetAddress}.`);
+        return { transferAmount: 0n, payerAddress: null };
+    }
+
+    // --- Method 1: Balance Changes (Most Reliable) ---
+    if (tx.meta?.preBalances && tx.meta?.postBalances && tx.transaction?.message) {
+        try {
+            // Handle both legacy and version 0 message formats for account keys
+             const accountKeys = (tx.transaction.message.staticAccountKeys || tx.transaction.message.accountKeys).map(k => k.toBase58());
+             const header = tx.transaction.message.header;
+            const targetIndex = accountKeys.indexOf(targetAddress);
+
+            if (targetIndex !== -1 &&
+                tx.meta.preBalances.length > targetIndex && tx.meta.postBalances.length > targetIndex) {
+                const preBalance = BigInt(tx.meta.preBalances[targetIndex]);
+                const postBalance = BigInt(tx.meta.postBalances[targetIndex]);
+                const balanceChange = postBalance - preBalance;
+
+                if (balanceChange > 0n) {
+                    transferAmount = balanceChange;
+                    // Try to identify the payer (usually the first signer who had a negative balance change)
+                     const signers = accountKeys.slice(0, header.numRequiredSignatures);
+                     for (const signerKey of signers) {
+                         const signerIndex = accountKeys.indexOf(signerKey);
+                         if (signerIndex !== -1 && signerIndex !== targetIndex &&
+                             tx.meta.preBalances.length > signerIndex && tx.meta.postBalances.length > signerIndex) {
+                            const preSigner = BigInt(tx.meta.preBalances[signerIndex]);
+                            const postSigner = BigInt(tx.meta.postBalances[signerIndex]);
+                            if (postSigner < preSigner) {
+                                payerAddress = signerKey;
+                                break; // Assume first signer with decreased balance is payer
+                            }
+                         }
+                     }
+                     // Fallback to first signer if no obvious payer found
+                     if (!payerAddress && signers.length > 0) {
+                         payerAddress = signers[0];
+                     }
+                }
+            }
+        } catch (e) {
+             console.warn(`[analyzeAmounts] Error analyzing balance changes: ${e.message}`);
+             // Fallback to instruction parsing if balance analysis fails
+             transferAmount = 0n;
+             payerAddress = null;
+        }
+    }
+
+    // --- Method 2: Instruction Parsing (Fallback / Cross-check) ---
+    // Only use if balance change method didn't find a positive transfer
+    if (transferAmount === 0n && tx.meta?.logMessages) {
+        // Example: Look for SystemProgram transfer logs
+        const sysTransferToRegex = /Transfer: src=([1-9A-HJ-NP-Za-km-z]+) dst=([1-9A-HJ-NP-Za-km-z]+) lamports=(\d+)/; // For newer log formats
+
+        let potentialPayer = null;
+        let potentialAmount = 0n;
+
+        for (const log of tx.meta.logMessages) {
+            // Check newer format first
+            const match = log.match(sysTransferToRegex);
+            if (match && match[2] === targetAddress) {
+                potentialPayer = match[1];
+                potentialAmount = BigInt(match[3]);
+                 // If found via this regex, prioritize it
+                 transferAmount = potentialAmount;
+                 payerAddress = potentialPayer;
+                 break;
+            }
+            // Add more sophisticated parsing here if needed for other transfer types or older log formats
+        }
+    }
+
+    if (transferAmount > 0n) {
+       // console.log(`[analyzeAmounts] Analyzed TX for ${targetAddress}: Found ${transferAmount} lamports from ${payerAddress || 'Unknown'}`);
+    } else {
+       // console.log(`[analyzeAmounts] Analyzed TX for ${targetAddress}: No positive SOL transfer found.`);
+    }
+
     return { transferAmount, payerAddress };
 }
 
+
 // --- Telegram Utilities ---
-const escapeMarkdownV2 = (text) => { if (text === null || typeof text === 'undefined') { return ''; } const textString = String(text); return textString.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1'); };
-function escapeHtml(text) { if (text === null || typeof text === 'undefined') { return ''; } const textString = String(text); return textString.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
-async function getUserDisplayName(chatId, userId) { try { const member = await bot.getChatMember(chatId, userId); const user = member.user; let name = ''; if (user.username) { name = `@${user.username}`; } else if (user.first_name) { name = user.first_name; if (user.last_name) { name += ` ${user.last_name}`; } } else { name = `User_${String(userId).slice(-4)}`; } return escapeMarkdownV2(name); } catch (error) { return escapeMarkdownV2(`User_${String(userId).slice(-4)}`); } }
+
+/**
+ * Sends a message via Telegram with rate limiting and error handling.
+ * @param {string | number} chatId The chat ID to send to.
+ * @param {string} text The message text.
+ * @param {TelegramBot.SendMessageOptions} [options={}] Optional parameters for sendMessage.
+ * @returns {Promise<TelegramBot.Message | undefined>} The sent message object or undefined on failure.
+ */
 async function safeSendMessage(chatId, text, options = {}) {
-    if (!chatId || typeof text !== 'string' || text.trim() === '') { console.error("[safeSendMessage] Invalid input:", { chatId, text }); return undefined; } const MAX_LENGTH = 4096; if (text.length > MAX_LENGTH) { console.warn(`[safeSendMessage] Message for chat ${chatId} too long (${text.length} > ${MAX_LENGTH}), truncating.`); text = text.substring(0, MAX_LENGTH - 3) + "..."; }
-    return telegramSendQueue.add(async () => { try { const sentMessage = await bot.sendMessage(chatId, text, options); return sentMessage; } catch (error) { console.error(`❌ Telegram send error to chat ${chatId}: Code: ${error.code} | ${error.message}`); if (error.response?.body) { console.error(`  -> Response Body: ${JSON.stringify(error.response.body)}`); } if (error.code === 'ETELEGRAM') { if (error.message.includes('400 Bad Request: message is too long')) { console.error(`  -> Message confirmed too long.`); } else if (error.message.includes('400 Bad Request: can\'t parse entities')) { console.error(`  -> Telegram Parse Error: Ensure proper MarkdownV2 escaping! Snippet: ${text.substring(0, 100)}...`); } else if (error.message.includes('403 Forbidden: bot was blocked by the user') || error.message.includes('403 Forbidden: user is deactivated')) { console.warn(`  -> Bot blocked or user deactivated: ${chatId}`); } else if (error.message.includes('403 Forbidden: bot was kicked')) { console.warn(`  -> Bot kicked from group chat: ${chatId}`); } else if (error.message.includes('429 Too Many Requests')) { console.warn(`  -> Hit Telegram rate limits sending to ${chatId}.`); } } return undefined; } });
+    // Input validation
+    if (!chatId || typeof text !== 'string' || text.trim() === '') {
+        console.error("[safeSendMessage] Invalid input:", { chatId, text });
+        return undefined;
+    }
+
+    // Message length check (Telegram limit is 4096 chars)
+    const MAX_LENGTH = 4096;
+    if (text.length > MAX_LENGTH) {
+        console.warn(`[safeSendMessage] Message for chat ${chatId} too long (${text.length} > ${MAX_LENGTH}), truncating.`);
+        text = text.substring(0, MAX_LENGTH - 3) + "...";
+    }
+
+    return telegramSendQueue.add(async () => {
+        try {
+            const sentMessage = await bot.sendMessage(chatId, text, options);
+            return sentMessage;
+        } catch (error) {
+            console.error(`❌ Telegram send error to chat ${chatId}: Code: ${error.code} | ${error.message}`);
+            if (error.response?.body) {
+                 console.error(`  -> Response Body: ${JSON.stringify(error.response.body)}`);
+            }
+
+            // Handle specific, common errors
+            if (error.code === 'ETELEGRAM') {
+                if (error.message.includes('400 Bad Request: message is too long')) {
+                     console.error(`  -> Message confirmed too long, even after potential truncation.`);
+                } else if (error.message.includes('400 Bad Request: can\'t parse entities')) {
+                     console.error(`  -> Telegram Parse Error: Ensure proper MarkdownV2 escaping! Text snippet: ${text.substring(0, 100)}...`);
+                } else if (error.message.includes('403 Forbidden: bot was blocked by the user') || error.message.includes('403 Forbidden: user is deactivated')) {
+                    console.warn(`  -> Bot blocked or user deactivated for chat/user ${chatId}. Consider marking user inactive.`);
+                } else if (error.message.includes('403 Forbidden: bot was kicked')) {
+                    console.warn(`  -> Bot kicked from group chat ${chatId}. Consider cleaning up group-related data.`);
+                } else if (error.message.includes('429 Too Many Requests')) {
+                    console.warn(`  -> Hit Telegram rate limits sending to ${chatId}. Queue should handle, but may indicate high load.`);
+                }
+            }
+            return undefined; // Indicate failure
+        }
+    });
 }
 
+
+/**
+ * Escapes characters for Telegram MarkdownV2 parse mode.
+ * Handles null/undefined inputs.
+ * @param {string | number | bigint | null | undefined} text Input text or number to escape.
+ * @returns {string} Escaped string.
+ */
+const escapeMarkdownV2 = (text) => {
+    if (text === null || typeof text === 'undefined') {
+        return ''; // Return empty string for null/undefined
+    }
+    const textString = String(text); // Convert numbers/bigints to string
+    // Escape all reserved characters: _ * [ ] ( ) ~ ` > # + - = | { } . ! \
+    return textString.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+};
+
+/**
+ * Escapes characters for HTML contexts.
+ * @param {string | number | bigint} text Input text or number to escape.
+ * @returns {string} Escaped string.
+ */
+function escapeHtml(text) {
+    if (text === null || typeof text === 'undefined') {
+        return ''; // Return empty string for null/undefined
+    }
+    const textString = String(text);
+    return textString.replace(/&/g, "&amp;")
+                     .replace(/</g, "&lt;")
+                     .replace(/>/g, "&gt;")
+                     .replace(/"/g, "&quot;")
+                     .replace(/'/g, "&#039;");
+}
+
+/**
+ * Gets a display name for a user in a specific chat. Prefers @username, falls back to first name, then User_ID.
+ * Escapes the result for MarkdownV2.
+ * @param {string | number} chatId The chat ID where the user is.
+ * @param {string | number} userId The user ID.
+ * @returns {Promise<string>} MarkdownV2 escaped display name.
+ */
+async function getUserDisplayName(chatId, userId) {
+    try {
+        const member = await bot.getChatMember(chatId, userId);
+        const user = member.user;
+        let name = '';
+        if (user.username) {
+            name = `@${user.username}`; // Keep @ for username
+        } else if (user.first_name) {
+            name = user.first_name;
+            if (user.last_name) {
+                name += ` ${user.last_name}`;
+            }
+        } else {
+            name = `User_${String(userId).slice(-4)}`; // Fallback
+        }
+        // Escape the final chosen name
+        return escapeMarkdownV2(name);
+    } catch (error) {
+        // Fallback to generic name based on ID, already escaped
+        return escapeMarkdownV2(`User_${String(userId).slice(-4)}`);
+    }
+}
+
+
 // --- Cache Utilities ---
-function updateWalletCache(userId, data) { userId = String(userId); const existing = walletCache.get(userId) || {}; const entryTimestamp = Date.now(); walletCache.set(userId, { ...existing, ...data, timestamp: entryTimestamp }); setTimeout(() => { const current = walletCache.get(userId); if (current && current.timestamp === entryTimestamp && Date.now() - current.timestamp >= WALLET_CACHE_TTL_MS) { walletCache.delete(userId); } }, WALLET_CACHE_TTL_MS + 1000); }
-function getWalletCache(userId) { userId = String(userId); const entry = walletCache.get(userId); if (entry && Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) { return entry; } if (entry) { walletCache.delete(userId); } return undefined; }
-function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) { activeDepositAddresses.set(address, { userId: String(userId), expiresAt: expiresAtTimestamp }); const delay = expiresAtTimestamp - Date.now() + 1000; if (delay > 0) { setTimeout(() => { const current = activeDepositAddresses.get(address); if (current && current.expiresAt === expiresAtTimestamp) { activeDepositAddresses.delete(address); } }, delay); } else { removeActiveDepositAddressCache(address); } }
-function getActiveDepositAddressCache(address) { const entry = activeDepositAddresses.get(address); if (entry && Date.now() < entry.expiresAt) { return entry; } if (entry) { activeDepositAddresses.delete(address); } return undefined; }
-function removeActiveDepositAddressCache(address) { activeDepositAddresses.delete(address); }
-function addProcessedDepositTx(signature) { if (processedDepositTxSignatures.size >= MAX_PROCESSED_TX_CACHE_SIZE) { const oldestSig = processedDepositTxSignatures.values().next().value; if (oldestSig) { processedDepositTxSignatures.delete(oldestSig); } } processedDepositTxSignatures.add(signature); }
-function hasProcessedDepositTx(signature) { return processedDepositTxSignatures.has(signature); }
+
+/** Updates the wallet cache for a user with optional TTL. */
+function updateWalletCache(userId, data) {
+    userId = String(userId);
+    const existing = walletCache.get(userId) || {};
+    const entryTimestamp = Date.now();
+    walletCache.set(userId, { ...existing, ...data, timestamp: entryTimestamp });
+    setTimeout(() => {
+        const current = walletCache.get(userId);
+        if (current && current.timestamp === entryTimestamp && Date.now() - current.timestamp >= WALLET_CACHE_TTL_MS) {
+            walletCache.delete(userId);
+        }
+    }, WALLET_CACHE_TTL_MS + 1000);
+}
+
+/** Gets wallet cache data if not expired. */
+function getWalletCache(userId) {
+    userId = String(userId);
+    const entry = walletCache.get(userId);
+    if (entry && Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) {
+        return entry;
+    }
+    if (entry) { walletCache.delete(userId); }
+    return undefined;
+}
+
+/** Adds or updates an active deposit address in the cache. */
+function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) {
+    activeDepositAddresses.set(address, { userId: String(userId), expiresAt: expiresAtTimestamp });
+    const delay = expiresAtTimestamp - Date.now() + 1000;
+    if (delay > 0) {
+        setTimeout(() => {
+            const current = activeDepositAddresses.get(address);
+            if (current && current.expiresAt === expiresAtTimestamp) {
+                 activeDepositAddresses.delete(address);
+            }
+        }, delay);
+    } else {
+         removeActiveDepositAddressCache(address);
+    }
+}
+
+/** Gets active deposit address info from cache if not expired. */
+function getActiveDepositAddressCache(address) {
+    const entry = activeDepositAddresses.get(address);
+    if (entry && Date.now() < entry.expiresAt) {
+        return entry;
+    }
+     if (entry) { activeDepositAddresses.delete(address); }
+    return undefined;
+}
+
+/** Removes an address from the deposit cache. */
+function removeActiveDepositAddressCache(address) {
+    activeDepositAddresses.delete(address);
+}
+
+/** Adds a signature to the processed set and handles cache size limit. */
+function addProcessedDepositTx(signature) {
+    if (processedDepositTxSignatures.size >= MAX_PROCESSED_TX_CACHE_SIZE) {
+        const oldestSig = processedDepositTxSignatures.values().next().value;
+        if (oldestSig) {
+            processedDepositTxSignatures.delete(oldestSig);
+        }
+    }
+    processedDepositTxSignatures.add(signature);
+}
+
+/** Checks if a signature has been processed this session. */
+function hasProcessedDepositTx(signature) {
+    return processedDepositTxSignatures.has(signature);
+}
+
 
 // --- Other Utilities ---
-function generateReferralCode(length = 8) { const byteLength = Math.ceil(length / 2); const randomBytes = crypto.randomBytes(byteLength); const hexString = randomBytes.toString('hex').slice(0, length); return `ref_${hexString}`; }
+
+/**
+ * Generates a unique referral code.
+ * @param {number} [length=8] Desired length of the hex part.
+ * @returns {string} Referral code (e.g., "ref_a1b2c3d4").
+ */
+function generateReferralCode(length = 8) {
+    const byteLength = Math.ceil(length / 2);
+    const randomBytes = crypto.randomBytes(byteLength);
+    const hexString = randomBytes.toString('hex').slice(0, length);
+    return `ref_${hexString}`;
+}
+
 
 // --- End of Part 3 ---
 // index.js - Part 4: Game Logic Implementation
