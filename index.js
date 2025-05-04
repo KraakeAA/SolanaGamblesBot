@@ -1443,82 +1443,113 @@ async function getTotalReferralEarnings(userId) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.1.0 --- (Switched to @metamask/key-tree)
+// --- VERSION: 3.1.0 --- (Added Detailed Logging to generateUniqueDepositAddress)
 
-// --- Solana Utilities --
+// --- Solana Utilities ---
 
 /**
  * Derives a unique Solana keypair for deposits based on user ID and an index.
  * Uses BIP39 seed phrase and SLIP-10 path (m/44'/501'/account'/change'/addressIndex').
- * Uses @metamask/key-tree library.
+ * Uses @metamask/key-tree library. Includes detailed logging.
  * Returns the public key and the 32-byte private key bytes needed for signing.
  * @param {string} userId The user's unique ID.
  * @param {number} addressIndex A unique index for this user's addresses (e.g., 0, 1, 2...).
  * @returns {Promise<{publicKey: PublicKey, privateKeyBytes: Uint8Array, derivationPath: string} | null>} Derived public key, private key bytes, and path, or null on error.
  */
 async function generateUniqueDepositAddress(userId, addressIndex) {
-    const logPrefix = `[Address Gen User ${userId}]`;
+    const logPrefix = `[Address Gen User ${userId} Index ${addressIndex}]`; // Added index to prefix
+    console.log(`${logPrefix} --- Starting derivation ---`); // Log Start
+
     try {
-        // Debug Logging (Keep for now)
+        // --- Step 0: Validate Inputs ---
+        console.log(`${logPrefix} Step 0: Validating inputs...`);
+        if (typeof userId !== 'string' || userId.length === 0 || typeof addressIndex !== 'number' || addressIndex < 0 || !Number.isInteger(addressIndex)) {
+            console.error(`${logPrefix} Invalid userId or addressIndex`, { userId, addressIndex });
+            throw new Error("Invalid input parameters (userId or addressIndex).");
+        }
+        console.log(`${logPrefix} Step 0: Inputs validated.`);
+
+        // --- Step 1: Get Seed Phrase ---
+        console.log(`${logPrefix} Step 1: Retrieving seed phrase from environment...`);
         const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
-        console.log(`[Debug Deposit Gen] Runtime check - Type of seedPhrase: ${typeof seedPhrase}`);
-        if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) {
-             console.error(`[Debug Deposit Gen] CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is invalid or empty at runtime! Value: [${seedPhrase}]`);
+        console.log(`${logPrefix} Step 1: Runtime check - Type of seedPhrase: ${typeof seedPhrase}`);
+        if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) { // Check if it's a non-empty string
+             console.error(`${logPrefix} CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is invalid or empty at runtime! Value: [${seedPhrase}]`);
              throw new Error("DEPOSIT_MASTER_SEED_PHRASE environment variable not read correctly at runtime.");
         }
         const words = seedPhrase.trim().split(' ');
-        console.log(`[Debug Deposit Gen] Runtime check - Seed phrase retrieved. First word: "${words[0]}", Last word: "${words[words.length - 1]}", Word count: ${words.length}`);
-        // End Debug Logging
+        console.log(`${logPrefix} Step 1: Seed phrase retrieved. First word: "${words[0]}", Last word: "${words[words.length - 1]}", Word count: ${words.length}`);
 
-        if (typeof userId !== 'string' || userId.length === 0 || typeof addressIndex !== 'number' || addressIndex < 0 || !Number.isInteger(addressIndex)) {
-            console.error(`${logPrefix} Invalid userId or addressIndex`, { userId, addressIndex });
-            return null;
-        }
-
-        // 1. Get the master seed buffer from the mnemonic phrase
+        // --- Step 2: Generate Master Seed Buffer ---
+        console.log(`${logPrefix} Step 2: Generating master seed buffer via bip39.mnemonicToSeed...`);
         const masterSeedBuffer = await bip39.mnemonicToSeed(seedPhrase); // Returns a Buffer
+        if (!masterSeedBuffer || !(masterSeedBuffer instanceof Buffer) || masterSeedBuffer.length < 16) { // Basic validation
+             throw new Error(`bip39.mnemonicToSeed failed or returned invalid buffer (length: ${masterSeedBuffer?.length})`);
+        }
+        console.log(`${logPrefix} Step 2: Master seed buffer generated successfully (length: ${masterSeedBuffer.length}).`);
 
-        // 2. Derive the user-specific account path component (Hardened)
+        // --- Step 3: Calculate User-Specific Path Component ---
+        console.log(`${logPrefix} Step 3: Calculating user-specific index...`);
         const hash = crypto.createHash('sha256').update(userId).digest();
         const accountIndex = hash.readUInt32BE(0);
-        const hardenedAccountIndex = accountIndex | 0x80000000; // Add hardening bit
+        const hardenedAccountIndex = accountIndex | 0x80000000;
+        console.log(`${logPrefix} Step 3: Hardened Account Index component: ${hardenedAccountIndex >>> 0}`);
 
-        // 3. Construct the *full* BIP44 derivation path for Solana using SLIP-10 format
-        // m / purpose' / coin_type' / account' / change' / address_index'
-        // Using hardened for account and address index for better security/separation
-        // NOTE: Standard Solana paths often use 0' for change. Let's stick to that.
+        // --- Step 4: Construct Derivation Path ---
+        console.log(`${logPrefix} Step 4: Constructing derivation path...`);
+        // Using standard path m/44'/501'/account'/change'/addressIndex' with hardened account/index
         const derivationPath = `m/44'/501'/${hardenedAccountIndex >>> 0}'/0'/${addressIndex}'`;
-        console.log(`[Address Gen User ${userId}] Using derivation path: ${derivationPath} with @metamask/key-tree`);
+        console.log(`${logPrefix} Step 4: Using derivation path: ${derivationPath}`);
 
-        // 4. Create the root HD node from the master seed buffer
-        // SLIP10Node expects Uint8Array, Buffer should work directly
+        // --- Step 5: Create Root HD Node ---
+        console.log(`${logPrefix} Step 5: Creating root SLIP10Node from seed buffer with curve ed25519...`);
+        // ** Includes the fix for "Invalid curve" error **
         const rootNode = await SLIP10Node.fromSeed(masterSeedBuffer, { curve: 'ed25519' });
+        if (!rootNode) { throw new Error("SLIP10Node.fromSeed returned null or undefined."); }
+        console.log(`${logPrefix} Step 5: Root node created successfully.`);
 
-        // 5. Derive the child node using the path (must prefix with 'slip10:')
+        // --- Step 6: Derive Child Node ---
+        console.log(`${logPrefix} Step 6: Deriving child node using path: slip10:${derivationPath}...`);
         const childNode = await rootNode.derive(`slip10:${derivationPath}`);
+        if (!childNode) { throw new Error("rootNode.derive returned null or undefined."); }
+        console.log(`${logPrefix} Step 6: Child node derived successfully.`);
 
-        // 6. Get the 32-byte private key from the derived node
-        // The 'privateKeyBytes' property holds the 32-byte private key scalar for Ed25519
+        // --- Step 7: Get Private Key Bytes ---
+        console.log(`${logPrefix} Step 7: Extracting private key bytes from child node...`);
         const privateKeyBytes = childNode.privateKeyBytes;
         if (!privateKeyBytes || privateKeyBytes.length !== 32) {
              throw new Error(`Derived private key bytes are invalid (length: ${privateKeyBytes?.length}) using @metamask/key-tree`);
         }
+        console.log(`${logPrefix} Step 7: Private key bytes extracted successfully (length: 32).`);
 
-        // 7. Generate the Solana Keypair using Keypair.fromSeed() which expects the 32-byte private key
+        // --- Step 8: Generate Solana Keypair ---
+        console.log(`${logPrefix} Step 8: Generating Solana keypair from seed (private key bytes)...`);
+        // Keypair.fromSeed expects the 32-byte private key
         const keypair = Keypair.fromSeed(privateKeyBytes);
-        const publicKey = keypair.publicKey;
+        if (!keypair) { throw new Error("Keypair.fromSeed failed."); }
+        console.log(`${logPrefix} Step 8: Solana keypair generated successfully.`);
 
-        // 8. Return public key, path, and the 32-byte private key bytes (needed for reconstruction/sweeping)
-        return {
+        // --- Step 9: Get Public Key ---
+        console.log(`${logPrefix} Step 9: Extracting public key...`);
+        const publicKey = keypair.publicKey;
+        if (!publicKey) { throw new Error("Failed to get public key from keypair."); }
+        console.log(`${logPrefix} Step 9: Public key obtained: ${publicKey.toBase58()}`);
+
+        // --- Step 10: Prepare Result ---
+        console.log(`${logPrefix} Step 10: Preparing result object...`);
+        const result = {
             publicKey: publicKey,
-            privateKeyBytes: privateKeyBytes, // Used to reconstruct Keypair for signing later
+            privateKeyBytes: privateKeyBytes, // Important: MUST store or handle this securely to sweep funds later
             derivationPath: derivationPath
         };
+        console.log(`${logPrefix} --- Derivation successful ---`);
+        return result;
 
     } catch (error) {
-        console.error(`${logPrefix} Error deriving address using @metamask/key-tree for index ${addressIndex}: ${error.message}`);
-        console.error(error.stack); // Log stack for debugging derivation errors
-        return null;
+        console.error(`${logPrefix} --- ERROR DURING DERIVATION ---`);
+        console.error(`${logPrefix} Error in generateUniqueDepositAddress: ${error.message}`);
+        console.error(error.stack); // Log the full stack trace for detailed debugging
+        return null; // Return null on failure (command handler will notify user)
     }
 }
 
@@ -1680,7 +1711,6 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
                 skipPreflight: false, // Keep preflight checks enabled
                 preflightCommitment: DEPOSIT_CONFIRMATION_LEVEL,
                 lastValidBlockHeight: lastValidBlockHeight, // Include for better confirmation
-                // maxRetries: 0 // Let the RateLimitedConnection handle retries if configured internally
             }
         );
 
