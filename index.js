@@ -1448,21 +1448,30 @@ async function getTotalReferralEarnings(userId) {
 async function generateUniqueDepositAddress(userId, addressIndex) {
     const logPrefix = `[Address Gen User ${userId}]`;
     try {
+        // +++++ START: ADD DEBUG LOGGING +++++ (Keep this for diagnostics)
+        const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
+        console.log(`[Debug Deposit Gen] Runtime check - Type of seedPhrase: ${typeof seedPhrase}`);
+        if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) { // Check if it's a non-empty string
+             console.error(`[Debug Deposit Gen] CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is invalid or empty at runtime! Value: [${seedPhrase}]`);
+             // Throw an error here to make the failure explicit if the env var is missing/wrong
+             throw new Error("DEPOSIT_MASTER_SEED_PHRASE environment variable not read correctly at runtime.");
+        } else {
+             const words = seedPhrase.trim().split(' ');
+             console.log(`[Debug Deposit Gen] Runtime check - Seed phrase retrieved. First word: "${words[0]}", Last word: "${words[words.length - 1]}", Word count: ${words.length}`);
+        }
+        // +++++ END: ADD DEBUG LOGGING +++++
+
         if (typeof userId !== 'string' || userId.length === 0 || typeof addressIndex !== 'number' || addressIndex < 0 || !Number.isInteger(addressIndex)) {
             console.error(`${logPrefix} Invalid userId or addressIndex`, { userId, addressIndex });
             return null;
         }
 
         // 1. Get the master seed from the mnemonic phrase
-        const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
-        if (!seedPhrase) {
-            console.error(`${logPrefix} DEPOSIT_MASTER_SEED_PHRASE is not set.`);
-            return null;
-        }
+        // const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE; // Already got it above for logging
         const masterSeed = await bip39.mnemonicToSeed(seedPhrase); // Generates a 64-byte seed
 
 
-        // ------ START: NEW PATH GENERATION LOGIC ------
+        // ------ START: REVISED PATH GENERATION LOGIC ------
         // 2. Derive the user-specific index component (NON-HARDENED)
         const hash = crypto.createHash('sha256').update(userId).digest();
         // Use the hash result for the final non-hardened index component.
@@ -1479,7 +1488,7 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
         // Path: m / purpose' / coin_type' / account' / change / address_index <- non-hardened final index
         const derivationPath = `m/44'/501'/0'/0/${userSpecificIndex}`; // Use Account 0, Change 0 (standard external)
         console.log(`[Address Gen User ${userId}] Using derivation path: ${derivationPath}`); // Log the new path format
-        // ------ END: NEW PATH GENERATION LOGIC ------
+        // ------ END: REVISED PATH GENERATION LOGIC ------
 
 
         // 4. Derive the private key seed using the path (This line remains the same)
