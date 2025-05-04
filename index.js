@@ -1196,17 +1196,22 @@ async function getTotalReferralEarnings(userId) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.1.0 --- (Using @noble/scure for Derivation + Logging)
+// --- VERSION: 3.1.0 --- (Corrected - All Functions Implemented)
 
 // --- Solana Utilities ---
 
-// Note: Imports specific to generateUniqueDepositAddress are kept near it for clarity in this context
-// but ideally belong in Part 1 with all other imports.
-import { ed25519 } from '@noble/curves/ed25519';      // Import Ed25519 curve functions from Noble
-import { sha512 } from '@noble/hashes/sha512';       // Import SHA512 used by BIP32
-import { hmac } from '@noble/hashes/hmac';           // Import HMAC used by BIP32
-import { bytesToHex } from '@noble/hashes/utils';    // Optional: for debugging bytes
-import { BIP32Factory } from '@scure/bip32';       // Import BIP32 factory
+// Note: The necessary imports for the function below (ed25519, sha512, hmac, BIP32Factory, bip39)
+// should ONLY be present in Part 1 at the top of the file.
+// Imports required *by this file's functions* are listed here for clarity if this were a separate module.
+// import { ed25519 } from '@noble/curves/ed25519';
+// import { sha512 } from '@noble/hashes/sha512';
+// import { hmac } from '@noble/hashes/hmac';
+// import { bytesToHex } from '@noble/hashes/utils';
+// import { BIP32Factory } from '@scure/bip32';
+// import * as bip39 from 'bip39';
+// import { PublicKey, Keypair, SystemProgram, Transaction, ComputeBudgetProgram, SendTransactionError } from '@solana/web3.js';
+// import * as crypto from 'crypto';
+// import nacl from 'tweetnacl';
 
 // Define the curve specifics needed by BIP32Factory for Ed25519 SLIP-10
 const Ed25519_CURVE = {
@@ -1247,13 +1252,14 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
         // --- Step 1: Get Seed Phrase ---
         console.log(`${logPrefix} Step 1: Retrieving seed phrase from environment...`);
         const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
-        console.log(`${logPrefix} Step 1: Runtime check - Type of seedPhrase: ${typeof seedPhrase}`);
+        console.log(`${logPrefix} Step 1: Runtime check - Type of seedPhrase: ${typeof seedPhrase}`); // Keep debug log
         if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) {
              console.error(`${logPrefix} CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is invalid or empty at runtime! Value: [${seedPhrase}]`);
              throw new Error("DEPOSIT_MASTER_SEED_PHRASE environment variable not read correctly at runtime.");
         }
-        const words = seedPhrase.trim().split(' ');
+        const words = seedPhrase.trim().split(' '); // Keep debug log
         console.log(`${logPrefix} Step 1: Seed phrase retrieved. First word: "${words[0]}", Last word: "${words[words.length - 1]}", Word count: ${words.length}`);
+
 
         // --- Step 2: Generate Master Seed Buffer ---
         console.log(`${logPrefix} Step 2: Generating master seed buffer via bip39.mnemonicToSeed...`);
@@ -1272,7 +1278,7 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
 
         // --- Step 4: Construct Derivation Path ---
         console.log(`${logPrefix} Step 4: Constructing path...`);
-        // Reverting to the path that uses hardened account and address index, as @scure/bip32 should handle it correctly
+        // Using standard path m/44'/501'/account'/change'/addressIndex' with hardened segments
         const derivationPath = `m/44'/501'/${hardenedAccountIndex >>> 0}'/0'/${addressIndex}'`;
         console.log(`${logPrefix} Step 4: Using derivation path: ${derivationPath}`);
 
@@ -1334,7 +1340,7 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
  * @param {any} error The error object.
  * @returns {boolean} True if the error is likely retryable.
  */
-function isRetryableSolanaError(error) { /* ... implementation ... */
+function isRetryableSolanaError(error) {
     if (!error) return false;
     const message = String(error.message || '').toLowerCase();
     const code = error?.code || error?.cause?.code;
@@ -1358,7 +1364,7 @@ function isRetryableSolanaError(error) { /* ... implementation ... */
  * @param {'withdrawal' | 'referral'} payoutSource Determines which private key to use.
  * @returns {Promise<{success: boolean, signature?: string, error?: string, isRetryable?: boolean}>} Result object.
  */
-async function sendSol(recipientPublicKey, amountLamports, payoutSource) { /* ... implementation ... */
+async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     const operationId = `sendSol-${payoutSource}-${Date.now().toString().slice(-6)}`;
     let recipientPubKey; try { recipientPubKey = (typeof recipientPublicKey === 'string') ? new PublicKey(recipientPublicKey) : recipientPublicKey; if (!(recipientPubKey instanceof PublicKey)) throw new Error("Invalid recipient public key type"); } catch (e) { const errorMsg = `Invalid recipient address format: "${recipientPublicKey}". Error: ${e.message}`; console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`); return { success: false, error: errorMsg, isRetryable: false }; }
     let amountToSend; try { amountToSend = BigInt(amountLamports); if (amountToSend <= 0n) throw new Error('Amount must be positive'); } catch (e) { const errorMsg = `Invalid amountLamports value: '${amountLamports}'. Error: ${e.message}`; console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`); return { success: false, error: errorMsg, isRetryable: false }; }
@@ -1378,38 +1384,37 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) { /* ..
 
 /**
  * Analyzes a fetched Solana transaction to find the SOL amount transferred *to* a target address.
- * Handles basic SystemProgram transfers.
  * @param {ConfirmedTransaction | TransactionResponse | null} tx The fetched transaction object.
  * @param {string} targetAddress The address receiving the funds.
  * @returns {{transferAmount: bigint, payerAddress: string | null}} Amount in lamports and the likely payer.
  */
-function analyzeTransactionAmounts(tx, targetAddress) { /* ... implementation ... */
+function analyzeTransactionAmounts(tx, targetAddress) {
     let transferAmount = 0n; let payerAddress = null; if (!tx || !targetAddress) { return { transferAmount: 0n, payerAddress: null }; } try { new PublicKey(targetAddress); } catch (e) { console.warn(`[analyzeAmounts] Invalid targetAddress format: ${targetAddress}`); return { transferAmount: 0n, payerAddress: null }; } if (tx.meta?.err) { return { transferAmount: 0n, payerAddress: null }; }
     if (tx.meta?.preBalances && tx.meta?.postBalances && tx.transaction?.message) { try { const accountKeys = (tx.transaction.message.staticAccountKeys || tx.transaction.message.accountKeys).map(k => k.toBase58()); const header = tx.transaction.message.header; const targetIndex = accountKeys.indexOf(targetAddress); if (targetIndex !== -1 && tx.meta.preBalances.length > targetIndex && tx.meta.postBalances.length > targetIndex) { const preBalance = BigInt(tx.meta.preBalances[targetIndex]); const postBalance = BigInt(tx.meta.postBalances[targetIndex]); const balanceChange = postBalance - preBalance; if (balanceChange > 0n) { transferAmount = balanceChange; const signers = accountKeys.slice(0, header.numRequiredSignatures); for (const signerKey of signers) { const signerIndex = accountKeys.indexOf(signerKey); if (signerIndex !== -1 && signerIndex !== targetIndex && tx.meta.preBalances.length > signerIndex && tx.meta.postBalances.length > signerIndex) { const preSigner = BigInt(tx.meta.preBalances[signerIndex]); const postSigner = BigInt(tx.meta.postBalances[signerIndex]); if (postSigner < preSigner) { payerAddress = signerKey; break; } } } if (!payerAddress && signers.length > 0) { payerAddress = signers[0]; } } } } catch (e) { console.warn(`[analyzeAmounts] Error analyzing balance changes: ${e.message}`); transferAmount = 0n; payerAddress = null; } }
     if (transferAmount === 0n && tx.meta?.logMessages) { const sysTransferToRegex = /Transfer: src=([1-9A-HJ-NP-Za-km-z]+) dst=([1-9A-HJ-NP-Za-km-z]+) lamports=(\d+)/; let potentialPayer = null; let potentialAmount = 0n; for (const log of tx.meta.logMessages) { const match = log.match(sysTransferToRegex); if (match && match[2] === targetAddress) { potentialPayer = match[1]; potentialAmount = BigInt(match[3]); transferAmount = potentialAmount; payerAddress = potentialPayer; break; } } }
     return { transferAmount, payerAddress };
 }
 
-// --- Telegram Utilities (keep escapeMarkdownV2, safeSendMessage, etc as before) ---
+// --- Telegram Utilities ---
 const escapeMarkdownV2 = (text) => { if (text === null || typeof text === 'undefined') { return ''; } const textString = String(text); return textString.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1'); };
 function escapeHtml(text) { if (text === null || typeof text === 'undefined') { return ''; } const textString = String(text); return textString.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
 async function getUserDisplayName(chatId, userId) { try { const member = await bot.getChatMember(chatId, userId); const user = member.user; let name = ''; if (user.username) { name = `@${user.username}`; } else if (user.first_name) { name = user.first_name; if (user.last_name) { name += ` ${user.last_name}`; } } else { name = `User_${String(userId).slice(-4)}`; } return escapeMarkdownV2(name); } catch (error) { return escapeMarkdownV2(`User_${String(userId).slice(-4)}`); } }
-async function safeSendMessage(chatId, text, options = {}) { /* ... implementation ... */
+async function safeSendMessage(chatId, text, options = {}) {
     if (!chatId || typeof text !== 'string' || text.trim() === '') { console.error("[safeSendMessage] Invalid input:", { chatId, text }); return undefined; } const MAX_LENGTH = 4096; if (text.length > MAX_LENGTH) { console.warn(`[safeSendMessage] Message for chat ${chatId} too long (${text.length} > ${MAX_LENGTH}), truncating.`); text = text.substring(0, MAX_LENGTH - 3) + "..."; }
     return telegramSendQueue.add(async () => { try { const sentMessage = await bot.sendMessage(chatId, text, options); return sentMessage; } catch (error) { console.error(`❌ Telegram send error to chat ${chatId}: Code: ${error.code} | ${error.message}`); if (error.response?.body) { console.error(`  -> Response Body: ${JSON.stringify(error.response.body)}`); } if (error.code === 'ETELEGRAM') { if (error.message.includes('400 Bad Request: message is too long')) { console.error(`  -> Message confirmed too long.`); } else if (error.message.includes('400 Bad Request: can\'t parse entities')) { console.error(`  -> Telegram Parse Error: Ensure proper MarkdownV2 escaping! Snippet: ${text.substring(0, 100)}...`); } else if (error.message.includes('403 Forbidden: bot was blocked by the user') || error.message.includes('403 Forbidden: user is deactivated')) { console.warn(`  -> Bot blocked or user deactivated: ${chatId}`); } else if (error.message.includes('403 Forbidden: bot was kicked')) { console.warn(`  -> Bot kicked from group chat: ${chatId}`); } else if (error.message.includes('429 Too Many Requests')) { console.warn(`  -> Hit Telegram rate limits sending to ${chatId}.`); } } return undefined; } });
 }
 
-// --- Cache Utilities (keep as before) ---
-function updateWalletCache(userId, data) { /* ... implementation ... */ userId = String(userId); const existing = walletCache.get(userId) || {}; const entryTimestamp = Date.now(); walletCache.set(userId, { ...existing, ...data, timestamp: entryTimestamp }); setTimeout(() => { const current = walletCache.get(userId); if (current && current.timestamp === entryTimestamp && Date.now() - current.timestamp >= WALLET_CACHE_TTL_MS) { walletCache.delete(userId); } }, WALLET_CACHE_TTL_MS + 1000); }
-function getWalletCache(userId) { /* ... implementation ... */ userId = String(userId); const entry = walletCache.get(userId); if (entry && Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) { return entry; } if (entry) { walletCache.delete(userId); } return undefined; }
-function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) { /* ... implementation ... */ activeDepositAddresses.set(address, { userId: String(userId), expiresAt: expiresAtTimestamp }); const delay = expiresAtTimestamp - Date.now() + 1000; if (delay > 0) { setTimeout(() => { const current = activeDepositAddresses.get(address); if (current && current.expiresAt === expiresAtTimestamp) { activeDepositAddresses.delete(address); } }, delay); } else { removeActiveDepositAddressCache(address); } }
-function getActiveDepositAddressCache(address) { /* ... implementation ... */ const entry = activeDepositAddresses.get(address); if (entry && Date.now() < entry.expiresAt) { return entry; } if (entry) { activeDepositAddresses.delete(address); } return undefined; }
-function removeActiveDepositAddressCache(address) { /* ... implementation ... */ activeDepositAddresses.delete(address); }
-function addProcessedDepositTx(signature) { /* ... implementation ... */ if (processedDepositTxSignatures.size >= MAX_PROCESSED_TX_CACHE_SIZE) { const oldestSig = processedDepositTxSignatures.values().next().value; if (oldestSig) { processedDepositTxSignatures.delete(oldestSig); } } processedDepositTxSignatures.add(signature); }
-function hasProcessedDepositTx(signature) { /* ... implementation ... */ return processedDepositTxSignatures.has(signature); }
+// --- Cache Utilities ---
+function updateWalletCache(userId, data) { userId = String(userId); const existing = walletCache.get(userId) || {}; const entryTimestamp = Date.now(); walletCache.set(userId, { ...existing, ...data, timestamp: entryTimestamp }); setTimeout(() => { const current = walletCache.get(userId); if (current && current.timestamp === entryTimestamp && Date.now() - current.timestamp >= WALLET_CACHE_TTL_MS) { walletCache.delete(userId); } }, WALLET_CACHE_TTL_MS + 1000); }
+function getWalletCache(userId) { userId = String(userId); const entry = walletCache.get(userId); if (entry && Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) { return entry; } if (entry) { walletCache.delete(userId); } return undefined; }
+function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) { activeDepositAddresses.set(address, { userId: String(userId), expiresAt: expiresAtTimestamp }); const delay = expiresAtTimestamp - Date.now() + 1000; if (delay > 0) { setTimeout(() => { const current = activeDepositAddresses.get(address); if (current && current.expiresAt === expiresAtTimestamp) { activeDepositAddresses.delete(address); } }, delay); } else { removeActiveDepositAddressCache(address); } }
+function getActiveDepositAddressCache(address) { const entry = activeDepositAddresses.get(address); if (entry && Date.now() < entry.expiresAt) { return entry; } if (entry) { activeDepositAddresses.delete(address); } return undefined; }
+function removeActiveDepositAddressCache(address) { activeDepositAddresses.delete(address); }
+function addProcessedDepositTx(signature) { if (processedDepositTxSignatures.size >= MAX_PROCESSED_TX_CACHE_SIZE) { const oldestSig = processedDepositTxSignatures.values().next().value; if (oldestSig) { processedDepositTxSignatures.delete(oldestSig); } } processedDepositTxSignatures.add(signature); }
+function hasProcessedDepositTx(signature) { return processedDepositTxSignatures.has(signature); }
 
-// --- Other Utilities (keep as before) ---
-function generateReferralCode(length = 8) { /* ... implementation ... */ const byteLength = Math.ceil(length / 2); const randomBytes = crypto.randomBytes(byteLength); const hexString = randomBytes.toString('hex').slice(0, length); return `ref_${hexString}`; }
+// --- Other Utilities ---
+function generateReferralCode(length = 8) { const byteLength = Math.ceil(length / 2); const randomBytes = crypto.randomBytes(byteLength); const hexString = randomBytes.toString('hex').slice(0, length); return `ref_${hexString}`; }
 
 // --- End of Part 3 ---
 // index.js - Part 4: Game Logic Implementation
