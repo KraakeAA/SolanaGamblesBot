@@ -3902,7 +3902,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
 
 // --- End of Part 5 ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
-// --- VERSION: 3.1.0 --- (Revised DB Init)
+// --- VERSION: 3.1.0 --- (Revised DB Init - Syntax Fix)
 
 // --- Payout Job Handling ---
 
@@ -4618,12 +4618,12 @@ async function initializeDatabase() {
                  processed_at TIMESTAMPTZ,       -- When processing started
                  paid_at TIMESTAMPTZ             -- When payout was confirmed successful
              );`, [], client);
-        // Add unique constraint for milestone payouts to prevent duplicates
-         await queryDatabase(`
-             ALTER TABLE referral_payouts
-             ADD CONSTRAINT unique_milestone_payout UNIQUE (referrer_user_id, referee_user_id, payout_type, milestone_reached_lamports)
-             WHERE payout_type = 'milestone';
-         `, [], client).catch(e => { if (e.code !== '42P07' && e.code !== '42710') throw e; }); // Ignore if constraint/relation already exists
+        // **FIXED**: Use CREATE UNIQUE INDEX for partial constraint
+        await queryDatabase(`
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_refpayout_unique_milestone
+            ON referral_payouts (referrer_user_id, referee_user_id, payout_type, milestone_reached_lamports)
+            WHERE payout_type = 'milestone';
+        `, [], client);
 
 
         // Ledger (Audit Trail) - ensure FK to referral_payouts exists
@@ -4664,12 +4664,12 @@ async function initializeDatabase() {
         // Add/ensure columns exist
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS bet_details JSONB;`, [], client);
         // Ensure wager column exists AND has the check constraint - combine adding column and constraint definition
-        await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS wager_amount_lamports BIGINT NOT NULL DEFAULT 1 CHECK (wager_amount_lamports > 0);`, [], client); // Default 1 temporarily to allow adding check
-        await queryDatabase(`ALTER TABLE bets ALTER COLUMN wager_amount_lamports DROP DEFAULT;`, [], client); // Remove temporary default
+        // Add with constraint (default needed temporarily only if table already exists without NOT NULL, removed now)
+        await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS wager_amount_lamports BIGINT NOT NULL CHECK (wager_amount_lamports > 0);`, [], client);
+        // await queryDatabase(`ALTER TABLE bets ALTER COLUMN wager_amount_lamports DROP DEFAULT;`, [], client); // Only needed if default was added temporarily
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS payout_amount_lamports BIGINT;`, [], client);
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ;`, [], client);
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS priority INT NOT NULL DEFAULT 0;`, [], client);
-        // **REMOVED** the separate 'ADD CONSTRAINT wager_positive' line as it's handled by the inline CHECK above
 
 
         // --- INDEXES ---
