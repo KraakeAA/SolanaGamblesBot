@@ -9,13 +9,12 @@
     "docker:run": "docker run -it --env-file .env --rm solana-bot"
   },
   "dependencies": {
+    "@metamask/key-tree": "^10.1.1",
     "@solana/web3.js": "^1.95.1",
-    "bip32": "^4.0.0",
     "bip39": "^3.1.0",
     "bs58": "^5.0.0",
     "buffer": "^6.0.3",
     "dotenv": "^16.4.5",
-    "ed25519-hd-key": "latest",
     "express": "^4.19.2",
     "node-telegram-bot-api": "^0.66.0",
     "pg": "^8.12.0",
