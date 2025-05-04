@@ -1431,16 +1431,18 @@ async function getTotalReferralEarnings(userId) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.1.0 --- (Revised escapeMarkdownV2)
+// --- VERSION: 3.1.0 --- (Revised Derivation Path Strategy)
 
 // --- Solana Utilities ---
 
 /**
  * Derives a unique Solana keypair for deposits based on user ID and an index.
- * Uses BIP39 seed phrase and BIP44 path (m/44'/501'/account'/change').
+ * Uses BIP39 seed phrase and BIP44 path (m/44'/501'/0'/0/userIndex).
+ * **Changed Path Strategy** to use fixed hardened account/change and user-specific non-hardened index
+ * to potentially avoid bugs in ed25519-hd-key's hardened derivation.
  * Returns the public key and the derived seed necessary to reconstruct the private key for sweeping.
  * @param {string} userId The user's unique ID.
- * @param {number} addressIndex A unique index for this user's addresses (e.g., 0, 1, 2...).
+ * @param {number} addressIndex A unique index for this user's addresses (e.g., 0, 1, 2...). NOTE: Currently ignored in path, userSpecificIndex used directly.
  * @returns {Promise<{publicKey: PublicKey, derivedSeed: Uint8Array, derivationPath: string} | null>} Derived public key, seed, and path, or null on error.
  */
 async function generateUniqueDepositAddress(userId, addressIndex) {
@@ -1459,21 +1461,28 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
         }
         const masterSeed = await bip39.mnemonicToSeed(seedPhrase); // Generates a 64-byte seed
 
-        // 2. Derive the user-specific account path component
-        // Use SHA256 hash of user ID, take first 4 bytes as uint32 for account'
-        // This provides a deterministic but unique-per-user hardened path component.
+
+        // ------ START: NEW PATH GENERATION LOGIC ------
+        // 2. Derive the user-specific index component (NON-HARDENED)
         const hash = crypto.createHash('sha256').update(userId).digest();
-        const accountIndex = hash.readUInt32BE(0);
-        // Ensure it's treated as hardened (BIP32 uses indices >= 2^31 for hardened)
-        const hardenedAccountIndex = accountIndex | 0x80000000; // Add hardening bit
+        // Use the hash result for the final non-hardened index component.
+        // Ensure the index is within the valid range for non-hardened indices (0 to 2^31 - 1)
+        const userSpecificIndex = hash.readUInt32BE(0) % 0x80000000; // Max value 2^31 - 1
 
-        // 3. Construct the full BIP44 derivation path for Solana
-        // m / purpose' / coin_type' / account' / change' / address_index'
-        // We use account' for user, change'=0 (external), address_index' for the specific address index
-        // Using hardened paths for account and index for better security separation.
-        const derivationPath = `m/44'/501'/${hardenedAccountIndex >>> 0}'/0'/${addressIndex}'`; // Use >>> 0 to treat as unsigned 32-bit for path segment
+        // NOTE: We are currently ignoring the passed 'addressIndex' and deriving based only
+        // on the userId hash for the final path component. If multiple unique addresses *per user*
+        // are strictly required simultaneously, the logic to combine userSpecificIndex and addressIndex
+        // into a final non-hardened index needs implementation here, ensuring it stays < 2^31.
+        // Example Combination: const finalIndex = (userSpecificIndex + addressIndex) % 0x80000000;
 
-        // 4. Derive the private key seed using the path
+        // 3. Construct the full BIP44 derivation path using fixed account'/change'
+        // Path: m / purpose' / coin_type' / account' / change / address_index <- non-hardened final index
+        const derivationPath = `m/44'/501'/0'/0/${userSpecificIndex}`; // Use Account 0, Change 0 (standard external)
+        console.log(`[Address Gen User ${userId}] Using derivation path: ${derivationPath}`); // Log the new path format
+        // ------ END: NEW PATH GENERATION LOGIC ------
+
+
+        // 4. Derive the private key seed using the path (This line remains the same)
         const derivedSeedBytes = derivePath(derivationPath, masterSeed.toString('hex')).key; // derivePath expects hex seed
 
         // 5. Generate the Solana Keypair from the derived seed
@@ -1721,7 +1730,9 @@ function analyzeTransactionAmounts(tx, targetAddress) {
     // --- Method 1: Balance Changes (Most Reliable) ---
     if (tx.meta?.preBalances && tx.meta?.postBalances && tx.transaction?.message) {
         try {
-            const accountKeys = tx.transaction.message.accountKeys.map(k => k.toBase58());
+            // Handle both legacy and version 0 message formats for account keys
+             const accountKeys = (tx.transaction.message.staticAccountKeys || tx.transaction.message.accountKeys).map(k => k.toBase58());
+             const header = tx.transaction.message.header;
             const targetIndex = accountKeys.indexOf(targetAddress);
 
             if (targetIndex !== -1 &&
@@ -1733,22 +1744,22 @@ function analyzeTransactionAmounts(tx, targetAddress) {
                 if (balanceChange > 0n) {
                     transferAmount = balanceChange;
                     // Try to identify the payer (usually the first signer who had a negative balance change)
-                     const signers = tx.transaction.message.accountKeys.slice(0, tx.transaction.message.header.numRequiredSignatures);
-                     for (const signer of signers) {
-                         const signerIndex = accountKeys.indexOf(signer.toBase58());
+                     const signers = accountKeys.slice(0, header.numRequiredSignatures);
+                     for (const signerKey of signers) {
+                         const signerIndex = accountKeys.indexOf(signerKey);
                          if (signerIndex !== -1 && signerIndex !== targetIndex &&
                              tx.meta.preBalances.length > signerIndex && tx.meta.postBalances.length > signerIndex) {
                             const preSigner = BigInt(tx.meta.preBalances[signerIndex]);
                             const postSigner = BigInt(tx.meta.postBalances[signerIndex]);
                             if (postSigner < preSigner) {
-                                payerAddress = signer.toBase58();
+                                payerAddress = signerKey;
                                 break; // Assume first signer with decreased balance is payer
                             }
                          }
                      }
                      // Fallback to first signer if no obvious payer found
                      if (!payerAddress && signers.length > 0) {
-                         payerAddress = signers[0].toBase58();
+                         payerAddress = signers[0];
                      }
                 }
             }
@@ -1764,9 +1775,6 @@ function analyzeTransactionAmounts(tx, targetAddress) {
     // Only use if balance change method didn't find a positive transfer
     if (transferAmount === 0n && tx.meta?.logMessages) {
         // Example: Look for SystemProgram transfer logs
-        // Logs like "Program log: Instruction: Transfer", "Program log: Source: <payer>", "Program log: Destination: <target>", "Program log: Amount: <lamports>"
-        // This requires fragile string parsing and is less reliable than balance changes.
-        const transferRegex = /Program log: Instruction: Transfer/i;
         const sysTransferToRegex = /Transfer: src=([1-9A-HJ-NP-Za-km-z]+) dst=([1-9A-HJ-NP-Za-km-z]+) lamports=(\d+)/; // For newer log formats
 
         let potentialPayer = null;
@@ -1783,7 +1791,6 @@ function analyzeTransactionAmounts(tx, targetAddress) {
                  payerAddress = potentialPayer;
                  break;
             }
-
             // Add more sophisticated parsing here if needed for other transfer types or older log formats
         }
     }
@@ -1793,7 +1800,6 @@ function analyzeTransactionAmounts(tx, targetAddress) {
     } else {
        // console.log(`[analyzeAmounts] Analyzed TX for ${targetAddress}: No positive SOL transfer found.`);
     }
-
 
     return { transferAmount, payerAddress };
 }
@@ -1822,13 +1828,6 @@ async function safeSendMessage(chatId, text, options = {}) {
         text = text.substring(0, MAX_LENGTH - 3) + "...";
     }
 
-    // Ensure parse_mode is explicitly set if MarkdownV2 is used, otherwise leave unset
-    // Auto-detection removed to prevent accidental parsing errors if escaping is missed
-    // const containsMarkdownChars = /[\\_*\[\]()~`>#+\-=|{}.!]/.test(text);
-    // if (containsMarkdownChars && !options.parse_mode) {
-    //     console.warn(`[safeSendMessage] Message to ${chatId} contains MarkdownV2 chars but parse_mode not set. Sending as plain text.`);
-    // }
-
     return telegramSendQueue.add(async () => {
         try {
             const sentMessage = await bot.sendMessage(chatId, text, options);
@@ -1845,19 +1844,14 @@ async function safeSendMessage(chatId, text, options = {}) {
                      console.error(`  -> Message confirmed too long, even after potential truncation.`);
                 } else if (error.message.includes('400 Bad Request: can\'t parse entities')) {
                      console.error(`  -> Telegram Parse Error: Ensure proper MarkdownV2 escaping! Text snippet: ${text.substring(0, 100)}...`);
-                     // Consider adding more context logging here if possible
                 } else if (error.message.includes('403 Forbidden: bot was blocked by the user') || error.message.includes('403 Forbidden: user is deactivated')) {
                     console.warn(`  -> Bot blocked or user deactivated for chat/user ${chatId}. Consider marking user inactive.`);
-                    // Implement logic here to potentially deactivate the user in DB
                 } else if (error.message.includes('403 Forbidden: bot was kicked')) {
                     console.warn(`  -> Bot kicked from group chat ${chatId}. Consider cleaning up group-related data.`);
-                     // Implement cleanup logic
                 } else if (error.message.includes('429 Too Many Requests')) {
                     console.warn(`  -> Hit Telegram rate limits sending to ${chatId}. Queue should handle, but may indicate high load.`);
-                    // The queue automatically handles this, but persistent warnings might mean interval needs adjustment
                 }
             }
-            // Consider other errors like 404 chat not found, etc.
             return undefined; // Indicate failure
         }
     });
@@ -1905,7 +1899,6 @@ function escapeHtml(text) {
  */
 async function getUserDisplayName(chatId, userId) {
     try {
-        // Caching chat member info could be beneficial here if called frequently for the same users
         const member = await bot.getChatMember(chatId, userId);
         const user = member.user;
         let name = '';
@@ -1922,8 +1915,6 @@ async function getUserDisplayName(chatId, userId) {
         // Escape the final chosen name
         return escapeMarkdownV2(name);
     } catch (error) {
-        // Handle cases where user is not in chat or other API errors
-        // console.warn(`[getUserDisplayName] Error fetching chat member for user ${userId} in chat ${chatId}: ${error.message}`);
         // Fallback to generic name based on ID, already escaped
         return escapeMarkdownV2(`User_${String(userId).slice(-4)}`);
     }
@@ -1936,19 +1927,14 @@ async function getUserDisplayName(chatId, userId) {
 function updateWalletCache(userId, data) {
     userId = String(userId);
     const existing = walletCache.get(userId) || {};
-    // Use current timestamp for the new entry
     const entryTimestamp = Date.now();
     walletCache.set(userId, { ...existing, ...data, timestamp: entryTimestamp });
-
-    // Start TTL timer associated with this specific update
     setTimeout(() => {
         const current = walletCache.get(userId);
-        // Only delete if the timestamp matches the one we set, preventing accidental deletion if updated again quickly
         if (current && current.timestamp === entryTimestamp && Date.now() - current.timestamp >= WALLET_CACHE_TTL_MS) {
             walletCache.delete(userId);
-            // console.log(`[Cache] Wallet cache expired for user ${userId}`);
         }
-    }, WALLET_CACHE_TTL_MS + 1000); // Add buffer to timeout
+    }, WALLET_CACHE_TTL_MS + 1000);
 }
 
 /** Gets wallet cache data if not expired. */
@@ -1958,30 +1944,22 @@ function getWalletCache(userId) {
     if (entry && Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) {
         return entry;
     }
-    if (entry) { // Entry exists but is expired
-        walletCache.delete(userId); // Clean up expired entry
-    }
+    if (entry) { walletCache.delete(userId); }
     return undefined;
 }
 
 /** Adds or updates an active deposit address in the cache. */
 function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) {
-    // Add entry
     activeDepositAddresses.set(address, { userId: String(userId), expiresAt: expiresAtTimestamp });
-
-    // Set a timer to remove it specifically when it expires (or slightly after)
-    const delay = expiresAtTimestamp - Date.now() + 1000; // Check 1s after expiry
+    const delay = expiresAtTimestamp - Date.now() + 1000;
     if (delay > 0) {
         setTimeout(() => {
             const current = activeDepositAddresses.get(address);
-            // Remove only if it hasn't been updated/removed since
             if (current && current.expiresAt === expiresAtTimestamp) {
                  activeDepositAddresses.delete(address);
-                 // console.log(`[Cache] Deposit address cache expired/removed for ${address}`);
             }
         }, delay);
     } else {
-         // If already expired, remove immediately (shouldn't happen if called correctly)
          removeActiveDepositAddressCache(address);
     }
 }
@@ -1992,9 +1970,7 @@ function getActiveDepositAddressCache(address) {
     if (entry && Date.now() < entry.expiresAt) {
         return entry;
     }
-     if (entry) { // Entry exists but is expired according to its own expiry time
-        activeDepositAddresses.delete(address); // Clean up expired entry
-    }
+     if (entry) { activeDepositAddresses.delete(address); }
     return undefined;
 }
 
@@ -2006,11 +1982,9 @@ function removeActiveDepositAddressCache(address) {
 /** Adds a signature to the processed set and handles cache size limit. */
 function addProcessedDepositTx(signature) {
     if (processedDepositTxSignatures.size >= MAX_PROCESSED_TX_CACHE_SIZE) {
-        // Simple FIFO: remove the oldest entry (Set iteration order is insertion order)
         const oldestSig = processedDepositTxSignatures.values().next().value;
         if (oldestSig) {
             processedDepositTxSignatures.delete(oldestSig);
-            // console.log(`[Cache] Pruned oldest TX sig from cache: ${oldestSig.slice(0,6)}...`);
         }
     }
     processedDepositTxSignatures.add(signature);
