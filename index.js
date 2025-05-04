@@ -1492,7 +1492,7 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
 
         // 4. Create the root HD node from the master seed buffer
         // SLIP10Node expects Uint8Array, Buffer should work directly
-        const rootNode = await SLIP10Node.fromSeed(masterSeedBuffer);
+        const rootNode = await SLIP10Node.fromSeed(masterSeedBuffer, { curve: 'ed25519' });
 
         // 5. Derive the child node using the path (must prefix with 'slip10:')
         const childNode = await rootNode.derive(`slip10:${derivationPath}`);
