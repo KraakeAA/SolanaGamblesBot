@@ -1431,87 +1431,87 @@ async function getTotalReferralEarnings(userId) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.1.0 --- (Revised Derivation Path Strategy)
+// --- VERSION: 3.1.0 --- (Switched to @metamask/key-tree)
 
 // --- Solana Utilities ---
 
+import { SLIP10Node } from '@metamask/key-tree'; // Use the new library
+
 /**
  * Derives a unique Solana keypair for deposits based on user ID and an index.
- * Uses BIP39 seed phrase and BIP44 path (m/44'/501'/0'/0/userIndex).
- * **Changed Path Strategy** to use fixed hardened account/change and user-specific non-hardened index
- * to potentially avoid bugs in ed25519-hd-key's hardened derivation.
- * Returns the public key and the derived seed necessary to reconstruct the private key for sweeping.
+ * Uses BIP39 seed phrase and SLIP-10 path (m/44'/501'/account'/change'/addressIndex').
+ * Uses @metamask/key-tree library.
+ * Returns the public key and the 32-byte private key bytes needed for signing.
  * @param {string} userId The user's unique ID.
- * @param {number} addressIndex A unique index for this user's addresses (e.g., 0, 1, 2...). NOTE: Currently ignored in path, userSpecificIndex used directly.
- * @returns {Promise<{publicKey: PublicKey, derivedSeed: Uint8Array, derivationPath: string} | null>} Derived public key, seed, and path, or null on error.
+ * @param {number} addressIndex A unique index for this user's addresses (e.g., 0, 1, 2...).
+ * @returns {Promise<{publicKey: PublicKey, privateKeyBytes: Uint8Array, derivationPath: string} | null>} Derived public key, private key bytes, and path, or null on error.
  */
 async function generateUniqueDepositAddress(userId, addressIndex) {
     const logPrefix = `[Address Gen User ${userId}]`;
     try {
-        // +++++ START: ADD DEBUG LOGGING +++++ (Keep this for diagnostics)
+        // Debug Logging (Keep for now)
         const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
         console.log(`[Debug Deposit Gen] Runtime check - Type of seedPhrase: ${typeof seedPhrase}`);
-        if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) { // Check if it's a non-empty string
+        if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) {
              console.error(`[Debug Deposit Gen] CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is invalid or empty at runtime! Value: [${seedPhrase}]`);
-             // Throw an error here to make the failure explicit if the env var is missing/wrong
              throw new Error("DEPOSIT_MASTER_SEED_PHRASE environment variable not read correctly at runtime.");
-        } else {
-             const words = seedPhrase.trim().split(' ');
-             console.log(`[Debug Deposit Gen] Runtime check - Seed phrase retrieved. First word: "${words[0]}", Last word: "${words[words.length - 1]}", Word count: ${words.length}`);
         }
-        // +++++ END: ADD DEBUG LOGGING +++++
+        const words = seedPhrase.trim().split(' ');
+        console.log(`[Debug Deposit Gen] Runtime check - Seed phrase retrieved. First word: "${words[0]}", Last word: "${words[words.length - 1]}", Word count: ${words.length}`);
+        // End Debug Logging
 
         if (typeof userId !== 'string' || userId.length === 0 || typeof addressIndex !== 'number' || addressIndex < 0 || !Number.isInteger(addressIndex)) {
             console.error(`${logPrefix} Invalid userId or addressIndex`, { userId, addressIndex });
             return null;
         }
 
-        // 1. Get the master seed from the mnemonic phrase
-        // const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE; // Already got it above for logging
-        const masterSeed = await bip39.mnemonicToSeed(seedPhrase); // Generates a 64-byte seed
+        // 1. Get the master seed buffer from the mnemonic phrase
+        const masterSeedBuffer = await bip39.mnemonicToSeed(seedPhrase); // Returns a Buffer
 
-
-        // ------ START: REVISED PATH GENERATION LOGIC ------
-        // 2. Derive the user-specific index component (NON-HARDENED)
+        // 2. Derive the user-specific account path component (Hardened)
         const hash = crypto.createHash('sha256').update(userId).digest();
-        // Use the hash result for the final non-hardened index component.
-        // Ensure the index is within the valid range for non-hardened indices (0 to 2^31 - 1)
-        const userSpecificIndex = hash.readUInt32BE(0) % 0x80000000; // Max value 2^31 - 1
+        const accountIndex = hash.readUInt32BE(0);
+        const hardenedAccountIndex = accountIndex | 0x80000000; // Add hardening bit
 
-        // NOTE: We are currently ignoring the passed 'addressIndex' and deriving based only
-        // on the userId hash for the final path component. If multiple unique addresses *per user*
-        // are strictly required simultaneously, the logic to combine userSpecificIndex and addressIndex
-        // into a final non-hardened index needs implementation here, ensuring it stays < 2^31.
-        // Example Combination: const finalIndex = (userSpecificIndex + addressIndex) % 0x80000000;
+        // 3. Construct the *full* BIP44 derivation path for Solana using SLIP-10 format
+        // m / purpose' / coin_type' / account' / change' / address_index'
+        // Using hardened for account and address index for better security/separation
+        // NOTE: Standard Solana paths often use 0' for change. Let's stick to that.
+        const derivationPath = `m/44'/501'/${hardenedAccountIndex >>> 0}'/0'/${addressIndex}'`;
+        console.log(`[Address Gen User ${userId}] Using derivation path: ${derivationPath} with @metamask/key-tree`);
 
-        // 3. Construct the full BIP44 derivation path using fixed account'/change'
-        // Path: m / purpose' / coin_type' / account' / change / address_index <- non-hardened final index
-        const derivationPath = `m/44'/501'/0'/0/${userSpecificIndex}`; // Use Account 0, Change 0 (standard external)
-        console.log(`[Address Gen User ${userId}] Using derivation path: ${derivationPath}`); // Log the new path format
-        // ------ END: REVISED PATH GENERATION LOGIC ------
+        // 4. Create the root HD node from the master seed buffer
+        // SLIP10Node expects Uint8Array, Buffer should work directly
+        const rootNode = await SLIP10Node.fromSeed(masterSeedBuffer);
 
+        // 5. Derive the child node using the path (must prefix with 'slip10:')
+        const childNode = await rootNode.derive(`slip10:${derivationPath}`);
 
-        // 4. Derive the private key seed using the path (This line remains the same)
-        const derivedSeedBytes = derivePath(derivationPath, masterSeed.toString('hex')).key; // derivePath expects hex seed
+        // 6. Get the 32-byte private key from the derived node
+        // The 'privateKeyBytes' property holds the 32-byte private key scalar for Ed25519
+        const privateKeyBytes = childNode.privateKeyBytes;
+        if (!privateKeyBytes || privateKeyBytes.length !== 32) {
+             throw new Error(`Derived private key bytes are invalid (length: ${privateKeyBytes?.length}) using @metamask/key-tree`);
+        }
 
-        // 5. Generate the Solana Keypair from the derived seed
-        // nacl.sign.keyPair.fromSeed requires a 32-byte seed. The derived key is 64 bytes (priv+pub), use first 32 bytes as seed.
-        const keyPair = nacl.sign.keyPair.fromSeed(derivedSeedBytes.slice(0, 32));
-        const publicKey = new PublicKey(keyPair.publicKey);
+        // 7. Generate the Solana Keypair using Keypair.fromSeed() which expects the 32-byte private key
+        const keypair = Keypair.fromSeed(privateKeyBytes);
+        const publicKey = keypair.publicKey;
 
-        // 6. Return public key, path, and the *derived seed* (first 32 bytes) needed to reconstruct the private key later for sweeping
+        // 8. Return public key, path, and the 32-byte private key bytes (needed for reconstruction/sweeping)
         return {
             publicKey: publicKey,
-            derivedSeed: derivedSeedBytes.slice(0, 32), // Important for reconstructing Keypair to sign later
+            privateKeyBytes: privateKeyBytes, // Used to reconstruct Keypair for signing later
             derivationPath: derivationPath
         };
 
     } catch (error) {
-        console.error(`${logPrefix} Error deriving address for index ${addressIndex}: ${error.message}`);
+        console.error(`${logPrefix} Error deriving address using @metamask/key-tree for index ${addressIndex}: ${error.message}`);
         console.error(error.stack); // Log stack for debugging derivation errors
         return null;
     }
 }
+
 
 /**
  * Checks if a Solana error is likely retryable (network, rate limit, temporary node issues).
@@ -1632,7 +1632,6 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
         }
 
         // 2. Calculate Priority Fee (Simplified: using fixed base/max for now)
-        // A more dynamic approach would query recent fees: await solanaConnection.getRecentPrioritizationFees()
         const basePriorityFee = parseInt(process.env.PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS, 10);
         const maxPriorityFee = parseInt(process.env.PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS, 10);
         let priorityFeeMicroLamports = Math.max(1, Math.min(basePriorityFee, maxPriorityFee)); // Ensure at least 1 microLamport
