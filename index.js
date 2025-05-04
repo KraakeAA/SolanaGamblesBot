@@ -3902,7 +3902,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
 
 // --- End of Part 5 ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
-// --- VERSION: 3.1.0 ---
+// --- VERSION: 3.1.0 --- (Revised DB Init)
 
 // --- Payout Job Handling ---
 
@@ -4170,7 +4170,7 @@ async function monitorDepositsPolling() {
     monitorDepositsPolling.isRunning = true;
 
     const logPrefix = "[DepositMonitor Polling]";
-    console.log(`${logPrefix} Starting deposit check cycle...`);
+    // console.log(`${logPrefix} Starting deposit check cycle...`); // Less verbose logging
     const startTime = Date.now();
     let checkedAddresses = 0;
     let foundSignatures = 0;
@@ -4188,7 +4188,7 @@ async function monitorDepositsPolling() {
             monitorDepositsPolling.isRunning = false;
             return;
         }
-        console.log(`${logPrefix} Checking ${pendingAddresses.length} pending addresses...`);
+        // console.log(`${logPrefix} Checking ${pendingAddresses.length} pending addresses...`); // Less verbose
 
         // 2. For each address, check for recent signatures
         const sigFetchLimit = parseInt(process.env.DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT, 10);
@@ -4199,8 +4199,7 @@ async function monitorDepositsPolling() {
                 // Fetch recent signatures confirmed on the network
                 const signaturesInfo = await solanaConnection.getSignaturesForAddress(
                     pubKey,
-                    { limit: sigFetchLimit, commitment: DEPOSIT_CONFIRMATION_LEVEL },
-                    // 'confirmed' // Use connection default or specify override
+                    { limit: sigFetchLimit }, // Removed commitment here, rely on connection default
                 );
 
                 for (const sigInfo of signaturesInfo) {
@@ -4214,7 +4213,7 @@ async function monitorDepositsPolling() {
                         // Add to cache immediately to prevent re-queueing in the same cycle or near future
                         addProcessedDepositTx(sigInfo.signature);
                     } else if (hasProcessedDepositTx(sigInfo.signature)){
-                         // console.log(`${logPrefix} Signature ${sigInfo.signature.slice(0,6)} already processed/cached.`);
+                         // console.log(`${logPrefix} Signature ${sigInfo.signature.slice(0,6)} already processed/cached.`); // Verbose
                     }
                 }
                 // Optional: Small delay between addresses if hitting rate limits hard
@@ -4235,7 +4234,9 @@ async function monitorDepositsPolling() {
         console.error(`${logPrefix} Error during deposit monitoring cycle:`, error);
     } finally {
         const duration = Date.now() - startTime;
-        console.log(`${logPrefix} Cycle finished in ${duration}ms. Checked: ${checkedAddresses}. Found/Queued: ${foundSignatures}.`);
+        if (checkedAddresses > 0) { // Only log if work was done
+            console.log(`${logPrefix} Cycle finished in ${duration}ms. Checked: ${checkedAddresses}. Found/Queued: ${foundSignatures}.`);
+        }
         monitorDepositsPolling.isRunning = false; // Release lock
     }
 }
@@ -4425,13 +4426,17 @@ function setupTelegramListeners() {
         // Handle specific errors like ETELEGRAM: 401 Unauthorized, 409 Conflict, etc.
         if (error.code === 'EFATAL' || error.message.includes('401')) {
              console.error("❌❌ CRITICAL POLLING ERROR (e.g., Bad Token?). Shutting down.");
-             shutdown('POLLING_FATAL_ERROR', false).catch(()=>{});
-             setTimeout(() => process.exit(1), SHUTDOWN_FAIL_TIMEOUT_MS).unref();
+             // Force exit immediately on critical token/auth errors
+             process.exit(1);
+        } else if (error.message.includes('409 Conflict')) {
+             console.error("❌❌❌ Conflict! Another instance seems to be running with this token. Exiting.");
+             process.exit(1);
         }
+        // Log other polling errors but don't necessarily exit
     });
     bot.on('webhook_error', (error) => {
         console.error(`❌ Telegram Webhook Error: Code ${error.code} | ${error.message}`);
-        // Potentially try to switch back to polling if webhook fails persistently?
+        // Potentially try to switch back to polling if webhook fails persistently? More complex logic needed.
     });
     bot.on('error', (error) => { // General non-request related errors
         console.error('❌ General Bot Error:', error);
@@ -4442,6 +4447,9 @@ function setupTelegramListeners() {
 
 
 // --- Express Server Route Setup ---
+// Define webhookPath globally for use in setup and Railway check
+const webhookPath = `/bot${process.env.BOT_TOKEN}`;
+
 function setupExpressRoutes() {
     console.log("⚙️ Setting up Express routes...");
     // Root Info Endpoint
@@ -4479,7 +4487,6 @@ function setupExpressRoutes() {
     });
 
     // Telegram Webhook Handler
-    const webhookPath = `/bot${process.env.BOT_TOKEN}`;
     app.post(webhookPath, (req, res) => {
         // Validate request body somewhat
         if (req.body && typeof req.body === 'object' && req.body.update_id) {
@@ -4493,7 +4500,8 @@ function setupExpressRoutes() {
                       console.error("❌ Error adding webhook callback update to queue:", queueError);
                  });
             } else {
-                 console.warn("⚠️ Received unhandled update type via webhook:", Object.keys(req.body));
+                 // Ignore other update types for now
+                 // console.warn("⚠️ Received unhandled update type via webhook:", Object.keys(req.body));
             }
         } else {
              console.warn("⚠️ Received invalid/empty request on webhook path");
@@ -4514,7 +4522,7 @@ async function initializeDatabase() {
 
         // Use queryDatabase helper for consistency and logging
         console.log("  Ensuring core extensions...");
-        await queryDatabase(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`, [], client); // Example if needed later
+        // await queryDatabase(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`, [], client); // Example if needed later
 
         console.log("  Creating/Verifying tables...");
         // Wallets (User Info)
@@ -4610,6 +4618,13 @@ async function initializeDatabase() {
                  processed_at TIMESTAMPTZ,       -- When processing started
                  paid_at TIMESTAMPTZ             -- When payout was confirmed successful
              );`, [], client);
+        // Add unique constraint for milestone payouts to prevent duplicates
+         await queryDatabase(`
+             ALTER TABLE referral_payouts
+             ADD CONSTRAINT unique_milestone_payout UNIQUE (referrer_user_id, referee_user_id, payout_type, milestone_reached_lamports)
+             WHERE payout_type = 'milestone';
+         `, [], client).catch(e => { if (e.code !== '42P07' && e.code !== '42710') throw e; }); // Ignore if constraint/relation already exists
+
 
         // Ledger (Audit Trail) - ensure FK to referral_payouts exists
         await queryDatabase(`
@@ -4648,12 +4663,13 @@ async function initializeDatabase() {
             );`, [], client);
         // Add/ensure columns exist
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS bet_details JSONB;`, [], client);
-        await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS wager_amount_lamports BIGINT CHECK (wager_amount_lamports > 0);`, [], client);
+        // Ensure wager column exists AND has the check constraint - combine adding column and constraint definition
+        await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS wager_amount_lamports BIGINT NOT NULL DEFAULT 1 CHECK (wager_amount_lamports > 0);`, [], client); // Default 1 temporarily to allow adding check
+        await queryDatabase(`ALTER TABLE bets ALTER COLUMN wager_amount_lamports DROP DEFAULT;`, [], client); // Remove temporary default
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS payout_amount_lamports BIGINT;`, [], client);
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ;`, [], client);
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS priority INT NOT NULL DEFAULT 0;`, [], client);
-        // Ensure constraint exists
-        await queryDatabase(`ALTER TABLE bets ADD CONSTRAINT wager_positive CHECK (wager_amount_lamports > 0);`, [], client).catch(e => { if (e.code !== '42P07') throw e; }); // Ignore "already exists" error
+        // **REMOVED** the separate 'ADD CONSTRAINT wager_positive' line as it's handled by the inline CHECK above
 
 
         // --- INDEXES ---
@@ -4701,8 +4717,9 @@ async function initializeDatabase() {
 // --- Startup/Shutdown Helpers ---
 
 async function setupTelegramWebhook() {
+    // Use global webhookPath variable
     if (process.env.RAILWAY_ENVIRONMENT && process.env.RAILWAY_PUBLIC_DOMAIN) {
-        const webhookUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}${webhookPath}`; // webhookPath defined globally
+        const webhookUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}${webhookPath}`;
         console.log(`Attempting to set webhook to: ${webhookUrl}`);
         let attempts = 0; const maxAttempts = 3;
         while (attempts < maxAttempts) {
@@ -4758,10 +4775,11 @@ async function startPollingIfNeeded() {
         console.error("❌ Error managing polling state:", err.message);
          if (err.code === 'ETELEGRAM' && err.message.includes('409 Conflict')) {
              console.error("❌❌❌ Conflict! Another instance seems to be running with this token. Exiting.");
-             // Don't call shutdown here as it might interfere with the other instance
+             // Force exit immediately on conflict
              process.exit(1);
          } else if (err.response?.statusCode === 401 || err.message.includes('401 Unauthorized')) {
              console.error("❌❌❌ Unauthorized! Check BOT_TOKEN. Exiting.");
+             // Force exit immediately on auth error
              process.exit(1);
          }
          // Otherwise, log the error but try to continue (might be temporary)
