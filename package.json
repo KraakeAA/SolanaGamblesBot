@@ -9,7 +9,9 @@
     "docker:run": "docker run -it --env-file .env --rm solana-bot"
   },
   "dependencies": {
-    "@metamask/key-tree": "^10.1.1",
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0",
+    "@scure/bip32": "^1.3.2",
     "@solana/web3.js": "^1.95.1",
     "bip39": "^3.1.0",
     "bs58": "^5.0.0",
