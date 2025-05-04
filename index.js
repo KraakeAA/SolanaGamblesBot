@@ -1,8 +1,8 @@
-// index.js - Custodial Model with Buttons & Referrals (Refactored)
-// --- VERSION: 3.1.0 ---
+// index.js - Part 1: Imports, Environment Configuration, Core Initializations
+// --- VERSION: 3.1.0 --- (Updated Imports for @metamask/key-tree)
 
 // --- All Imports MUST come first ---
-import 'dotenv/config';
+import 'dotenv/config'; // Keep for local development via .env file
 import { Pool } from 'pg';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
@@ -20,13 +20,13 @@ import {
 import bs58 from 'bs58';
 import * as crypto from 'crypto';
 import PQueue from 'p-queue';
-import { Buffer } from 'buffer'; // Standard Node.js Buffer
+import { Buffer } from 'buffer';
 import bip39 from 'bip39'; // For mnemonic seed phrase generation/validation
-import { derivePath } from 'ed25519-hd-key'; // For BIP32 derivation
-import nacl from 'tweetnacl'; // For keypair generation from derived seed
+// import { derivePath } from 'ed25519-hd-key'; // <-- REMOVED OLD LIBRARY IMPORT
+import { SLIP10Node } from '@metamask/key-tree'; // <-- ADDED NEW LIBRARY IMPORT
+import nacl from 'tweetnacl'; // Keep for keypair generation from derived seed
 
 // Assuming RateLimitedConnection exists and works as intended
-// If not using it, replace `solanaConnection` initialization with `new Connection(...)`
 import RateLimitedConnection from './lib/solana-connection.js';
 
 // --- Deployment Check Log ---
@@ -40,10 +40,10 @@ console.log("⏳ Starting Solana Gambles Bot (Custodial, Buttons, v3.1.0)... Che
 const REQUIRED_ENV_VARS = [
     'BOT_TOKEN',
     'DATABASE_URL',
-    'DEPOSIT_MASTER_SEED_PHRASE', // **CHANGED**: Expect BIP39 Mnemonic Seed Phrase (SECRET)
+    'DEPOSIT_MASTER_SEED_PHRASE', // Expect BIP39 Mnemonic Seed Phrase (SECRET)
     'MAIN_BOT_PRIVATE_KEY',       // Used for general payouts (Withdrawals) (SECRET)
     // Optional separate key for referral payouts (falls back to MAIN_BOT_PRIVATE_KEY)
-    'REFERRAL_PAYOUT_PRIVATE_KEY',// (SECRET)
+    'REFERRAL_PAYOUT_PRIVATE_KEY',// (SECRET) - Presence checked, but allowed to be empty
     'RPC_URLS',                     // Comma-separated list of RPC URLs
 ];
 
@@ -70,7 +70,17 @@ REQUIRED_ENV_VARS.forEach((key) => {
 if (process.env.DEPOSIT_MASTER_SEED_PHRASE && !bip39.validateMnemonic(process.env.DEPOSIT_MASTER_SEED_PHRASE)) {
     console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is set but is not a valid BIP39 mnemonic.`);
     missingVars = true;
+} else if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) {
+    // This case was missed if DEPOSIT_MASTER_SEED_PHRASE was not in REQUIRED_ENV_VARS check above (it should be)
+    // Double check it's required
+     if (!REQUIRED_ENV_VARS.includes('DEPOSIT_MASTER_SEED_PHRASE')) REQUIRED_ENV_VARS.push('DEPOSIT_MASTER_SEED_PHRASE'); // Ensure it's checked
+     if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) {
+        // Now this error will trigger if it wasn't caught initially
+         console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is missing.`);
+         missingVars = true;
+     }
 }
+
 
 // Specific check for RPC_URLS content
 const parsedRpcUrls = (process.env.RPC_URLS || '').split(',').map(u => u.trim()).filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
@@ -82,28 +92,34 @@ if (parsedRpcUrls.length === 0) {
 }
 
 // Validate private keys format (basic check for base58)
-const validateBase58Key = (keyName) => {
+const validateBase58Key = (keyName, isRequired) => {
     const key = process.env[keyName];
-    if (key) {
+    if (key) { // If key is present, validate it
         try {
             const decoded = bs58.decode(key);
-            if (decoded.length !== 64) { // ed25519 private keys are 64 bytes (32 byte seed + 32 byte public key)
-                console.error(`❌ Environment variable ${keyName} has incorrect length after base58 decoding (Expected 64 bytes, Got ${decoded.length}).`);
-                return false;
+            if (decoded.length !== 64 && decoded.length !== 32) { // Allow 32 byte seed phrase equivalent or 64 byte secret key
+                // Refined check: Solana Keypair.fromSecretKey expects 64 bytes.
+                if (decoded.length !== 64) {
+                   console.error(`❌ Environment variable ${keyName} has incorrect length after base58 decoding (Expected 64 bytes for Secret Key, Got ${decoded.length}).`);
+                   return false;
+                }
             }
         } catch (e) {
             console.error(`❌ Failed to decode environment variable ${keyName} as base58: ${e.message}`);
             return false;
         }
-    } else if (REQUIRED_ENV_VARS.includes(keyName) && keyName !== 'REFERRAL_PAYOUT_PRIVATE_KEY') {
-        // Already caught by missingVars check, no need to log again unless optional and present but invalid
-        return false; // Return false if required and missing
+    } else if (isRequired) { // If key is required but not present
+        // This is already caught by the main missingVars check, but good to be explicit
+        return false;
     }
-    return true; // Valid or optional and not set
+    return true; // Valid format, or optional and not set
 };
 
-if (!validateBase58Key('MAIN_BOT_PRIVATE_KEY')) missingVars = true;
-if (!validateBase58Key('REFERRAL_PAYOUT_PRIVATE_KEY')) missingVars = true; // Check format if present
+// MAIN_BOT_PRIVATE_KEY is required
+if (!validateBase58Key('MAIN_BOT_PRIVATE_KEY', true)) missingVars = true;
+// REFERRAL_PAYOUT_PRIVATE_KEY is optional, only validate if present
+if (!validateBase58Key('REFERRAL_PAYOUT_PRIVATE_KEY', false)) missingVars = true;
+
 
 if (missingVars) {
     console.error("⚠️ Please set all required environment variables correctly. Exiting.");
@@ -185,7 +201,7 @@ const OPTIONAL_ENV_DEFAULTS = {
 
 // Assign defaults for optional vars if they are missing
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
-    if (!process.env[key]) {
+    if (process.env[key] === undefined) { // Check for undefined specifically
         process.env[key] = defaultValue;
     }
 });
@@ -255,7 +271,7 @@ const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
     retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
     commitment: process.env.RPC_COMMITMENT, // Default 'confirmed'
     httpHeaders: { 'User-Agent': `SolanaGamblesBot/3.1.0` },
-    // disableRetryOnRateLimit: false, // Allow retries on 429 by default? Depends on wrapper library
+    // clientId: `SolanaGamblesBot/3.1.0` // Set within RateLimitedConnection now
 });
 console.log("✅ Multi-RPC Solana connection instance created.");
 
@@ -274,7 +290,6 @@ const callbackQueue = new PQueue({
 const payoutProcessorQueue = new PQueue({ // Renamed from paymentProcessorQueue for clarity
     concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
     timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10),
-    // Payouts should ideally not timeout easily, but throwOnTimeout helps detect stalls
     throwOnTimeout: true
 });
 const depositProcessorQueue = new PQueue({ // Queue for processing confirmed deposits found by monitor
@@ -334,24 +349,21 @@ const GAME_CONFIG = {
         minBetLamports: BigInt(process.env.RACE_MIN_BET_LAMPORTS),
         maxBetLamports: BigInt(process.env.RACE_MAX_BET_LAMPORTS),
         houseEdge: parseFloat(process.env.RACE_HOUSE_EDGE)
-        // TODO: Define odds/horses within game logic handler
     },
     slots: {
         minBetLamports: BigInt(process.env.SLOTS_MIN_BET_LAMPORTS),
         maxBetLamports: BigInt(process.env.SLOTS_MAX_BET_LAMPORTS),
-        houseEdge: parseFloat(process.env.SLOTS_HOUSE_EDGE) // Use this to tune payouts
-        // TODO: Define symbols/payouts within game logic handler
+        houseEdge: parseFloat(process.env.SLOTS_HOUSE_EDGE)
     },
     roulette: {
         minBetLamports: BigInt(process.env.ROULETTE_MIN_BET_LAMPORTS),
         maxBetLamports: BigInt(process.env.ROULETTE_MAX_BET_LAMPORTS),
-        houseEdge: parseFloat(process.env.ROULETTE_HOUSE_EDGE) // Theoretical edge
-        // TODO: Define payouts within game logic handler
+        houseEdge: parseFloat(process.env.ROULETTE_HOUSE_EDGE)
     },
     war: {
         minBetLamports: BigInt(process.env.WAR_MIN_BET_LAMPORTS),
         maxBetLamports: BigInt(process.env.WAR_MAX_BET_LAMPORTS),
-        houseEdge: parseFloat(process.env.WAR_HOUSE_EDGE) // Mostly from ties
+        houseEdge: parseFloat(process.env.WAR_HOUSE_EDGE)
     }
 };
 // Basic validation function (can be expanded)
@@ -360,8 +372,8 @@ function validateGameConfig(config) {
     for (const game in config) {
         const gc = config[game];
         if (!gc) { errors.push(`Config for game "${game}" missing.`); continue; }
-        if (!gc.minBetLamports || gc.minBetLamports <= 0n) errors.push(`${game}.minBetLamports invalid (${gc.minBetLamports})`);
-        if (!gc.maxBetLamports || gc.maxBetLamports <= 0n) errors.push(`${game}.maxBetLamports invalid (${gc.maxBetLamports})`);
+        if (typeof gc.minBetLamports !== 'bigint' || gc.minBetLamports <= 0n) errors.push(`${game}.minBetLamports invalid (${gc.minBetLamports})`);
+        if (typeof gc.maxBetLamports !== 'bigint' || gc.maxBetLamports <= 0n) errors.push(`${game}.maxBetLamports invalid (${gc.maxBetLamports})`);
         if (gc.minBetLamports > gc.maxBetLamports) errors.push(`${game} minBet > maxBet`);
         if (isNaN(gc.houseEdge) || gc.houseEdge < 0 || gc.houseEdge >= 1) errors.push(`${game}.houseEdge invalid (${gc.houseEdge})`);
     }
