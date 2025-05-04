@@ -1445,9 +1445,7 @@ async function getTotalReferralEarnings(userId) {
 // index.js - Part 3: Solana Utilities & Telegram Helpers
 // --- VERSION: 3.1.0 --- (Switched to @metamask/key-tree)
 
-// --- Solana Utilities ---
-
-import { SLIP10Node } from '@metamask/key-tree'; // Use the new library
+// --- Solana Utilities --
 
 /**
  * Derives a unique Solana keypair for deposits based on user ID and an index.
