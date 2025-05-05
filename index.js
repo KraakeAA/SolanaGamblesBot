@@ -1,5 +1,5 @@
 // index.js - Part 1: Imports, Environment Configuration, Core Initializations
-// --- VERSION: 3.1.4 --- (Reverted to ed25519-hd-key for deposit address derivation)
+// --- VERSION: 3.1.4 --- (Incorporating createSafeIndex workaround for ed25519-hd-key RangeError)
 
 // --- All Imports MUST come first ---
 import 'dotenv/config'; // Keep for local development via .env file
@@ -18,12 +18,13 @@ import {
     SendTransactionError
 } from '@solana/web3.js';
 import bs58 from 'bs58';
-import * as crypto from 'crypto';
+import * as crypto from 'crypto'; // Keep for other crypto uses if any
+import { createHash } from 'crypto'; // *** ADDED for createSafeIndex ***
 import PQueue from 'p-queue';
 import { Buffer } from 'buffer';
 import bip39 from 'bip39'; // For mnemonic seed phrase generation/validation
 // ---- Library Change ----
-import { derivePath } from 'ed25519-hd-key'; // <-- RESTORED OLD LIBRARY IMPORT
+import { derivePath } from 'ed25519-hd-key'; // <-- RESTORED OLD LIBRARY IMPORT (with workaround now)
 // import { SLIP10Node } from '@metamask/key-tree'; // <-- REMOVED PROBLEMATIC LIBRARY IMPORT
 // ------------------------
 import nacl from 'tweetnacl'; // Keep for keypair generation from derived seed
@@ -32,11 +33,12 @@ import nacl from 'tweetnacl'; // Keep for keypair generation from derived seed
 import RateLimitedConnection from './lib/solana-connection.js';
 
 // --- Deployment Check Log ---
-console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} --- v3.1.4 ---`); // Updated Version
+// Use a version indicator reflecting the change if desired, e.g., 3.1.4-patch1
+console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} --- v3.1.4 (safeIndex patch) ---`);
 // --- END DEPLOYMENT CHECK ---
 
 
-console.log("⏳ Starting Solana Gambles Bot (Custodial, Buttons, v3.1.4)... Checking environment variables..."); // Updated Version
+console.log("⏳ Starting Solana Gambles Bot (Custodial, Buttons, v3.1.4 with safeIndex patch)... Checking environment variables...");
 
 // --- Environment Variable Configuration ---
 const REQUIRED_ENV_VARS = [
@@ -76,8 +78,8 @@ if (process.env.DEPOSIT_MASTER_SEED_PHRASE && !bip39.validateMnemonic(process.en
 } else if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) {
      if (!REQUIRED_ENV_VARS.includes('DEPOSIT_MASTER_SEED_PHRASE')) REQUIRED_ENV_VARS.push('DEPOSIT_MASTER_SEED_PHRASE'); // Ensure it's checked
      if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) {
-       console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is missing.`);
-       missingVars = true;
+      console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is missing.`);
+      missingVars = true;
      }
 }
 
@@ -150,23 +152,23 @@ const OPTIONAL_ENV_DEFAULTS = {
     'WAR_MIN_BET_LAMPORTS': '10000000',
     'WAR_MAX_BET_LAMPORTS': '1000000000',
     // --- Game Logic Parameters ---
-    'CF_HOUSE_EDGE': '0.03',            // 3% edge
-    'RACE_HOUSE_EDGE': '0.05',          // 5% edge
-    'SLOTS_HOUSE_EDGE': '0.10',         // Effective edge for slots payouts
-    'ROULETTE_HOUSE_EDGE': '0.05',      // Standard Roulette edge (0, 00) ~5.26%, simplified
-    'WAR_HOUSE_EDGE': '0.02',           // Approx edge in War (mainly from ties)
+    'CF_HOUSE_EDGE': '0.03',          // 3% edge
+    'RACE_HOUSE_EDGE': '0.05',        // 5% edge
+    'SLOTS_HOUSE_EDGE': '0.10',       // Effective edge for slots payouts
+    'ROULETTE_HOUSE_EDGE': '0.05',    // Standard Roulette edge (0, 00) ~5.26%, simplified
+    'WAR_HOUSE_EDGE': '0.02',         // Approx edge in War (mainly from ties)
     // --- Referral System ---
     'REFERRAL_INITIAL_BET_MIN_LAMPORTS': '10000000', // Min first bet size to trigger initial reward (0.01 SOL)
     'REFERRAL_MILESTONE_REWARD_PERCENT': '0.005',    // 0.5% of wagered amount for milestones
     // --- Technical / Performance ---
-    'RPC_MAX_CONCURRENT': '8',          // Concurrent requests for RateLimitedConnection
+    'RPC_MAX_CONCURRENT': '8',        // Concurrent requests for RateLimitedConnection
     'RPC_RETRY_BASE_DELAY': '600',
     'RPC_MAX_RETRIES': '3',
     'RPC_RATE_LIMIT_COOLOFF': '1500',
     'RPC_RETRY_MAX_DELAY': '15000',
     'RPC_RETRY_JITTER': '0.2',
-    'RPC_COMMITMENT': 'confirmed',        // Default commitment for reads
-    'MSG_QUEUE_CONCURRENCY': '5',         // Incoming Telegram message processing
+    'RPC_COMMITMENT': 'confirmed',      // Default commitment for reads
+    'MSG_QUEUE_CONCURRENCY': '5',       // Incoming Telegram message processing
     'MSG_QUEUE_TIMEOUT_MS': '10000',
     'CALLBACK_QUEUE_CONCURRENCY': '8',    // Button callback processing
     'CALLBACK_QUEUE_TIMEOUT_MS': '15000',
@@ -180,7 +182,7 @@ const OPTIONAL_ENV_DEFAULTS = {
     'DEPOSIT_MONITOR_INTERVAL_MS': '20000', // How often to check for deposits (polling method)
     'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '50', // How many pending addresses to check per cycle
     'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '5', // How many recent signatures to check per address
-    'DB_POOL_MAX': '25',                  // Max DB connections
+    'DB_POOL_MAX': '25',              // Max DB connections
     'DB_POOL_MIN': '5',
     'DB_IDLE_TIMEOUT': '30000',
     'DB_CONN_TIMEOUT': '5000',
@@ -268,8 +270,8 @@ const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
     retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
     retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
     commitment: process.env.RPC_COMMITMENT, // Default 'confirmed'
-    httpHeaders: { 'User-Agent': `SolanaGamblesBot/3.1.4` }, // Updated version
-    // clientId: `SolanaGamblesBot/3.1.4` // Set within RateLimitedConnection now (Updated version)
+    httpHeaders: { 'User-Agent': `SolanaGamblesBot/3.1.4-safeIndex` }, // Indicate patch
+    // clientId: `SolanaGamblesBot/3.1.4-safeIndex` // Set within RateLimitedConnection now
 });
 console.log("✅ Multi-RPC Solana connection instance created.");
 
@@ -1466,22 +1468,38 @@ async function getTotalReferralEarnings(userId) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.1.4 --- (Reverted deposit address generation to use ed25519-hd-key)
+// --- VERSION: 3.1.4 --- (Incorporating createSafeIndex workaround for ed25519-hd-key RangeError)
 
 // --- Solana Utilities --
+
+// *** ADDED Helper function to create safe index ***
+// Uses import { createHash } from 'crypto'; -> Ensure this is added in Part 1 imports
+function createSafeIndex(userId) {
+    // Hash the userId to fixed-size output
+    const hash = createHash('sha256')
+        .update(String(userId))
+        .digest();
+    
+    // Take last 4 bytes and convert to UInt32 (always < 2^32)
+    // Using last 4 bytes as in the proposal. First 4 bytes (original method) would also work.
+    const index = hash.readUInt32BE(hash.length - 4); 
+    
+    // Ensure it's below hardening threshold (2^31)
+    return index % 2147483648; // 0 <= index < 2^31
+}
 
 /**
  * Derives a unique Solana keypair for deposits based on user ID and an index.
  * Uses BIP39 seed phrase and SLIP-10 path (m/44'/501'/account'/change'/addressIndex').
- * Uses ed25519-hd-key library (Reverted).
+ * Uses ed25519-hd-key library (with safeIndex workaround).
  * Returns the public key and the 32-byte private key bytes needed for signing.
  * @param {string} userId The user's unique ID.
  * @param {number} addressIndex A unique index for this user's addresses (e.g., 0, 1, 2...).
  * @returns {Promise<{publicKey: PublicKey, privateKeyBytes: Uint8Array, derivationPath: string} | null>} Derived public key, private key bytes, and path, or null on error.
  */
-async function generateUniqueDepositAddress(userId, addressIndex) {
+async function generateUniqueDepositAddress(userId, addressIndex) { // Make sure 'addressIndex' is the correct variable name passed in
     const logPrefix = `[Address Gen User ${userId} Index ${addressIndex}]`;
-    console.log(`${logPrefix} Starting address generation using ed25519-hd-key...`); // Updated log
+    console.log(`${logPrefix} Starting address generation using ed25519-hd-key (with safeIndex)...`); // Updated log
 
     try {
         const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
@@ -1506,16 +1524,17 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
         }
         console.log(`${logPrefix} Seed buffer generated successfully.`);
 
-        // 2. Derive the user-specific account path component (Hardened)
-        console.log(`${logPrefix} Deriving account index from user ID...`);
-        const hash = crypto.createHash('sha256').update(userId).digest();
-        const accountIndex = hash.readUInt32BE(0);
-        const hardenedAccountIndex = accountIndex | 0x80000000;
-        console.log(`${logPrefix} Account index derived: ${hardenedAccountIndex >>> 0}' (Hardened)`);
+        // 2. Derive the user-specific SAFE account path component (Hardened)
+        // *** MODIFIED SECTION START ***
+        console.log(`${logPrefix} Deriving safe account index from user ID...`);
+        const safeIndex = createSafeIndex(userId); // Call the new helper function
+        console.log(`${logPrefix} Safe account index derived: ${safeIndex}' (Hardened)`);
+        // *** MODIFIED SECTION END ***
 
-        // 3. Construct the *full* BIP44 derivation path for Solana
-        // m / purpose' / coin_type' / account' / change' / address_index'
-        const derivationPath = `m/44'/501'/${hardenedAccountIndex >>> 0}'/0'/${addressIndex}'`;
+
+        // 3. Construct the *full* BIP44 derivation path for Solana using the safe index
+        // *** UPDATED PATH CONSTRUCTION ***
+        const derivationPath = `m/44'/501'/${safeIndex}'/0'/${addressIndex}'`; // Use safeIndex, standard change level '0', final addressIndex
         console.log(`${logPrefix} Constructed derivation path: ${derivationPath}`);
 
         // ---- Use ed25519-hd-key ----
@@ -1531,21 +1550,22 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
 
         // 7. Generate the Solana Keypair using Keypair.fromSeed()
         console.log(`${logPrefix} Generating Solana Keypair from derived seed bytes...`);
-        const keypair = Keypair.fromSeed(privateKeyBytes);
-        const publicKey = keypair.publicKey;
+        const keypair = Keypair.fromSeed(privateKeyBytes); // Generate the Keypair object
+        const publicKey = keypair.publicKey; // Get the PublicKey object from the keypair
         console.log(`${logPrefix} Solana Keypair generated. Public Key: ${publicKey.toBase58()}`);
 
         // 8. Return public key, path, and the 32-byte private key bytes
-        console.log(`${logPrefix} Address generation complete using ed25519-hd-key.`);
+        console.log(`${logPrefix} Address generation complete using ed25519-hd-key (with safeIndex).`);
+        // Return the required structure
         return {
-            publicKey: publicKey,
-            privateKeyBytes: privateKeyBytes, // Still return bytes needed for potential sweeping/signing
-            derivationPath: derivationPath
+            publicKey: publicKey, // The PublicKey object
+            privateKeyBytes: privateKeyBytes, // The raw 32-byte private key
+            derivationPath: derivationPath // The path used
         };
 
     } catch (error) {
         console.error(`${logPrefix} Error during address generation using ed25519-hd-key: ${error.message}`);
-        console.error(`${logPrefix} Error Stack: ${error.stack}`);
+        console.error(`${logPrefix} Error Stack: ${error.stack}`); // Keep stack trace logging
         return null;
     }
 }
@@ -1767,26 +1787,26 @@ function analyzeTransactionAmounts(tx, targetAddress) {
         try {
              const accountKeys = (tx.transaction.message.staticAccountKeys || tx.transaction.message.accountKeys).map(k => k.toBase58());
              const header = tx.transaction.message.header;
-            const targetIndex = accountKeys.indexOf(targetAddress);
-            if (targetIndex !== -1 && tx.meta.preBalances.length > targetIndex && tx.meta.postBalances.length > targetIndex) {
-                const preBalance = BigInt(tx.meta.preBalances[targetIndex]);
-                const postBalance = BigInt(tx.meta.postBalances[targetIndex]);
-                const balanceChange = postBalance - preBalance;
-                if (balanceChange > 0n) {
-                    transferAmount = balanceChange;
-                    console.log(`${logPrefix} Positive balance change detected: ${transferAmount} lamports.`);
-                     const signers = accountKeys.slice(0, header.numRequiredSignatures);
-                     for (const signerKey of signers) {
-                         const signerIndex = accountKeys.indexOf(signerKey);
-                         if (signerIndex !== -1 && signerIndex !== targetIndex && tx.meta.preBalances.length > signerIndex && tx.meta.postBalances.length > signerIndex) {
-                            const preSigner = BigInt(tx.meta.preBalances[signerIndex]);
-                            const postSigner = BigInt(tx.meta.postBalances[signerIndex]);
-                            if (postSigner < preSigner) { payerAddress = signerKey; console.log(`${logPrefix} Identified likely payer (signer with negative balance change): ${payerAddress}`); break; }
-                         }
-                     }
-                    if (!payerAddress && signers.length > 0) { payerAddress = signers[0]; console.log(`${logPrefix} Could not find signer with negative balance change, falling back to first signer as payer: ${payerAddress}`); }
-                } else { console.log(`${logPrefix} No positive balance change found for target address.`); }
-            } else { console.log(`${logPrefix} Target address not found in account keys or balance arrays incomplete.`); }
+             const targetIndex = accountKeys.indexOf(targetAddress);
+             if (targetIndex !== -1 && tx.meta.preBalances.length > targetIndex && tx.meta.postBalances.length > targetIndex) {
+                 const preBalance = BigInt(tx.meta.preBalances[targetIndex]);
+                 const postBalance = BigInt(tx.meta.postBalances[targetIndex]);
+                 const balanceChange = postBalance - preBalance;
+                 if (balanceChange > 0n) {
+                     transferAmount = balanceChange;
+                     console.log(`${logPrefix} Positive balance change detected: ${transferAmount} lamports.`);
+                      const signers = accountKeys.slice(0, header.numRequiredSignatures);
+                      for (const signerKey of signers) {
+                          const signerIndex = accountKeys.indexOf(signerKey);
+                          if (signerIndex !== -1 && signerIndex !== targetIndex && tx.meta.preBalances.length > signerIndex && tx.meta.postBalances.length > signerIndex) {
+                              const preSigner = BigInt(tx.meta.preBalances[signerIndex]);
+                              const postSigner = BigInt(tx.meta.postBalances[signerIndex]);
+                              if (postSigner < preSigner) { payerAddress = signerKey; console.log(`${logPrefix} Identified likely payer (signer with negative balance change): ${payerAddress}`); break; }
+                          }
+                      }
+                     if (!payerAddress && signers.length > 0) { payerAddress = signers[0]; console.log(`${logPrefix} Could not find signer with negative balance change, falling back to first signer as payer: ${payerAddress}`); }
+                 } else { console.log(`${logPrefix} No positive balance change found for target address.`); }
+             } else { console.log(`${logPrefix} Target address not found in account keys or balance arrays incomplete.`); }
         } catch (e) { console.warn(`${logPrefix} Error analyzing balance changes: ${e.message}`); transferAmount = 0n; payerAddress = null; }
     } else { console.log(`${logPrefix} Balance change analysis skipped: Meta or message data missing.`); }
 
