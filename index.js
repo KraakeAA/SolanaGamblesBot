@@ -4702,40 +4702,57 @@ async function sweepDepositAddresses() {
                 }
 
                 // 2. Check balance
-                const balance = await solanaConnection.getBalance(depositAddressKeypair.publicKey, 'confirmed'); // Use confirmed for balance check
+                const balanceNum = await solanaConnection.getBalance(depositAddressKeypair.publicKey, 'confirmed'); // balanceNum is a NUMBER
 
-                // 3. Check if sweepable (balance > fee allowance)
-                if (balance <= SWEEP_FEE_ALLOWANCE_LAMPORTS) {
-                    console.log(`${addrLogPrefix} Balance (${balance}) too low to sweep (Allowance: ${SWEEP_FEE_ALLOWANCE_LAMPORTS}). Marking as swept.`);
-                    // Mark as swept even if balance is low to avoid re-checking
+                // <<< FIX: Convert balance to BigInt >>>
+                const balanceBigInt = BigInt(balanceNum);
+
+                // 3. Check if sweepable (using BigInt comparison)
+                // <<< FIX: Compare BigInt with BigInt >>>
+                if (balanceBigInt <= SWEEP_FEE_ALLOWANCE_LAMPORTS) {
+                    console.log(`${addrLogPrefix} Balance (${balanceBigInt}) too low to sweep (Allowance: ${SWEEP_FEE_ALLOWANCE_LAMPORTS}). Marking as swept.`);
+                    // Mark as swept even if balance is low
                      await queryDatabase("UPDATE deposit_addresses SET status = 'swept' WHERE id = $1 AND status = 'used'", [addrData.id], pool);
                     continue; // Move to next address
                 }
 
-                const amountToSend = balance - SWEEP_FEE_ALLOWANCE_LAMPORTS;
-                console.log(`${addrLogPrefix} Balance: ${balance}. Sweeping ${amountToSend} lamports to ${mainWalletPubKey.toBase58()}`);
+                // <<< FIX: Subtract BigInt from BigInt >>>
+                const amountToSend = balanceBigInt - SWEEP_FEE_ALLOWANCE_LAMPORTS; // amountToSend is now correctly a BigInt
+
+                // Ensure amountToSend is positive (it should be based on the check above, but good safety check)
+                if (amountToSend <= 0n) {
+                     console.log(`${addrLogPrefix} Calculated amountToSend (${amountToSend}) is not positive after fee allowance. Skipping.`);
+                     // Optionally mark as swept if balance is only fee allowance
+                     if(balanceBigInt === SWEEP_FEE_ALLOWANCE_LAMPORTS) {
+                         await queryDatabase("UPDATE deposit_addresses SET status = 'swept' WHERE id = $1 AND status = 'used'", [addrData.id], pool);
+                     }
+                     continue;
+                }
+
+
+                console.log(`${addrLogPrefix} Balance: ${balanceBigInt}. Sweeping ${amountToSend} lamports to ${mainWalletPubKey.toBase58()}`);
 
                 // 4. Build Transaction
                 const { blockhash, lastValidBlockHeight } = await solanaConnection.getLatestBlockhash('confirmed');
                 const transaction = new Transaction({
                     recentBlockhash: blockhash,
-                    feePayer: depositAddressKeypair.publicKey, // The deposit address pays its own sweep fee
+                    feePayer: depositAddressKeypair.publicKey,
                     lastValidBlockHeight: lastValidBlockHeight
                 }).add(
                     SystemProgram.transfer({
                         fromPubkey: depositAddressKeypair.publicKey,
                         toPubkey: mainWalletPubKey,
-                        lamports: amountToSend,
+                        lamports: amountToSend, // Pass the BigInt amountToSend here
                     })
                 );
 
-                // 5. Sign and Send
+                // 5. Sign and Send (rest of the logic remains the same)
                 const signature = await sendAndConfirmTransaction(
                     solanaConnection,
                     transaction,
-                    [depositAddressKeypair], // Sign with the derived deposit address keypair
+                    [depositAddressKeypair],
                     {
-                        commitment: 'confirmed', // Confirm the sweep transaction
+                        commitment: 'confirmed',
                         skipPreflight: false,
                     }
                 );
