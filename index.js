@@ -1471,7 +1471,7 @@ async function getTotalReferralEarnings(userId) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.1.1 --- (Fixed @metamask/key-tree curve error, Added Logging)
+// --- VERSION: 3.1.2 --- (Attempt 2: Fix @metamask/key-tree curve error by ensuring Uint8Array seed + explicit curve option)
 
 // --- Solana Utilities --
 
@@ -1485,96 +1485,89 @@ async function getTotalReferralEarnings(userId) {
  * @returns {Promise<{publicKey: PublicKey, privateKeyBytes: Uint8Array, derivationPath: string} | null>} Derived public key, private key bytes, and path, or null on error.
  */
 async function generateUniqueDepositAddress(userId, addressIndex) {
-    const logPrefix = `[Address Gen User ${userId} Index ${addressIndex}]`; // [LOGGING ADDED] Include index
-    console.log(`${logPrefix} Starting address generation.`); // [LOGGING ADDED] Entry log
+    const logPrefix = `[Address Gen User ${userId} Index ${addressIndex}]`;
+    console.log(`${logPrefix} Starting address generation.`);
 
     try {
         const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
-        // Runtime check for seed phrase presence (already checked at startup, but good safety)
         if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) {
             console.error(`${logPrefix} CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is invalid or empty at runtime! Cannot generate deposit address.`);
             throw new Error("DEPOSIT_MASTER_SEED_PHRASE environment variable not read correctly at runtime.");
         }
-        // [LOGGING ADDED] Optional: Log partial seed phrase info if needed for debugging, BE CAREFUL
-        // const words = seedPhrase.trim().split(' ');
-        // console.log(`${logPrefix} Using seed phrase starting with "${words[0]}" and ending with "${words[words.length - 1]}". Word count: ${words.length}`);
 
-        // Validate inputs
         if (typeof userId !== 'string' || userId.length === 0 || typeof addressIndex !== 'number' || addressIndex < 0 || !Number.isInteger(addressIndex)) {
             console.error(`${logPrefix} Invalid userId or addressIndex`, { userId, addressIndex });
             return null;
         }
-        console.log(`${logPrefix} Inputs validated. User: ${userId}, Index: ${addressIndex}`); // [LOGGING ADDED] Input validation log
+        console.log(`${logPrefix} Inputs validated. User: ${userId}, Index: ${addressIndex}`);
 
         // 1. Get the master seed buffer from the mnemonic phrase
-        console.log(`${logPrefix} Generating seed buffer from mnemonic...`); // [LOGGING ADDED] Step log
-        const masterSeedBuffer = await bip39.mnemonicToSeed(seedPhrase); // Returns a Buffer
+        console.log(`${logPrefix} Generating seed buffer from mnemonic...`);
+        const masterSeedBuffer = await bip39.mnemonicToSeed(seedPhrase);
         if (!masterSeedBuffer || masterSeedBuffer.length === 0) {
             throw new Error("Failed to generate seed buffer from mnemonic.");
         }
-        console.log(`${logPrefix} Seed buffer generated successfully.`); // [LOGGING ADDED] Step success log
+        console.log(`${logPrefix} Seed buffer generated successfully.`);
+
+        // ---- FIX ATTEMPT 2: Explicit Uint8Array conversion AND restore curve option ----
+        console.log(`${logPrefix} Explicitly converting seed Buffer to Uint8Array...`);
+        const seedBytes = Uint8Array.from(masterSeedBuffer);
+        // --------------------------------------------------------------------------------
 
         // 2. Derive the user-specific account path component (Hardened)
-        console.log(`${logPrefix} Deriving account index from user ID...`); // [LOGGING ADDED] Step log
+        console.log(`${logPrefix} Deriving account index from user ID...`);
         const hash = crypto.createHash('sha256').update(userId).digest();
         const accountIndex = hash.readUInt32BE(0);
-        const hardenedAccountIndex = accountIndex | 0x80000000; // Add hardening bit
-        console.log(`${logPrefix} Account index derived: ${hardenedAccountIndex >>> 0}' (Hardened)`); // [LOGGING ADDED] Step success log
+        const hardenedAccountIndex = accountIndex | 0x80000000;
+        console.log(`${logPrefix} Account index derived: ${hardenedAccountIndex >>> 0}' (Hardened)`);
 
-        // 3. Construct the *full* BIP44 derivation path for Solana using SLIP-10 format
-        // m / purpose' / coin_type' / account' / change' / address_index'
-        // Using hardened for account and address index for better security/separation
-        // Using 0' for change' as is common for Solana.
+        // 3. Construct the *full* BIP44 derivation path
         const derivationPath = `m/44'/501'/${hardenedAccountIndex >>> 0}'/0'/${addressIndex}'`;
-        console.log(`${logPrefix} Constructed derivation path: ${derivationPath}`); // [LOGGING ADDED] Step success log
+        console.log(`${logPrefix} Constructed derivation path: ${derivationPath}`);
 
-        // 4. Create the root HD node from the master seed buffer using @metamask/key-tree
-        console.log(`${logPrefix} Creating root SLIP10Node from seed buffer...`); // [LOGGING ADDED] Step log
-        // ---- THE FIX IS HERE ----
-        // Removed the second argument `{ curve: 'ed25519' }` as it was causing the "Invalid curve" error.
-        // The library likely infers the curve or doesn't need it specified at the root seed level.
-        const rootNode = await SLIP10Node.fromSeed(masterSeedBuffer);
-        // -------------------------
+        // 4. Create the root HD node from the master seed bytes using @metamask/key-tree
+        console.log(`${logPrefix} Creating root SLIP10Node from Uint8Array seed bytes with explicit curve option...`);
+        // ---- FIX ATTEMPT 2: Pass Uint8Array and RESTORE the curve option ----
+        const rootNode = await SLIP10Node.fromSeed(seedBytes, { curve: 'ed25519' });
+        // ---------------------------------------------------------------------
         if (!rootNode) {
              throw new Error("Failed to create root SLIP10Node from seed.");
         }
-        console.log(`${logPrefix} Root SLIP10Node created successfully.`); // [LOGGING ADDED] Step success log
+        console.log(`${logPrefix} Root SLIP10Node created successfully.`);
 
-        // 5. Derive the child node using the path (must prefix with 'slip10:')
-        console.log(`${logPrefix} Deriving child node using path: slip10:${derivationPath}...`); // [LOGGING ADDED] Step log
+        // 5. Derive the child node using the path
+        console.log(`${logPrefix} Deriving child node using path: slip10:${derivationPath}...`);
         const childNode = await rootNode.derive(`slip10:${derivationPath}`);
         if (!childNode) {
             throw new Error(`Failed to derive child node for path slip10:${derivationPath}`);
         }
-        console.log(`${logPrefix} Child node derived successfully.`); // [LOGGING ADDED] Step success log
+        console.log(`${logPrefix} Child node derived successfully.`);
 
         // 6. Get the 32-byte private key from the derived node
-        // The 'privateKeyBytes' property holds the 32-byte private key scalar for Ed25519
-        console.log(`${logPrefix} Extracting private key bytes from child node...`); // [LOGGING ADDED] Step log
+        console.log(`${logPrefix} Extracting private key bytes from child node...`);
         const privateKeyBytes = childNode.privateKeyBytes;
         if (!privateKeyBytes || privateKeyBytes.length !== 32) {
             throw new Error(`Derived private key bytes are invalid (length: ${privateKeyBytes?.length}) using @metamask/key-tree`);
         }
-        console.log(`${logPrefix} Private key bytes extracted successfully (Length: ${privateKeyBytes.length}).`); // [LOGGING ADDED] Step success log
+        console.log(`${logPrefix} Private key bytes extracted successfully (Length: ${privateKeyBytes.length}).`);
 
-        // 7. Generate the Solana Keypair using Keypair.fromSeed() which expects the 32-byte private key
-        console.log(`${logPrefix} Generating Solana Keypair from derived seed bytes...`); // [LOGGING ADDED] Step log
+        // 7. Generate the Solana Keypair using Keypair.fromSeed()
+        console.log(`${logPrefix} Generating Solana Keypair from derived seed bytes...`);
         const keypair = Keypair.fromSeed(privateKeyBytes);
         const publicKey = keypair.publicKey;
-        console.log(`${logPrefix} Solana Keypair generated. Public Key: ${publicKey.toBase58()}`); // [LOGGING ADDED] Step success log
+        console.log(`${logPrefix} Solana Keypair generated. Public Key: ${publicKey.toBase58()}`);
 
-        // 8. Return public key, path, and the 32-byte private key bytes (needed for reconstruction/sweeping)
-        console.log(`${logPrefix} Address generation complete.`); // [LOGGING ADDED] Final success log
+        // 8. Return public key, path, and the 32-byte private key bytes
+        console.log(`${logPrefix} Address generation complete.`);
         return {
             publicKey: publicKey,
-            privateKeyBytes: privateKeyBytes, // Used to reconstruct Keypair for signing later
+            privateKeyBytes: privateKeyBytes,
             derivationPath: derivationPath
         };
 
     } catch (error) {
-        // [LOGGING MODIFIED] Enhanced error logging
         console.error(`${logPrefix} Error during address generation: ${error.message}`);
-        console.error(`${logPrefix} Error Stack: ${error.stack}`); // Log stack for detailed debugging
+        console.error(`${logPrefix} Error Stack: ${error.stack}`);
         return null;
     }
 }
@@ -1694,26 +1687,26 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     }
 
     const amountSOL = Number(amountToSend) / LAMPORTS_PER_SOL;
-    console.log(`[${operationId}] Attempting to send ${amountSOL.toFixed(SOL_DECIMALS)} SOL from ${payerWallet.publicKey.toBase58()} to ${recipientPubKey.toBase58()} using ${keyTypeForLog} key...`); // [LOGGING ADDED] Log sender address
+    console.log(`[${operationId}] Attempting to send ${amountSOL.toFixed(SOL_DECIMALS)} SOL from ${payerWallet.publicKey.toBase58()} to ${recipientPubKey.toBase58()} using ${keyTypeForLog} key...`); // Log sender address
 
     try {
         // 1. Get latest blockhash
-        console.log(`[${operationId}] Fetching latest blockhash...`); // [LOGGING ADDED] Step log
+        console.log(`[${operationId}] Fetching latest blockhash...`);
         const { blockhash, lastValidBlockHeight } = await solanaConnection.getLatestBlockhash(DEPOSIT_CONFIRMATION_LEVEL);
         if (!blockhash || !lastValidBlockHeight) {
             throw new Error('Failed to get valid latest blockhash object.');
         }
-        console.log(`[${operationId}] Got blockhash: ${blockhash}, lastValidBlockHeight: ${lastValidBlockHeight}`); // [LOGGING ADDED] Step log
+        console.log(`[${operationId}] Got blockhash: ${blockhash}, lastValidBlockHeight: ${lastValidBlockHeight}`);
 
         // 2. Calculate Priority Fee (Simplified: using fixed base/max for now)
         const basePriorityFee = parseInt(process.env.PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS, 10);
         const maxPriorityFee = parseInt(process.env.PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS, 10);
         let priorityFeeMicroLamports = Math.max(1, Math.min(basePriorityFee, maxPriorityFee)); // Ensure at least 1 microLamport
         const computeUnitLimit = parseInt(process.env.PAYOUT_COMPUTE_UNIT_LIMIT, 10);
-        console.log(`[${operationId}] Using Compute Unit Limit: ${computeUnitLimit}, Priority Fee: ${priorityFeeMicroLamports} microLamports`); // [LOGGING ADDED] Step log
+        console.log(`[${operationId}] Using Compute Unit Limit: ${computeUnitLimit}, Priority Fee: ${priorityFeeMicroLamports} microLamports`);
 
         // 3. Create Transaction
-        console.log(`[${operationId}] Creating transaction...`); // [LOGGING ADDED] Step log
+        console.log(`[${operationId}] Creating transaction...`);
         const transaction = new Transaction({
             recentBlockhash: blockhash,
             feePayer: payerWallet.publicKey,
@@ -1735,10 +1728,10 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
                 lamports: amountToSend,
             })
         );
-        console.log(`[${operationId}] Transaction created with ${transaction.instructions.length} instructions.`); // [LOGGING ADDED] Step log
+        console.log(`[${operationId}] Transaction created with ${transaction.instructions.length} instructions.`);
 
         // 4. Sign and Send Transaction
-        console.log(`[${operationId}] Sending and confirming transaction...`); // [LOGGING ADDED] Step log
+        console.log(`[${operationId}] Sending and confirming transaction...`);
         const signature = await sendAndConfirmTransaction(
             solanaConnection, // Use the potentially rate-limited connection
             transaction,
@@ -1756,7 +1749,6 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
         return { success: true, signature: signature };
 
     } catch (error) {
-        // [LOGGING MODIFIED] Log the error *before* checking retryable status
         console.error(`[${operationId}] ❌ SEND FAILED using ${keyTypeForLog} key. Error: ${error.message}`);
         if (error instanceof SendTransactionError && error.logs) {
             console.error(`[${operationId}] Simulation Logs (if available, last 10):`);
@@ -1780,7 +1772,7 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
              userFriendlyError = `Temporary network/RPC error: ${error.message}`;
         }
 
-        console.error(`[${operationId}] Failure details - Retryable: ${isRetryable}, User Friendly Error: "${userFriendlyError}"`); // Log retryable status determined
+        console.error(`[${operationId}] Failure details - Retryable: ${isRetryable}, User Friendly Error: "${userFriendlyError}"`);
 
         return { success: false, error: userFriendlyError, isRetryable: isRetryable };
     }
@@ -1796,12 +1788,12 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
  * @returns {{transferAmount: bigint, payerAddress: string | null}} Amount in lamports and the likely payer.
  */
 function analyzeTransactionAmounts(tx, targetAddress) {
-    const logPrefix = `[analyzeAmounts Addr:${targetAddress.slice(0, 6)}..]`; // [LOGGING ADDED] Prefix
+    const logPrefix = `[analyzeAmounts Addr:${targetAddress.slice(0, 6)}..]`;
     let transferAmount = 0n;
     let payerAddress = null;
 
     if (!tx || !targetAddress) {
-        console.warn(`${logPrefix} Invalid input: TX or targetAddress missing.`); // [LOGGING ADDED] Invalid input log
+        console.warn(`${logPrefix} Invalid input: TX or targetAddress missing.`);
         return { transferAmount: 0n, payerAddress: null };
     }
 
@@ -1814,30 +1806,30 @@ function analyzeTransactionAmounts(tx, targetAddress) {
 
     // Check for transaction error
     if (tx.meta?.err) {
-        console.log(`${logPrefix} Transaction meta contains error. Returning zero amount. Error: ${JSON.stringify(tx.meta.err)}`); // [LOGGING ADDED] TX error log
+        console.log(`${logPrefix} Transaction meta contains error. Returning zero amount. Error: ${JSON.stringify(tx.meta.err)}`);
         return { transferAmount: 0n, payerAddress: null };
     }
 
     // --- Method 1: Balance Changes (Most Reliable) ---
-    // console.log(`${logPrefix} Attempting analysis via balance changes...`); // [LOGGING ADDED] Optional verbose log
+    // console.log(`${logPrefix} Attempting analysis via balance changes...`);
     if (tx.meta?.preBalances && tx.meta?.postBalances && tx.transaction?.message) {
         try {
             // Handle both legacy and version 0 message formats for account keys
              const accountKeys = (tx.transaction.message.staticAccountKeys || tx.transaction.message.accountKeys).map(k => k.toBase58());
              const header = tx.transaction.message.header;
             const targetIndex = accountKeys.indexOf(targetAddress);
-            // console.log(`${logPrefix} Target index in accountKeys: ${targetIndex}`); // [LOGGING ADDED] Optional verbose log
+            // console.log(`${logPrefix} Target index in accountKeys: ${targetIndex}`);
 
             if (targetIndex !== -1 &&
                 tx.meta.preBalances.length > targetIndex && tx.meta.postBalances.length > targetIndex) {
                 const preBalance = BigInt(tx.meta.preBalances[targetIndex]);
                 const postBalance = BigInt(tx.meta.postBalances[targetIndex]);
                 const balanceChange = postBalance - preBalance;
-                // console.log(`${logPrefix} Pre: ${preBalance}, Post: ${postBalance}, Change: ${balanceChange}`); // [LOGGING ADDED] Optional verbose log
+                // console.log(`${logPrefix} Pre: ${preBalance}, Post: ${postBalance}, Change: ${balanceChange}`);
 
                 if (balanceChange > 0n) {
                     transferAmount = balanceChange;
-                    console.log(`${logPrefix} Positive balance change detected: ${transferAmount} lamports.`); // [LOGGING ADDED] Positive change found
+                    console.log(`${logPrefix} Positive balance change detected: ${transferAmount} lamports.`);
                     // Try to identify the payer (usually the first signer who had a negative balance change)
                      const signers = accountKeys.slice(0, header.numRequiredSignatures);
                      for (const signerKey of signers) {
@@ -1848,7 +1840,7 @@ function analyzeTransactionAmounts(tx, targetAddress) {
                             const postSigner = BigInt(tx.meta.postBalances[signerIndex]);
                             if (postSigner < preSigner) {
                                 payerAddress = signerKey;
-                                console.log(`${logPrefix} Identified likely payer (signer with negative balance change): ${payerAddress}`); // [LOGGING ADDED] Payer found
+                                console.log(`${logPrefix} Identified likely payer (signer with negative balance change): ${payerAddress}`);
                                 break; // Assume first signer with decreased balance is payer
                             }
                          }
@@ -1856,13 +1848,13 @@ function analyzeTransactionAmounts(tx, targetAddress) {
                     // Fallback to first signer if no obvious payer found
                     if (!payerAddress && signers.length > 0) {
                         payerAddress = signers[0];
-                        console.log(`${logPrefix} Could not find signer with negative balance change, falling back to first signer as payer: ${payerAddress}`); // [LOGGING ADDED] Payer fallback
+                        console.log(`${logPrefix} Could not find signer with negative balance change, falling back to first signer as payer: ${payerAddress}`);
                     }
                 } else {
-                     console.log(`${logPrefix} No positive balance change found for target address.`); // [LOGGING ADDED] No positive change
+                     console.log(`${logPrefix} No positive balance change found for target address.`);
                 }
             } else {
-                 console.log(`${logPrefix} Target address not found in account keys or balance arrays incomplete.`); // [LOGGING ADDED] Index/Array issue
+                 console.log(`${logPrefix} Target address not found in account keys or balance arrays incomplete.`);
             }
         } catch (e) {
              console.warn(`${logPrefix} Error analyzing balance changes: ${e.message}`);
@@ -1871,13 +1863,13 @@ function analyzeTransactionAmounts(tx, targetAddress) {
              payerAddress = null;
         }
     } else {
-         console.log(`${logPrefix} Balance change analysis skipped: Meta or message data missing.`); // [LOGGING ADDED] Skipped balance analysis
+         console.log(`${logPrefix} Balance change analysis skipped: Meta or message data missing.`);
     }
 
     // --- Method 2: Instruction Parsing (Fallback / Cross-check) ---
     // Only use if balance change method didn't find a positive transfer
     if (transferAmount === 0n && tx.meta?.logMessages) {
-        console.log(`${logPrefix} Attempting analysis via log messages (Fallback)...`); // [LOGGING ADDED] Log analysis attempt
+        console.log(`${logPrefix} Attempting analysis via log messages (Fallback)...`);
         // Example: Look for SystemProgram transfer logs
         const sysTransferToRegex = /Transfer: src=([1-9A-HJ-NP-Za-km-z]+) dst=([1-9A-HJ-NP-Za-km-z]+) lamports=(\d+)/; // For newer log formats
         const sysTransferInvokeRegex = /Program log: Instruction: Transfer/; // Check if system program transfer was invoked
@@ -1898,7 +1890,7 @@ function analyzeTransactionAmounts(tx, targetAddress) {
             if (matchNew && matchNew[2] === targetAddress) {
                 potentialPayer = matchNew[1];
                 potentialAmount = BigInt(matchNew[3]);
-                console.log(`${logPrefix} Found transfer via new log format: ${potentialAmount} lamports from ${potentialPayer}`); // [LOGGING ADDED] Found via new regex
+                console.log(`${logPrefix} Found transfer via new log format: ${potentialAmount} lamports from ${potentialPayer}`);
                 // If found via this regex, prioritize it
                 transferAmount = potentialAmount;
                 payerAddress = potentialPayer;
@@ -1920,7 +1912,7 @@ function analyzeTransactionAmounts(tx, targetAddress) {
                       // We need source/destination to confirm *this* transfer is relevant
                       // This requires looking at account keys involved in the instruction, which isn't in logs easily.
                       // This fallback is less reliable for amount confirmation without balance changes.
-                      // console.log(`${logPrefix} Found lamports amount in log: ${parsedLamports}`); // [LOGGING ADDED] Lamports found (less reliable)
+                      // console.log(`${logPrefix} Found lamports amount in log: ${parsedLamports}`);
                  }
             }
             if (log.includes('Program SystemProgram') && log.includes('success')) {
@@ -1929,7 +1921,7 @@ function analyzeTransactionAmounts(tx, targetAddress) {
              // Add more sophisticated parsing here if needed for other transfer types or older log formats
         }
         if (transferAmount === 0n) { // Only log if primary method failed
-            console.log(`${logPrefix} Log message parsing did not find a definitive transfer to the target address.`); // [LOGGING ADDED] Log parsing failed
+            console.log(`${logPrefix} Log message parsing did not find a definitive transfer to the target address.`);
         }
     }
 
@@ -1969,10 +1961,9 @@ async function safeSendMessage(chatId, text, options = {}) {
 
     return telegramSendQueue.add(async () => {
         try {
-            // [LOGGING ADDED] Log attempt before sending
             // console.debug(`[safeSendMessage] Attempting to send to chat ${chatId}: "${text.substring(0, 50)}..."`);
             const sentMessage = await bot.sendMessage(chatId, text, options);
-            // console.debug(`[safeSendMessage] Successfully sent message ID ${sentMessage.message_id} to chat ${chatId}`); // Optional success log
+            // console.debug(`[safeSendMessage] Successfully sent message ID ${sentMessage.message_id} to chat ${chatId}`);
             return sentMessage;
         } catch (error) {
             console.error(`❌ Telegram send error to chat ${chatId}: Code: ${error.code} | ${error.message}`);
@@ -2057,7 +2048,7 @@ async function getUserDisplayName(chatId, userId) {
         // Escape the final chosen name
         return escapeMarkdownV2(name);
     } catch (error) {
-        console.warn(`[getUserDisplayName] Failed to get chat member for ${userId} in ${chatId}: ${error.message}. Falling back to ID.`); // [LOGGING ADDED] Log fallback
+        console.warn(`[getUserDisplayName] Failed to get chat member for ${userId} in ${chatId}: ${error.message}. Falling back to ID.`);
         // Fallback to generic name based on ID, already escaped
         return escapeMarkdownV2(`User_${String(userId).slice(-4)}`);
     }
@@ -2072,12 +2063,11 @@ function updateWalletCache(userId, data) {
     const existing = walletCache.get(userId) || {};
     const entryTimestamp = Date.now();
     walletCache.set(userId, { ...existing, ...data, timestamp: entryTimestamp });
-    // [LOGGING ADDED] - Log cache update
     // console.log(`[Cache Update] Wallet cache updated for user ${userId}. Keys: ${Object.keys(data).join(', ')}`);
     setTimeout(() => {
         const current = walletCache.get(userId);
         if (current && current.timestamp === entryTimestamp && Date.now() - current.timestamp >= WALLET_CACHE_TTL_MS) {
-            // console.log(`[Cache Eviction] Wallet cache evicted for user ${userId} after TTL.`); // Optional Eviction Log
+            // console.log(`[Cache Eviction] Wallet cache evicted for user ${userId} after TTL.`);
             walletCache.delete(userId);
         }
     }, WALLET_CACHE_TTL_MS + 1000); // Add buffer
@@ -2088,14 +2078,14 @@ function getWalletCache(userId) {
     userId = String(userId);
     const entry = walletCache.get(userId);
     if (entry && Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) {
-        // console.log(`[Cache Hit] Wallet cache hit for user ${userId}.`); // Optional Hit Log
+        // console.log(`[Cache Hit] Wallet cache hit for user ${userId}.`);
         return entry;
     }
     if (entry) {
-        // console.log(`[Cache Stale] Wallet cache entry for user ${userId} expired.`); // Optional Stale Log
+        // console.log(`[Cache Stale] Wallet cache entry for user ${userId} expired.`);
         walletCache.delete(userId);
     } else {
-         // console.log(`[Cache Miss] Wallet cache miss for user ${userId}.`); // Optional Miss Log
+         // console.log(`[Cache Miss] Wallet cache miss for user ${userId}.`);
     }
     return undefined;
 }
@@ -2103,22 +2093,22 @@ function getWalletCache(userId) {
 /** Adds or updates an active deposit address in the cache. */
 function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) {
     activeDepositAddresses.set(address, { userId: String(userId), expiresAt: expiresAtTimestamp });
-    console.log(`[Cache Update] Added/Updated deposit address ${address.slice(0,6)}.. for user ${userId} in cache. Expires: ${new Date(expiresAtTimestamp).toISOString()}`); // [LOGGING ADDED] Cache add log
+    console.log(`[Cache Update] Added/Updated deposit address ${address.slice(0,6)}.. for user ${userId} in cache. Expires: ${new Date(expiresAtTimestamp).toISOString()}`);
     const delay = expiresAtTimestamp - Date.now() + 1000; // Add buffer
     if (delay > 0) {
         setTimeout(() => {
             const current = activeDepositAddresses.get(address);
             // Only delete if it's the exact same entry we set the timer for
             if (current && current.userId === String(userId) && current.expiresAt === expiresAtTimestamp) {
-                 console.log(`[Cache Eviction] Deposit address ${address.slice(0,6)}.. expired and removed from cache.`); // [LOGGING ADDED] Cache eviction log
+                 console.log(`[Cache Eviction] Deposit address ${address.slice(0,6)}.. expired and removed from cache.`);
                  activeDepositAddresses.delete(address);
             } else if (current) {
-                 console.log(`[Cache Eviction] Deposit address ${address.slice(0,6)}.. cache timer fired, but entry was updated or removed. Ignoring eviction timer.`); // [LOGGING ADDED] Log ignored eviction
+                 console.log(`[Cache Eviction] Deposit address ${address.slice(0,6)}.. cache timer fired, but entry was updated or removed. Ignoring eviction timer.`);
             }
         }, delay);
     } else {
         // If already expired when adding (shouldn't normally happen), remove immediately
-        console.log(`[Cache Update] Deposit address ${address.slice(0,6)}.. was already expired when added to cache. Removing immediately.`); // [LOGGING ADDED] Immediate removal log
+        console.log(`[Cache Update] Deposit address ${address.slice(0,6)}.. was already expired when added to cache. Removing immediately.`);
         removeActiveDepositAddressCache(address);
     }
 }
@@ -2128,14 +2118,14 @@ function getActiveDepositAddressCache(address) {
     const entry = activeDepositAddresses.get(address);
     const now = Date.now();
     if (entry && now < entry.expiresAt) {
-        // console.log(`[Cache Hit] Deposit address ${address.slice(0,6)}.. found in cache.`); // Optional Hit Log
+        // console.log(`[Cache Hit] Deposit address ${address.slice(0,6)}.. found in cache.`);
         return entry;
     }
     if (entry) {
-        // console.log(`[Cache Stale] Deposit address ${address.slice(0,6)}.. found in cache but expired.`); // Optional Stale Log
+        // console.log(`[Cache Stale] Deposit address ${address.slice(0,6)}.. found in cache but expired.`);
         activeDepositAddresses.delete(address); // Clean up expired entry
     } else {
-         // console.log(`[Cache Miss] Deposit address ${address.slice(0,6)}.. not found in cache.`); // Optional Miss Log
+         // console.log(`[Cache Miss] Deposit address ${address.slice(0,6)}.. not found in cache.`);
     }
     return undefined;
 }
@@ -2144,7 +2134,7 @@ function getActiveDepositAddressCache(address) {
 function removeActiveDepositAddressCache(address) {
     const deleted = activeDepositAddresses.delete(address);
     if (deleted) {
-        console.log(`[Cache Update] Explicitly removed deposit address ${address.slice(0,6)}.. from cache.`); // [LOGGING ADDED] Explicit removal log
+        console.log(`[Cache Update] Explicitly removed deposit address ${address.slice(0,6)}.. from cache.`);
     }
     return deleted;
 }
@@ -2157,11 +2147,11 @@ function addProcessedDepositTx(signature) {
         const oldestSig = processedDepositTxSignatures.values().next().value;
         if (oldestSig) {
             processedDepositTxSignatures.delete(oldestSig);
-            // console.log(`[Cache Eviction] Removed oldest processed TX sig (${oldestSig.slice(0,6)}..) due to cache size limit.`); // Optional Log
+            // console.log(`[Cache Eviction] Removed oldest processed TX sig (${oldestSig.slice(0,6)}..) due to cache size limit.`);
         }
     }
     processedDepositTxSignatures.add(signature);
-    console.log(`[Cache Update] Added TX signature ${signature.slice(0,6)}.. to processed deposit cache. Size: ${processedDepositTxSignatures.size}/${MAX_PROCESSED_TX_CACHE_SIZE}`); // [LOGGING ADDED] Log add
+    console.log(`[Cache Update] Added TX signature ${signature.slice(0,6)}.. to processed deposit cache. Size: ${processedDepositTxSignatures.size}/${MAX_PROCESSED_TX_CACHE_SIZE}`);
 }
 
 /** Checks if a signature has been processed this session. */
