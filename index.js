@@ -3529,7 +3529,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
 
 // --- End of Part 5 ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
-// --- VERSION: 3.1.5 --- (Added Idempotency, Admin Notify, RPC Retry, Expired Status Update)
+// --- VERSION: 3.1.5 --- (Added Idempotency, Admin Notify, RPC Retry, Init Fixes)
 
 // --- Payout Job Handling ---
 
@@ -3570,6 +3570,7 @@ async function addPayoutJob(jobDetails, maxRetries, baseRetryDelayMs) {
 
                 if (!isRetryable || attempt > maxRetries) {
                     console.error(`${logPrefix} Final attempt failed or error not retryable. Marking job as failed.`);
+                    // Use await here to ensure notification is sent before potentially exiting
                     await notifyAdmin(`🚨 PAYOUT FAILED (Final): ${jobType} ID ${jobId}. User: ${jobDetails.userId}. Reason: Max retries or non-retryable error - ${error.message}`);
                     try {
                         // Mark as failed in DB - Use the standalone update functions
@@ -3605,18 +3606,18 @@ async function addPayoutJob(jobDetails, maxRetries, baseRetryDelayMs) {
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
-    }).catch(queueError => {
+    }).catch(async (queueError) => { // Make async to allow notifyAdmin
         // Catch errors from adding the job itself (e.g., queue timed out immediately)
         console.error(`${logPrefix} Error adding/processing job in payout queue:`, queueError.message);
-        notifyAdmin(`🚨 CRITICAL QUEUE ERROR for ${jobType} ID ${jobId}. Error adding to queue: ${queueError.message}`);
+        await notifyAdmin(`🚨 CRITICAL QUEUE ERROR for ${jobType} ID ${jobId}. Error adding to queue: ${queueError.message}`);
         // Attempt to mark as failed as a last resort
         try {
              const queueFailureReason = `Queue processing error: ${queueError.message.substring(0, 200)}`;
-             if (jobType === 'payout_withdrawal' && jobDetails.withdrawalId) updateWithdrawalStatus(jobDetails.withdrawalId, 'failed', null, null, queueFailureReason);
-             else if (jobType === 'payout_referral' && jobDetails.payoutId) updateReferralPayoutStatus(jobDetails.payoutId, 'failed', null, null, queueFailureReason);
+             if (jobType === 'payout_withdrawal' && jobDetails.withdrawalId) await updateWithdrawalStatus(jobDetails.withdrawalId, 'failed', null, null, queueFailureReason);
+             else if (jobType === 'payout_referral' && jobDetails.payoutId) await updateReferralPayoutStatus(jobDetails.payoutId, 'failed', null, null, queueFailureReason);
         } catch (dbError) {
             console.error(`${logPrefix} Failed to mark job as failed after queue error: ${dbError.message}`);
-            notifyAdmin(`🚨 CRITICAL DB ERROR: Failed to mark ${jobType} ID ${jobId} as FAILED after QUEUE error. DB Error: ${dbError.message}`);
+            await notifyAdmin(`🚨 CRITICAL DB ERROR: Failed to mark ${jobType} ID ${jobId} as FAILED after QUEUE error. DB Error: ${dbError.message}`);
         }
     });
 }
@@ -3873,107 +3874,79 @@ async function handleReferralPayoutJob(job) {
  * This method is NOT recommended for production due to RPC limitations. Use indexers/webhooks instead.
  */
 async function monitorDepositsPolling() {
-    const logPrefix = "[DepositMonitor Polling]"; // [LOGGING ADDED] Consistent Prefix
+    const logPrefix = "[DepositMonitor Polling]";
     if (!isFullyInitialized) {
-        // console.log(`${logPrefix} Bot not fully initialized, skipping check cycle.`); // Can be verbose
         return;
     }
-     // Check if a cycle is already potentially running (basic guard, not foolproof)
-     // A more robust lock mechanism might be needed if cycles can overlap significantly
     if (monitorDepositsPolling.isRunning) {
-         // console.log(`${logPrefix} Previous check cycle might still be running, skipping.`); // Verbose
          return;
     }
     monitorDepositsPolling.isRunning = true;
-    // console.log(`${logPrefix} Starting deposit check cycle...`); // Less verbose start log
+    // console.log(`${logPrefix} Starting deposit check cycle...`); // Reduced verbosity
 
     const startTime = Date.now();
     let checkedAddresses = 0;
     let foundSignatures = 0;
-    let addressesToCheck = 0; // [LOGGING ADDED] Count addresses fetched
+    let addressesToCheck = 0;
 
     try {
-        // 1. Fetch a batch of active, non-expired addresses from DB
         const batchSize = parseInt(process.env.DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE, 10);
-        // console.log(`${logPrefix} Fetching up to ${batchSize} pending addresses from DB...`); // Less verbose
         const pendingAddresses = await queryDatabase(
             `SELECT id, user_id, deposit_address, expires_at FROM deposit_addresses WHERE status = 'pending' AND expires_at > NOW() ORDER BY created_at ASC LIMIT $1`,
             [batchSize]
         ).then(res => res.rows);
-        addressesToCheck = pendingAddresses.length; // [LOGGING ADDED] Store count
+        addressesToCheck = pendingAddresses.length;
 
         if (addressesToCheck === 0) {
-            // console.log(`${logPrefix} No pending addresses found to check in this cycle.`); // Less verbose
             monitorDepositsPolling.isRunning = false;
             return;
         }
-        // console.log(`${logPrefix} Found ${addressesToCheck} pending addresses. Checking signatures...`); // Less verbose
 
-        // 2. For each address, check for recent signatures
         const sigFetchLimit = parseInt(process.env.DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT, 10);
-        // console.log(`${logPrefix} Checking up to ${sigFetchLimit} signatures per address.`); // Less verbose
         for (const addrInfo of pendingAddresses) {
-            const addrPrefix = `[DepositMonitor Addr:${addrInfo.deposit_address.slice(0,6)}..]`; // [LOGGING ADDED] Address-specific prefix
+            const addrPrefix = `[DepositMonitor Addr:${addrInfo.deposit_address.slice(0,6)}..]`;
             checkedAddresses++;
             try {
                 const pubKey = new PublicKey(addrInfo.deposit_address);
-                // console.log(`${addrPrefix} Fetching signatures...`); // Optional verbose log
-                // Fetch recent signatures confirmed on the network
                 const signaturesInfo = await solanaConnection.getSignaturesForAddress(
                     pubKey,
                     { limit: sigFetchLimit },
                     DEPOSIT_CONFIRMATION_LEVEL // Explicitly use configured level here
                 );
-                // console.log(`${addrPrefix} Found ${signaturesInfo.length} signatures.`); // Optional verbose log
 
                 for (const sigInfo of signaturesInfo) {
-                     const sigPrefix = `${addrPrefix} TX:${sigInfo.signature.slice(0,6)}..`; // [LOGGING ADDED] Signature-specific prefix
-                     // Check if successful (no error) and not already processed this session
+                     const sigPrefix = `${addrPrefix} TX:${sigInfo.signature.slice(0,6)}..`;
                     if (!sigInfo.err && !hasProcessedDepositTx(sigInfo.signature)) {
                          foundSignatures++;
-                         console.log(`${sigPrefix} Potential deposit found! Queuing for processing.`); // [LOGGING ADDED] Found log
-                         // Add job to the dedicated deposit processing queue
+                         console.log(`${sigPrefix} Potential deposit found! Queuing for processing.`);
                          depositProcessorQueue.add(() => processDepositTransaction(sigInfo.signature, addrInfo.deposit_address))
-                             .catch(e => {
+                             .catch(async (e) => { // Make async for notifyAdmin
                                  console.error(`${sigPrefix} Error queueing deposit processing: ${e.message}`);
-                                 notifyAdmin(`🚨 ERROR queueing deposit processing for ${sigPrefix}. Queue Error: ${e.message}`);
+                                 await notifyAdmin(`🚨 ERROR queueing deposit processing for ${sigPrefix}. Queue Error: ${e.message}`);
                               });
-                         // Add to cache immediately to prevent re-queueing in the same cycle or near future
-                         addProcessedDepositTx(sigInfo.signature); // Logged within function
-                    } else if (sigInfo.err) {
-                         // console.log(`${sigPrefix} Ignoring failed transaction.`); // Optional verbose log
-                    } else if (hasProcessedDepositTx(sigInfo.signature)){
-                         // console.log(`${sigPrefix} Signature already processed/cached.`); // Optional verbose log
+                         addProcessedDepositTx(sigInfo.signature);
                     }
                 }
-                // Optional: Small delay between addresses if hitting rate limits hard
-                // await new Promise(r => setTimeout(r, 50));
-
             } catch (error) {
-                // Don't stop the whole loop, just log error for this address
                 console.error(`${addrPrefix} Error checking signatures: ${error.message}`);
-                // Check if error is rate limit (429) - maybe pause briefly?
                  if (isRetryableSolanaError(error) && (String(error.message).includes('429') || error.status === 429)) {
                      console.warn(`${logPrefix} Hit rate limit checking address ${addrInfo.deposit_address}. Pausing briefly...`);
-                     await new Promise(r => setTimeout(r, 1500)); // Pause 1.5s on rate limit
+                     await new Promise(r => setTimeout(r, 1500));
                  } else if (!isRetryableSolanaError(error)) {
-                      // Notify admin if non-retryable error fetching signatures for an address
                       await notifyAdmin(`🚨 Non-retryable RPC error checking signatures for address ${addrInfo.deposit_address} (${addrPrefix}). Error: ${error.message}`);
                  }
             }
-        } // End loop through addresses
-         // console.log(`${logPrefix} Finished checking signatures for ${checkedAddresses} addresses.`); // Less verbose
+        }
 
     } catch (error) {
         console.error(`${logPrefix} Error during deposit monitoring cycle:`, error);
         await notifyAdmin(`🚨 ERROR during deposit monitoring cycle: ${error.message}`);
     } finally {
         const duration = Date.now() - startTime;
-        // [LOGGING MODIFIED] Logged results more consistently, less verbosely unless findings
         if (addressesToCheck > 0 || foundSignatures > 0) {
              console.log(`${logPrefix} Cycle finished in ${duration}ms. Fetched: ${addressesToCheck}. Checked: ${checkedAddresses}. Found/Queued: ${foundSignatures}.`);
         }
-        monitorDepositsPolling.isRunning = false; // Release lock
+        monitorDepositsPolling.isRunning = false;
     }
 }
 monitorDepositsPolling.isRunning = false; // Initialize lock state
@@ -3981,6 +3954,7 @@ monitorDepositsPolling.isRunning = false; // Initialize lock state
 
 /**
  * Processes a deposit transaction found by the monitor. Triggered by depositProcessorQueue.
+ * Handles idempotency and potential race conditions.
  * @param {string} signature The transaction signature.
  * @param {string} depositAddress The unique deposit address the transaction was sent to.
  */
@@ -3988,33 +3962,31 @@ async function processDepositTransaction(signature, depositAddress) {
     const logPrefix = `[ProcessDeposit TX:${signature.slice(0, 6)} Addr:${depositAddress.slice(0,6)}]`;
     console.log(`${logPrefix} Starting processing...`);
     let client = null; // DB client for transaction
-    let userIdForNotifyOnError = null; // Store user ID if found early
+    let userIdForNotifyOnError = null;
 
     try {
-        // 0. Double-check if processed (queue might have duplicates if added quickly)
+        // 0. Double-check if processed (essential for idempotency with queue concurrency)
         if (hasProcessedDepositTx(signature)) {
             console.log(`${logPrefix} Signature already processed/cached (pre-check). Skipping.`);
             return;
         }
 
-        // Attempt to find user ID early for potential error notifications
-        // console.log(`${logPrefix} Looking up deposit address info...`); // Less verbose
-        const initialAddrInfo = await findDepositAddressInfo(depositAddress); // findDepositAddressInfo has its own logs
-        if (initialAddrInfo) {
-            userIdForNotifyOnError = initialAddrInfo.userId;
-        } else {
-            // If address info not found initially, maybe it expired between monitor and processing?
+        // 1. Find address info (user ID needed early)
+        const initialAddrInfo = await findDepositAddressInfo(depositAddress);
+        if (!initialAddrInfo) {
             console.warn(`${logPrefix} Could not find initial deposit address info (possibly expired or invalid). Ignoring TX.`);
-            addProcessedDepositTx(signature); // Mark as processed to avoid retries if address is truly gone
+            addProcessedDepositTx(signature);
             return;
         }
-        // console.log(`${logPrefix} Found initial info for User: ${userIdForNotifyOnError}`); // Less verbose
+        userIdForNotifyOnError = initialAddrInfo.userId; // Store for potential error notification
 
-        // 1. Fetch transaction details with retries
+        // 2. Fetch transaction details with retries
         console.log(`${logPrefix} Fetching transaction details from RPC...`);
         let tx = null;
         let fetchAttempt = 0;
         const maxFetchAttempts = 3; // Retry fetching TX details
+        const baseRetryDelay = 1000; // ms
+
         while (fetchAttempt < maxFetchAttempts && tx === null) {
             fetchAttempt++;
             try {
@@ -4023,47 +3995,50 @@ async function processDepositTransaction(signature, depositAddress) {
                     commitment: DEPOSIT_CONFIRMATION_LEVEL
                 });
                 if (tx) break; // Success
-                // If tx is null but no error thrown, RPC might just not see it yet
                 console.log(`${logPrefix} TX details null on attempt ${fetchAttempt}. Retrying soon...`);
-
             } catch (rpcError) {
                 console.warn(`${logPrefix} RPC Error fetching TX details (Attempt ${fetchAttempt}/${maxFetchAttempts}): ${rpcError.message}`);
                 if (fetchAttempt >= maxFetchAttempts || !isRetryableSolanaError(rpcError)) {
-                    throw rpcError; // Throw if max attempts reached or error is not retryable
+                    // Give up after max attempts or if error is not retryable
+                    throw new Error(`Failed to fetch TX ${signature} after ${fetchAttempt} attempts. Final RPC Error: ${rpcError.message}`);
                 }
                  // Wait before retrying
-                 await new Promise(resolve => setTimeout(resolve, 1000 * fetchAttempt));
+                 const delay = baseRetryDelay * Math.pow(2, fetchAttempt - 1) + (Math.random() * 500); // Exponential backoff + jitter
+                 console.log(`${logPrefix} Retrying TX fetch in ${delay}ms...`);
+                 await new Promise(resolve => setTimeout(resolve, delay));
             }
              // Wait a bit even if tx is null without error before retrying
              if (tx === null && fetchAttempt < maxFetchAttempts) {
-                 await new Promise(resolve => setTimeout(resolve, 1500 * fetchAttempt));
+                  const delay = baseRetryDelay * Math.pow(2, fetchAttempt - 1) + (Math.random() * 500);
+                  console.log(`${logPrefix} TX fetch returned null, retrying in ${delay}ms...`);
+                  await new Promise(resolve => setTimeout(resolve, delay));
              }
         }
 
 
         if (!tx) {
-            // If still not found after retries, log and give up for now
-            console.error(`${logPrefix} Transaction not found via RPC after ${maxFetchAttempts} attempts. Aborting processing for now.`);
-            // Do not cache signature - allow monitor to potentially find and retry later if temporary RPC issue
-            throw new Error(`Transaction ${signature} not found via RPC after retries.`);
+            // If still not found after retries, log, notify admin, and throw non-retryable error for this processing attempt
+             console.error(`${logPrefix} Transaction not found via RPC after ${maxFetchAttempts} attempts. Aborting processing for now.`);
+             await notifyAdmin(`🚨 RPC Error: Transaction ${signature} not found after ${maxFetchAttempts} attempts for deposit to ${depositAddress} (User ${userIdForNotifyOnError}).`);
+             // Don't cache signature - allow monitor to potentially find and retry later if temporary RPC issue becomes resolvable
+             throw new Error(`Transaction ${signature} not found via RPC after retries.`);
         }
         console.log(`${logPrefix} Transaction details fetched successfully.`);
 
+        // 3. Validate Transaction Success
         if (tx.meta?.err) {
             console.log(`${logPrefix} Transaction failed on-chain. Ignoring. Error: ${JSON.stringify(tx.meta.err)}`);
             addProcessedDepositTx(signature); // Cache failed TX sig to prevent reprocessing
             return;
         }
-        // console.log(`${logPrefix} Transaction confirmed successful on-chain (meta.err is null).`); // Less verbose
 
-        // 2. Re-validate deposit address info (status might have changed, use initialAddrInfo from above)
-        // console.log(`${logPrefix} Re-validating deposit address status and expiry...`); // Less verbose
-        const addrInfo = initialAddrInfo; // Already fetched
+        // 4. Re-validate deposit address info
+        const addrInfo = initialAddrInfo;
         const { userId, status: addrStatus, id: depositAddressId, expiresAt } = addrInfo;
 
         if (addrStatus !== 'pending') {
              console.warn(`${logPrefix} Deposit address status is '${addrStatus}', not 'pending'. Ignoring TX.`);
-             addProcessedDepositTx(signature); // Mark as processed as address is no longer valid for deposits
+             addProcessedDepositTx(signature); // Mark as processed as address is no longer valid
              return;
         }
         const now = Date.now(); // Get current time for expiry check
@@ -4071,20 +4046,20 @@ async function processDepositTransaction(signature, depositAddress) {
              console.warn(`${logPrefix} Deposit address has expired (${expiresAt.toISOString()}). Ignoring TX.`);
              // Mark address as 'expired' in DB outside transaction (best effort)
              try {
-                 await queryDatabase("UPDATE deposit_addresses SET status='expired' WHERE id = $1 AND status = 'pending'", [depositAddressId]);
+                 // Use the main pool connection for this non-critical update
+                 await queryDatabase("UPDATE deposit_addresses SET status='expired' WHERE id = $1 AND status = 'pending'", [depositAddressId], pool);
                  console.log(`${logPrefix} Marked address ID ${depositAddressId} as expired in DB.`);
              } catch (dbErr) {
                   console.error(`${logPrefix} Failed to mark expired address ID ${depositAddressId} status in DB: ${dbErr.message}`);
-                  // Log error but continue processing failure path
+                  // Notify admin about failure to mark expired
+                  await notifyAdmin(`🚨 DB Error marking address expired: ID ${depositAddressId}. Error: ${dbErr.message}`);
              }
-             addProcessedDepositTx(signature); // Mark TX as processed
+             addProcessedDepositTx(signature); // Mark TX as processed anyway
              return;
         }
-        // console.log(`${logPrefix} Deposit address validation passed (Pending & Not Expired). AddrID: ${depositAddressId}`); // Less verbose
 
-        // 3. Analyze amount transferred *to the unique address*
-        // console.log(`${logPrefix} Analyzing transaction amounts...`); // Less verbose
-        const { transferAmount, payerAddress } = analyzeTransactionAmounts(tx, depositAddress); // analyzeTransactionAmounts has its own logs
+        // 5. Analyze amount transferred
+        const { transferAmount, payerAddress } = analyzeTransactionAmounts(tx, depositAddress);
         if (transferAmount <= 0n) {
              console.warn(`${logPrefix} No positive SOL transfer found to the deposit address. Ignoring.`);
              addProcessedDepositTx(signature); // Mark as processed
@@ -4092,173 +4067,162 @@ async function processDepositTransaction(signature, depositAddress) {
         }
         console.log(`${logPrefix} Confirmed ${Number(transferAmount) / LAMPORTS_PER_SOL} SOL deposit from ${payerAddress || 'unknown sender'}. Processing DB updates...`);
 
-        // --- 4. Process Deposit within DB Transaction ---
+        // --- 6. Process Deposit within DB Transaction ---
         console.log(`${logPrefix} Starting DB transaction...`);
         client = await pool.connect();
         await client.query('BEGIN');
+        let newDepositId = null;
 
-        // 4a. Ensure user/balance records exist (should be redundant but safe)
-        await ensureUserExists(userId, client);
+        try {
+            // 6a. Ensure user/balance records exist
+            await ensureUserExists(userId, client);
 
-        // 4b. Credit user's internal balance & Add ledger entry
-        const balanceUpdateResult = await updateUserBalanceAndLedger(
-            client, userId, transferAmount, 'deposit',
-            { depositId: null }, // Placeholder, will update below
-            `Deposit TX: ${signature.slice(0, 10)}...`
-        );
-        if (!balanceUpdateResult.success) {
-             // If this fails, it's likely a DB issue, rollback and let retry handle it
-             throw new Error(`Failed to update balance: ${balanceUpdateResult.error}`);
-        }
-        // console.log(`${logPrefix} Balance updated. New Balance: ${balanceUpdateResult.newBalance}`); // Less verbose
+            // 6b. Credit user's internal balance & Add ledger entry
+            const balanceUpdateResult = await updateUserBalanceAndLedger(
+                client, userId, transferAmount, 'deposit',
+                { depositId: null }, // Placeholder
+                `Deposit TX: ${signature.slice(0, 10)}...`
+            );
+            if (!balanceUpdateResult.success) {
+                 throw new Error(`Failed to update balance: ${balanceUpdateResult.error}`); // Propagate error
+            }
 
-        // 4c. Record the confirmed deposit (Function now uses ON CONFLICT DO NOTHING)
-        const depositRecordResult = await recordConfirmedDeposit(
-            client, userId, depositAddressId, signature, transferAmount
-        );
-        if (!depositRecordResult.success) {
-             // This now primarily catches non-conflict DB errors or the case where conflict WAS detected
-             // If error is 'Deposit transaction already processed.', it means conflict occurred.
-             // We check for this specific error string to handle idempotency.
-             if (depositRecordResult.error === 'Deposit transaction already processed.') {
-                  console.warn(`${logPrefix} Handled expected conflict for already processed TX ${signature} during record insert.`);
-                  // This specific case is NOT an error for the overall flow, treat as success.
-                  // Balance would not have been updated again due to earlier checks or potential rollback if this happened first.
-                  // We just need to ensure the address is marked used and cache is updated.
-                  // Rollback this attempt, but don't throw error.
-                   await client.query('ROLLBACK');
-                   client.release(); client = null;
-                   addProcessedDepositTx(signature); // Ensure cached
-                   console.log(`${logPrefix} Gracefully handled duplicate TX processing attempt.`);
-                   return; // Exit successfully
-             } else {
-                // Otherwise, it's an unexpected DB error during insert
-                throw new Error(depositRecordResult.error || "Failed to record confirmed deposit in DB.");
+            // 6c. Record the confirmed deposit (Handles ON CONFLICT internally now)
+            const depositRecordResult = await recordConfirmedDeposit(
+                client, userId, depositAddressId, signature, transferAmount
+            );
+            if (!depositRecordResult.success) {
+                 // Check if it was the expected "already processed" error from ON CONFLICT
+                 if (depositRecordResult.error === 'Deposit transaction already processed.') {
+                      console.warn(`${logPrefix} Handled expected conflict for already processed TX ${signature} via recordConfirmedDeposit.`);
+                      // This specific case is NOT an error for the overall flow if the goal is idempotency.
+                      // Rollback this attempt, cache the sig, and return successfully.
+                      await client.query('ROLLBACK');
+                      client.release(); client = null;
+                      addProcessedDepositTx(signature); // Ensure cached
+                      console.log(`${logPrefix} Gracefully handled duplicate TX processing via ON CONFLICT.`);
+                      return; // Exit successfully
+                 } else {
+                    // Otherwise, it's an unexpected DB error during insert
+                    throw new Error(depositRecordResult.error || "Failed to record confirmed deposit in DB.");
+                 }
+            }
+            newDepositId = depositRecordResult.depositId; // Store the new ID
+
+            // 6d. Update the ledger entry with the new deposit ID
+            const ledgerUpdateRes = await queryDatabase(
+                 `UPDATE ledger SET related_deposit_id = $1
+                   WHERE user_id = $2 AND transaction_type = 'deposit' AND amount_lamports = $3 AND related_deposit_id IS NULL
+                   ORDER BY id DESC LIMIT 1`,
+                 [newDepositId, userId, transferAmount],
+                 client
+             );
+             if (ledgerUpdateRes.rowCount === 0) {
+                  console.warn(`${logPrefix} Could not find matching ledger entry to update related_deposit_id for deposit ${newDepositId}. Balance was still updated.`);
              }
-        }
-        const newDepositId = depositRecordResult.depositId;
-        // console.log(`${logPrefix} Deposit recorded successfully. Deposit ID: ${newDepositId}`); // Less verbose
 
-        // 4d. Update the ledger entry with the new deposit ID
-        const ledgerUpdateRes = await queryDatabase(
-             `UPDATE ledger SET related_deposit_id = $1
-               WHERE user_id = $2 AND transaction_type = 'deposit' AND amount_lamports = $3 AND related_deposit_id IS NULL
-               ORDER BY id DESC LIMIT 1`, // Target the most recent matching entry by ID
-             [newDepositId, userId, transferAmount],
-             client
-         );
-         if (ledgerUpdateRes.rowCount === 0) {
-              console.warn(`${logPrefix} Could not find matching ledger entry to update related_deposit_id for deposit ${newDepositId}. Balance was still updated.`);
-              // Potentially notify admin? Low priority if balance is correct.
-         }
+            // 6e. Mark deposit address as used
+            const markedUsed = await markDepositAddressUsed(client, depositAddressId);
+            if (!markedUsed) {
+                 throw new Error(`Failed to mark deposit address ID ${depositAddressId} as used (was status pending?).`);
+            }
 
-        // 4e. Mark deposit address as used
-        const markedUsed = await markDepositAddressUsed(client, depositAddressId);
-        if (!markedUsed) {
-             // This shouldn't happen if status was 'pending' before, indicates DB issue or race condition
-             throw new Error(`Failed to mark deposit address ID ${depositAddressId} as used (was status pending?).`);
-        }
-        // console.log(`${logPrefix} Deposit address marked as 'used'.`); // Less verbose
+            // 6f. Check for Referral Linking on First Deposit
+            const depositCountRes = await queryDatabase('SELECT COUNT(*) as count FROM deposits WHERE user_id = $1', [userId], client);
+            const isFirstDeposit = parseInt(depositCountRes.rows[0].count, 10) === 1;
 
-        // 4f. Check for Referral Linking on First Deposit
-        const depositCountRes = await queryDatabase('SELECT COUNT(*) as count FROM deposits WHERE user_id = $1', [userId], client);
-        const isFirstDeposit = parseInt(depositCountRes.rows[0].count, 10) === 1; // Count includes the one we just inserted
-
-        if (isFirstDeposit) {
-            console.log(`${logPrefix} First deposit detected for user ${userId}. Checking for pending referral...`);
-            const pending = pendingReferrals.get(userId);
-            const referralCheckTime = Date.now();
-            if (pending && (referralCheckTime - pending.timestamp < PENDING_REFERRAL_TTL_MS)) {
-                const referrerUserId = pending.referrerUserId;
-                 console.log(`${logPrefix} Pending referral found for referrer ${referrerUserId}. Attempting to link...`);
-                const linked = await linkReferral(userId, referrerUserId, client); // Attempt to link in DB TX
-                if (linked) {
-                    console.log(`${logPrefix} Linked user ${userId} to referrer ${referrerUserId}. Removing from pending map.`);
-                    pendingReferrals.delete(userId); // Clean up map entry on successful link
-                     // Optionally notify referrer? (Keep existing notification logic)
-                     try {
-                         const refereeDisplayName = await getUserDisplayName(referrerUserId, userId);
-                         const referrerChatId = referrerUserId; // Send to private chat
-                         await safeSendMessage(
-                             referrerChatId,
-                             `🎉 Someone you referred \\(${escapeMarkdownV2(refereeDisplayName)}\\) just made their first deposit\\! You may receive bonuses based on their activity\\.`, // Escape (, ), !, .
-                             { parse_mode: 'MarkdownV2'}
-                         ).catch((e) => {console.warn(`${logPrefix} Failed to send referral link notification to referrer ${referrerUserId}: ${e.message}`)});
-                     } catch(e){console.warn(`${logPrefix} Failed getting display name or sending referral link notification`, e)}
-                } else {
-                    // linkReferral logs the reason (already referred, self-referral, etc)
-                    console.log(`${logPrefix} Failed to link pending referral (see previous logs). Removing from pending map.`);
-                    pendingReferrals.delete(userId); // Still remove pending referral
+            if (isFirstDeposit) {
+                console.log(`${logPrefix} First deposit detected. Checking referrals...`);
+                const pending = pendingReferrals.get(userId);
+                const referralCheckTime = Date.now();
+                if (pending && (referralCheckTime - pending.timestamp < PENDING_REFERRAL_TTL_MS)) {
+                    const referrerUserId = pending.referrerUserId;
+                    console.log(`${logPrefix} Pending referral found for referrer ${referrerUserId}. Attempting to link...`);
+                    const linked = await linkReferral(userId, referrerUserId, client);
+                    if (linked) {
+                        console.log(`${logPrefix} Linked user ${userId} to referrer ${referrerUserId}. Removing from pending map.`);
+                        pendingReferrals.delete(userId);
+                        try {
+                            const refereeDisplayName = await getUserDisplayName(referrerUserId, userId);
+                            await safeSendMessage(referrerUserId, `🎉 Someone you referred \\(${escapeMarkdownV2(refereeDisplayName)}\\) just made their first deposit\\! You may receive bonuses based on their activity\\.`, { parse_mode: 'MarkdownV2'})
+                                .catch((e) => {console.warn(`${logPrefix} Failed to send referral link notification to referrer ${referrerUserId}: ${e.message}`)});
+                        } catch(e){console.warn(`${logPrefix} Failed getting display name or sending referral link notification`, e)}
+                    } else {
+                        console.log(`${logPrefix} Failed to link pending referral (see previous logs). Removing from pending map.`);
+                        pendingReferrals.delete(userId);
+                    }
+                } else if (pending) {
+                    console.log(`${logPrefix} Pending referral expired for user ${userId}. Removing from map.`);
+                    pendingReferrals.delete(userId);
                 }
-            } else if (pending) {
-                console.log(`${logPrefix} Pending referral expired for user ${userId}. Removing from map.`);
-                pendingReferrals.delete(userId);
+                await queryDatabase(`UPDATE wallets SET referral_code = COALESCE(referral_code, $2) WHERE user_id = $1`, [userId, generateReferralCode()], client);
             }
-            // Ensure the new user gets a referral code generated if they weren't referred
-            // console.log(`${logPrefix} Ensuring user has a referral code...`); // Less verbose
-            await queryDatabase(`UPDATE wallets SET referral_code = COALESCE(referral_code, $2) WHERE user_id = $1`, [userId, generateReferralCode()], client);
+
+            // --- 7. Commit DB Transaction ---
+            console.log(`${logPrefix} Committing DB transaction...`);
+            await client.query('COMMIT');
+            console.log(`${logPrefix} DB Transaction committed successfully.`);
+
+            // 8. Add signature to processed cache AFTER successful commit
+            addProcessedDepositTx(signature);
+
+            // 9. Notify User AFTER successful commit
+            const amountSOL = (Number(transferAmount) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
+            console.log(`${logPrefix} Sending deposit success notification to user ${userId}...`);
+            await safeSendMessage(
+                userId,
+                `✅ Deposit successful\\! ${escapeMarkdownV2(amountSOL)} SOL has been added to your balance\\. Use /wallet to check\\.`,
+                { parse_mode: 'MarkdownV2' }
+            ).catch(e => console.error(`${logPrefix} Failed to send deposit success notification to user ${userId}: ${e.message}`));
+            console.log(`${logPrefix} Processing complete.`);
+
+        } catch (dbError) {
+            // Catch errors specifically from the DB transaction block
+            if (client) { try { await client.query('ROLLBACK'); console.log(`${logPrefix} Transaction rolled back due to DB error.`); } catch (rbErr) { console.error(`${logPrefix} Rollback failed:`, rbErr); } }
+
+            // *** IDEMPOTENCY Check Fallback: Check for unique constraint violation on signature ***
+             if (dbError.code === '23505' && dbError.constraint === 'deposits_tx_signature_key') {
+                  console.warn(`${logPrefix} Handled unique constraint violation for TX ${signature} in outer catch block. Assuming already processed.`);
+                  addProcessedDepositTx(signature); // Cache signature to prevent retries
+                  // DO NOT notify user or admin about failure in this specific case
+             } else {
+                 // Handle all other DB errors
+                 const failureReason = dbError.message || 'Unknown DB error during processing.';
+                 console.error(`${logPrefix} Unhandled DB error during deposit processing: ${failureReason}`);
+                 // Notify Admin
+                 await notifyAdmin(`🚨 DB ERROR processing Deposit TX ${signature} Addr ${depositAddress} User ${userId}:\n${failureReason}\nStack: ${dbError.stack?.substring(0,300)}`);
+                 // Notify User
+                 if (userId) { // Use userId captured earlier
+                     console.log(`${logPrefix} Sending deposit failure notification to user ${userId}...`);
+                     await safeSendMessage(userId, `⚠️ There was an issue processing your deposit \\(TX: \`${escapeMarkdownV2(signature)}\`\\)\\. If funds left your wallet but your balance wasn't updated, please contact support\\. Error: Database Error`, { parse_mode: 'MarkdownV2'}) // Generic error to user
+                         .catch(e => console.error(`${logPrefix} Failed to send deposit failure notification to user ${userId}: ${e.message}`));
+                 }
+             }
+             // Do not re-throw error, let queue worker finish.
         }
-         // console.log(`${logPrefix} Not user's first deposit. Skipping referral link check.`); // Less verbose
 
-        // --- 5. Commit DB Transaction ---
-        console.log(`${logPrefix} Committing DB transaction...`);
-        await client.query('COMMIT');
-        console.log(`${logPrefix} DB Transaction committed successfully.`);
+    } catch (error) { // Catch errors from *before* the DB transaction block
+        // Error occurred during initial checks (findAddr, getTx, validation, analyzeAmount)
+        const failureReason = error.message || 'Unknown error before DB processing.';
+        console.error(`${logPrefix} Pre-DB error processing deposit: ${failureReason}`);
 
-        // 6. Add signature to processed cache AFTER successful commit
-        addProcessedDepositTx(signature); // Logged within function
+        // Notify Admin for these pre-processing errors
+        await notifyAdmin(`🚨 PRE-DB ERROR processing Deposit TX ${signature} Addr ${depositAddress} User ${userIdForNotifyOnError || 'Unknown'}:\n${failureReason}\nStack: ${error.stack?.substring(0,300)}`);
 
-        // 7. Notify User AFTER successful commit
-        // Escaped Message
-        const amountSOL = (Number(transferAmount) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
-        console.log(`${logPrefix} Sending deposit success notification to user ${userId}...`);
-        await safeSendMessage(
-            userId,
-            `✅ Deposit successful\\! ${escapeMarkdownV2(amountSOL)} SOL has been added to your balance\\. Use /wallet to check\\.`,
-            { parse_mode: 'MarkdownV2' }
-        ).catch(e => console.error(`${logPrefix} Failed to send deposit success notification to user ${userId}: ${e.message}`));
-        console.log(`${logPrefix} Processing complete.`);
-
-    } catch (error) {
-        // Centralized error handling for the transaction block
-        if (client) { try { await client.query('ROLLBACK'); console.log(`${logPrefix} Transaction rolled back due to error.`); } catch (rbErr) { console.error(`${logPrefix} Rollback failed:`, rbErr); } }
-        console.error(`${logPrefix} Error processing deposit: ${error.message}`); // Log specific error
-
-        // *** Catch specific unique constraint violation for idempotency ***
-        // PostgreSQL unique violation code is '23505'
-        if (error.code === '23505' && error.constraint === 'deposits_tx_signature_key') {
-             console.warn(`${logPrefix} Handled expected unique constraint violation for TX ${signature}. Assuming already processed.`);
-             addProcessedDepositTx(signature); // Cache signature to prevent retries
-             // DO NOT notify user or admin about failure in this specific case
-        } else {
-            // Handle all other errors
-            const failureReason = error.message || 'Unknown error during processing.';
-            console.error(`${logPrefix} Unhandled error during deposit processing: ${failureReason}`);
-
-            // Notify Admin for all other errors
-            await notifyAdmin(`🚨 ERROR processing Deposit TX ${signature} Addr ${depositAddress} User ${userIdForNotifyOnError || 'Unknown'}:\n${failureReason}\nStack: ${error.stack?.substring(0,300)}`);
-
-            // Notify User (if user ID known)
-            if (userIdForNotifyOnError) {
-                console.log(`${logPrefix} Sending deposit failure notification to user ${userIdForNotifyOnError}...`);
-                 // Escaped Message
-                 await safeSendMessage(
-                     userIdForNotifyOnError,
-                     `⚠️ There was an issue processing your deposit \\(TX: \`${escapeMarkdownV2(signature)}\`\\)\\. If funds left your wallet but your balance wasn't updated, please contact support\\. Error: ${escapeMarkdownV2(failureReason)}`,
-                     { parse_mode: 'MarkdownV2'}
-                 ).catch(e => console.error(`${logPrefix} Failed to send deposit failure notification to user ${userIdForNotifyOnError}: ${e.message}`));
-            }
-
-            // Add to processed cache only on definitive, non-retryable errors to prevent loops
-            // Let the retry logic in the caller (monitor or queue) handle temporary issues.
-            // Only cache if the error strongly implies this TX cannot be processed later.
-            const errMsgLower = failureReason.toLowerCase();
-            if (errMsgLower.includes('already used') || errMsgLower.includes('expired') || errMsgLower.includes('not found') || errMsgLower.includes('not positive sol transfer') || errMsgLower.includes('status is') || errMsgLower.includes('transaction failed on-chain')) {
-                 console.log(`${logPrefix} Adding signature to processed cache due to non-retryable error.`);
-                 addProcessedDepositTx(signature);
-            }
+        // Notify User if possible
+        if (userIdForNotifyOnError) {
+            console.log(`${logPrefix} Sending deposit failure notification to user ${userIdForNotifyOnError}...`);
+            await safeSendMessage(userIdForNotifyOnError, `⚠️ There was an issue processing your deposit \\(TX: \`${escapeMarkdownV2(signature)}\`\\)\\. Please contact support\\. Error: ${escapeMarkdownV2(failureReason)}`, { parse_mode: 'MarkdownV2'})
+                .catch(e => console.error(`${logPrefix} Failed to send deposit failure notification to user ${userIdForNotifyOnError}: ${e.message}`));
         }
-        // Do not re-throw error here, allow queue worker to finish gracefully. Error is logged/reported.
+
+        // Add to processed cache only on definitive, non-retryable errors
+        const errMsgLower = failureReason.toLowerCase();
+        if (errMsgLower.includes('already used') || errMsgLower.includes('expired') || errMsgLower.includes('not found') || errMsgLower.includes('not positive sol transfer') || errMsgLower.includes('status is') || errMsgLower.includes('transaction failed on-chain')) {
+             console.log(`${logPrefix} Adding signature to processed cache due to non-retryable pre-DB error.`);
+             addProcessedDepositTx(signature);
+        }
+         // Do not re-throw error, let queue worker finish.
     } finally {
         if (client) client.release();
     }
@@ -4272,14 +4236,14 @@ function setupTelegramListeners() {
     // Listener for regular text messages/commands
     bot.on('message', (msg) => {
         // Add to message queue for processing
-        messageQueue.add(() => handleMessage(msg)).catch(err => {
+        messageQueue.add(() => handleMessage(msg)).catch(async (err) => { // Make async for notifyAdmin
             console.error(`⚠️ Message processing queue error for msg ID ${msg?.message_id}:`, err);
              // Optionally notify user if possible/safe
              if(err.message?.includes('timeout')) {
                  safeSendMessage(msg.chat.id, "Processing your request timed out, please try again shortly\\.").catch(()=>{}); // Escaped .
              } else {
                  // Notify admin for unexpected queue processing errors
-                 notifyAdmin(`🚨 ERROR in Message Queue for Msg ID ${msg?.message_id} User ${msg?.from?.id}:\n${err.message}`);
+                 await notifyAdmin(`🚨 ERROR in Message Queue for Msg ID ${msg?.message_id} User ${msg?.from?.id}:\n${err.message}`);
              }
         });
     });
@@ -4287,19 +4251,19 @@ function setupTelegramListeners() {
     // Listener for inline button callbacks
     bot.on('callback_query', (callbackQuery) => {
         // Add to callback queue for processing
-        callbackQueue.add(() => handleCallbackQuery(callbackQuery)).catch(err => {
+        callbackQueue.add(() => handleCallbackQuery(callbackQuery)).catch(async (err) => { // Make async for notifyAdmin
             console.error(`⚠️ Callback query processing queue error for query ID ${callbackQuery?.id}:`, err);
              // Notify admin for unexpected queue processing errors
-             notifyAdmin(`🚨 ERROR in Callback Queue for Query ID ${callbackQuery?.id} User ${callbackQuery?.from?.id}:\n${err.message}`);
+             await notifyAdmin(`🚨 ERROR in Callback Queue for Query ID ${callbackQuery?.id} User ${callbackQuery?.from?.id}:\n${err.message}`);
             // Attempt to answer callback query to clear loading state even on error
             bot.answerCallbackQuery(callbackQuery.id, { text: "Error processing action." }).catch(e => console.warn("Failed to answer callback query on error:", e.message));
         });
     });
 
     // Basic Error Listeners
-    bot.on('polling_error', (error) => {
+    bot.on('polling_error', async (error) => { // Make async for notifyAdmin
         console.error(`❌ Telegram Polling Error: Code ${error.code} | ${error.message}`);
-        notifyAdmin(`🚨 Telegram Polling Error: Code ${error.code} | ${error.message}`); // Notify admin
+        await notifyAdmin(`🚨 Telegram Polling Error: Code ${error.code} | ${error.message}`); // Notify admin
         // Handle specific errors like ETELEGRAM: 401 Unauthorized, 409 Conflict, etc.
         if (error.code === 'EFATAL' || error.message.includes('401')) {
              console.error("❌❌ CRITICAL POLLING ERROR (e.g., Bad Token?). Shutting down.");
@@ -4313,14 +4277,14 @@ function setupTelegramListeners() {
         }
         // Log other polling errors but don't necessarily exit
     });
-    bot.on('webhook_error', (error) => {
+    bot.on('webhook_error', async (error) => { // Make async for notifyAdmin
         console.error(`❌ Telegram Webhook Error: Code ${error.code} | ${error.message}`);
-        notifyAdmin(`🚨 Telegram Webhook Error: Code ${error.code} | ${error.message}`); // Notify admin
+        await notifyAdmin(`🚨 Telegram Webhook Error: Code ${error.code} | ${error.message}`); // Notify admin
         // Potentially try to switch back to polling if webhook fails persistently? More complex logic needed.
     });
-    bot.on('error', (error) => { // General non-request related errors
+    bot.on('error', async (error) => { // General non-request related errors // Make async for notifyAdmin
         console.error('❌ General Bot Error:', error);
-        notifyAdmin(`🚨 General Telegram Bot Error:\n${error.message}\nStack: ${error.stack?.substring(0,500)}`); // Notify admin
+        await notifyAdmin(`🚨 General Telegram Bot Error:\n${error.message}\nStack: ${error.stack?.substring(0,500)}`); // Notify admin
     });
 
     console.log("✅ Telegram listeners registered.");
@@ -4374,14 +4338,14 @@ function setupExpressRoutes() {
             // console.log(`[Webhook] Received update ID: ${req.body.update_id}`); // Optional verbose log
             // Route message updates to messageQueue, callback_query to callbackQueue
             if (req.body.message) {
-                 messageQueue.add(() => bot.processUpdate(req.body)).catch(queueError => {
+                 messageQueue.add(() => bot.processUpdate(req.body)).catch(async (queueError) => { // Make async for notifyAdmin
                       console.error("❌ Error adding webhook message update to queue:", queueError);
-                      notifyAdmin(`🚨 ERROR adding Webhook Message update to queue: ${queueError.message}`);
+                      await notifyAdmin(`🚨 ERROR adding Webhook Message update to queue: ${queueError.message}`);
                  });
             } else if (req.body.callback_query) {
-                 callbackQueue.add(() => bot.processUpdate(req.body)).catch(queueError => {
+                 callbackQueue.add(() => bot.processUpdate(req.body)).catch(async (queueError) => { // Make async for notifyAdmin
                       console.error("❌ Error adding webhook callback update to queue:", queueError);
-                      notifyAdmin(`🚨 ERROR adding Webhook Callback update to queue: ${queueError.message}`);
+                      await notifyAdmin(`🚨 ERROR adding Webhook Callback update to queue: ${queueError.message}`);
                  });
             } else {
                  // Ignore other update types for now
@@ -4562,7 +4526,7 @@ async function initializeDatabase() {
                 chat_id TEXT NOT NULL,
                 game_type TEXT NOT NULL,
                 bet_details JSONB, -- Store game-specific choices (e.g., {'choice': 'heads'}, {'horse': 'Solar Sprint'})
-                wager_amount_lamports BIGINT NOT NULL CHECK (wager_amount_lamports > 0),
+                wager_amount_lamports BIGINT NOT NULL, -- Applied CHECK constraint below
                 status TEXT NOT NULL DEFAULT 'active', -- 'active', 'processing_game', 'completed_win', 'completed_loss', 'completed_push', 'error_game_logic'
                 payout_amount_lamports BIGINT, -- Amount credited back to internal balance (wager + win, or wager for push, 0 for loss)
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -4571,11 +4535,15 @@ async function initializeDatabase() {
             );`, [], client);
         // Add/ensure columns exist
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS bet_details JSONB;`, [], client);
-        // Ensure wager column exists AND has the check constraint - Add column first, then constraint if needed
-        await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS wager_amount_lamports BIGINT;`, [], client); // Ensure column exists
-         // Ensure NOT NULL (might require setting a temp default if adding to existing table with NULLs)
-         // Assuming new table or manual handling for existing NULLs if column added previously without NOT NULL
-         await queryDatabase(`ALTER TABLE bets ALTER COLUMN wager_amount_lamports SET NOT NULL;`, [], client);
+        await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS wager_amount_lamports BIGINT;`, [], client);
+
+        // *** Fix for potential NULLs before applying NOT NULL constraint ***
+        console.log("   Updating NULL wager_amount_lamports in bets to 1 (if any)...");
+        await queryDatabase(`UPDATE bets SET wager_amount_lamports = 1 WHERE wager_amount_lamports IS NULL;`, [], client);
+        console.log("   Setting wager_amount_lamports to NOT NULL...");
+        await queryDatabase(`ALTER TABLE bets ALTER COLUMN wager_amount_lamports SET NOT NULL;`, [], client);
+
+        // Add CHECK constraint (wager > 0) if it doesn't exist
          const checkConstraintCheck = await queryDatabase(`
               SELECT conname FROM pg_constraint
               WHERE conrelid = 'bets'::regclass AND conname = 'bets_wager_positive';
@@ -4720,8 +4688,8 @@ async function startPollingIfNeeded() {
 }
 
 function startDepositMonitor() {
-    const logPrefix = "[DepositMonitor Start]"; // [LOGGING ADDED] Prefix
-    console.log(`${logPrefix} Configuring deposit monitor...`); // [LOGGING ADDED] Entry log
+    const logPrefix = "[DepositMonitor Start]";
+    console.log(`${logPrefix} Configuring deposit monitor...`);
 
     if (depositMonitorIntervalId) {
         console.warn(`${logPrefix} Attempted to start monitor but it's already running (Interval ID: ${depositMonitorIntervalId}). Skipping.`);
@@ -4735,45 +4703,46 @@ function startDepositMonitor() {
     }
     const finalIntervalMs = parseInt(process.env.DEPOSIT_MONITOR_INTERVAL_MS, 10);
 
-    console.log(`${logPrefix} Starting Deposit Monitor (Polling - Interval: ${finalIntervalMs / 1000}s). WARNING: Polling is not scalable for production.`); // [LOGGING MODIFIED] Clarity
+    console.log(`${logPrefix} Starting Deposit Monitor (Polling - Interval: ${finalIntervalMs / 1000}s). WARNING: Polling is not scalable for production.`);
 
     // Initial run shortly after start
     const initialDelay = 5000; // 5 second delay
-    console.log(`${logPrefix} Initial deposit check scheduled in ${initialDelay / 1000}s...`); // [LOGGING ADDED] Initial run schedule log
+    console.log(`${logPrefix} Initial deposit check scheduled in ${initialDelay / 1000}s...`);
     const initialTimer = setTimeout(() => {
-        console.log(`${logPrefix} Performing initial deposit monitor run...`); // [LOGGING ADDED] Initial run execution log
-        monitorDepositsPolling().catch(err => {
-            console.error(`${logPrefix} Error during initial run:`, err); // [LOGGING ADDED] Log initial run error
-            notifyAdmin(`🚨 ERROR during initial Deposit Monitor run: ${err.message}`);
+        console.log(`${logPrefix} Performing initial deposit monitor run...`);
+        monitorDepositsPolling().catch(async (err) => { // Make async for notifyAdmin
+            console.error(`${logPrefix} Error during initial run:`, err);
+            await notifyAdmin(`🚨 ERROR during initial Deposit Monitor run: ${err.message}`);
         });
     }, initialDelay);
     // Optional: Store initialTimer if cleanup is needed on immediate shutdown
 
     // Set interval
-    console.log(`${logPrefix} Setting interval for subsequent checks.`); // [LOGGING ADDED] Interval set log
+    console.log(`${logPrefix} Setting interval for subsequent checks.`);
     depositMonitorIntervalId = setInterval(() => {
         // console.log(`${logPrefix} Interval triggered. Running deposit check.`); // Optional verbose log
-        monitorDepositsPolling().catch(err => {
+        monitorDepositsPolling().catch(async (err) => { // Make async for notifyAdmin
             // Catch errors from the async function itself to prevent interval from stopping
-            console.error(`${logPrefix} Error during interval run:`, err); // [LOGGING ADDED] Log interval error
-             // Notify admin only for persistent or severe errors maybe? Or just log for now.
-             // notifyAdmin(`🚨 ERROR during scheduled Deposit Monitor run: ${err.message}`);
+            console.error(`${logPrefix} Error during interval run:`, err);
+             // Notify admin only for persistent or severe errors maybe? Can get noisy.
+             // await notifyAdmin(`🚨 ERROR during scheduled Deposit Monitor run: ${err.message}`);
         });
     }, finalIntervalMs);
-    console.log(`${logPrefix} Deposit monitor started with Interval ID: ${depositMonitorIntervalId}.`); // [LOGGING ADDED] Final success log
+    console.log(`${logPrefix} Deposit monitor started with Interval ID: ${depositMonitorIntervalId}.`);
 }
 
 
 // --- Graceful Shutdown Handler ---
 let isShuttingDown = false;
-const shutdown = async (signal, isRailwayRotation = false) => { // isRailwayRotation flag currently unused, simplifying
+const shutdown = async (signal) => { // Removed isRailwayRotation as it wasn't used differently
     if (isShuttingDown) {
         console.log("--> Shutdown already in progress...");
         return;
     }
     isShuttingDown = true;
     console.log(`\n🛑 ${signal} received, shutting down gracefully...`);
-    await notifyAdmin(`ℹ️ Bot instance shutting down (Signal: ${signal}).`);
+    // Use await to ensure notification attempts before proceeding/exiting
+    await notifyAdmin(`ℹ️ Bot instance shutting down (Signal: ${signal}).`).catch(e => console.error("Failed to send shutdown notification:", e));
 
     isFullyInitialized = false; // Mark as not ready
 
@@ -4842,9 +4811,9 @@ const shutdown = async (signal, isRailwayRotation = false) => { // isRailwayRota
     } catch (queueError) {
         console.warn(`⚠️ ${queueError.message}. Proceeding with shutdown.`);
         // Log queue sizes to understand what might be stuck
-        console.warn(`   - Queue sizes: Msg=${messageQueue.size}, Callback=${callbackQueue.size}, Payout=${payoutProcessorQueue.size}, Deposit=${depositProcessorQueue.size}, TGSend=${telegramSendQueue.size}`);
-        console.warn(`   - Pending counts: Msg=${messageQueue.pending}, Callback=${callbackQueue.pending}, Payout=${payoutProcessorQueue.pending}, Deposit=${depositProcessorQueue.pending}, TGSend=${telegramSendQueue.pending}`);
-        await notifyAdmin(`⚠️ Queue drain timeout or error during shutdown: ${queueError.message}. Sizes: M=${messageQueue.size},C=${callbackQueue.size},P=${payoutProcessorQueue.size},D=${depositProcessorQueue.size},T=${telegramSendQueue.size}`);
+        const qSizes = `Sizes: M=${messageQueue.size},C=${callbackQueue.size},P=${payoutProcessorQueue.size},D=${depositProcessorQueue.size},T=${telegramSendQueue.size}`;
+        console.warn(`   - Queue ${qSizes}`);
+        await notifyAdmin(`⚠️ Queue drain timeout or error during shutdown: ${queueError.message}. ${qSizes}`);
     }
 
     // 4. Close Database Pool
@@ -4866,19 +4835,18 @@ const shutdown = async (signal, isRailwayRotation = false) => { // isRailwayRota
 
 // --- Process Signal Handlers ---
 process.on('SIGTERM', () => {
-    // const isRailway = !!process.env.RAILWAY_ENVIRONMENT; // No longer needed for special handling
     console.info(`Received SIGTERM.`);
-    shutdown('SIGTERM').catch((err) => { // Treat SIGTERM as standard shutdown request
+    shutdown('SIGTERM').catch(async (err) => { // Make async for notifyAdmin
         console.error("SIGTERM shutdown handler error:", err);
-        notifyAdmin(`🚨 CRITICAL ERROR in SIGTERM shutdown handler: ${err.message}`);
+        await notifyAdmin(`🚨 CRITICAL ERROR in SIGTERM shutdown handler: ${err.message}`);
         process.exit(1); // Force exit if shutdown handler fails critically
     });
 });
 process.on('SIGINT', () => { // CTRL+C
     console.info(`Received SIGINT.`);
-    shutdown('SIGINT').catch((err) => {
+    shutdown('SIGINT').catch(async (err) => { // Make async for notifyAdmin
         console.error("SIGINT shutdown handler error:", err);
-        notifyAdmin(`🚨 CRITICAL ERROR in SIGINT shutdown handler: ${err.message}`);
+        await notifyAdmin(`🚨 CRITICAL ERROR in SIGINT shutdown handler: ${err.message}`);
         process.exit(1);
     });
 });
@@ -4894,10 +4862,10 @@ process.on('uncaughtException', async (err, origin) => { // Make async to allow 
     // Attempt emergency shutdown ONLY IF NOT ALREADY SHUTTING DOWN
     if (!isShuttingDown) {
         console.log("--> Attempting emergency shutdown due to uncaught exception...");
-        shutdown('UNCAUGHT_EXCEPTION').catch((shutdownErr) => {
+        shutdown('UNCAUGHT_EXCEPTION').catch(async (shutdownErr) => { // Make async for notifyAdmin
             console.error("--> Error during emergency shutdown:", shutdownErr);
              // Try notifying admin again about shutdown failure
-             notifyAdmin(`🚨 CRITICAL: Error during emergency shutdown after uncaughtException: ${shutdownErr.message}`);
+             await notifyAdmin(`🚨 CRITICAL: Error during emergency shutdown after uncaughtException: ${shutdownErr.message}`);
         }); // Ignore errors during emergency shutdown try
     } else {
          console.log("--> Uncaught exception during shutdown sequence. Forcing exit.");
@@ -4919,7 +4887,6 @@ process.on('unhandledRejection', async (reason, promise) => { // Make async to a
      await notifyAdmin(`🔥🔥🔥 Unhandled Rejection:\nReason: ${reasonMsg}`);
     // Depending on the reason, might consider this fatal or just log it.
     // If reason suggests a critical failure, could trigger shutdown similar to uncaughtException.
-    // For now, just log and notify admin.
 });
 
 
