@@ -4408,6 +4408,7 @@ async function initializeDatabase() {
         await queryDatabase(`ALTER TABLE wallets ADD COLUMN IF NOT EXISTS referral_count INT NOT NULL DEFAULT 0;`, [], client);
         await queryDatabase(`ALTER TABLE wallets ADD COLUMN IF NOT EXISTS total_wagered BIGINT NOT NULL DEFAULT 0;`, [], client);
         await queryDatabase(`ALTER TABLE wallets ADD COLUMN IF NOT EXISTS last_milestone_paid_lamports BIGINT NOT NULL DEFAULT 0;`, [], client);
+        await queryDatabase(`ALTER TABLE wallets ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`, [], client);
         await queryDatabase(`ALTER TABLE wallets ADD COLUMN IF NOT EXISTS linked_at TIMESTAMPTZ;`, [], client);
         await queryDatabase(`ALTER TABLE wallets ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ DEFAULT NOW();`, [], client);
 
