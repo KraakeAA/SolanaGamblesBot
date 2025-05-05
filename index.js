@@ -16,8 +16,8 @@ import {
     sendAndConfirmTransaction,
     ComputeBudgetProgram,
     SendTransactionError,
-    TransactionExpiredBlockheightExceededError, // Import specific error type if needed for retries
-    TransactionSignature // Added for type checking if needed elsewhere
+    TransactionExpiredBlockheightExceededError // Import specific error type if needed for retries
+    // REMOVED: TransactionSignature (TypeScript type alias, cannot be imported as value)
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import * as crypto from 'crypto'; // Keep for other crypto uses if any
@@ -355,7 +355,6 @@ const pool = new Pool({
 pool.on('error', (err, client) => {
     console.error('❌ Unexpected error on idle PostgreSQL client', err);
     // Consider removing the client? pool.remove(client)? Requires careful testing.
-    // Notify admin if pool errors become persistent
     notifyAdmin(`🚨 DB Pool Error (Idle Client): ${err.message}`).catch(()=>{}); // Fire and forget notification
 });
 console.log("✅ PostgreSQL Pool created.");
