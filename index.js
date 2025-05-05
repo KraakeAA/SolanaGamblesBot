@@ -1,5 +1,5 @@
 // index.js - Part 1: Imports, Environment Configuration, Core Initializations
-// --- VERSION: 3.1.4 --- (Incorporating createSafeIndex workaround for ed25519-hd-key RangeError)
+// --- VERSION: 3.1.5 --- (Comprehensive Fixes: BigInt Log, Idempotency, Admin Notify, safeIndex)
 
 // --- All Imports MUST come first ---
 import 'dotenv/config'; // Keep for local development via .env file
@@ -15,11 +15,12 @@ import {
     SystemProgram,
     sendAndConfirmTransaction,
     ComputeBudgetProgram,
-    SendTransactionError
+    SendTransactionError,
+    TransactionExpiredBlockheightExceededError // Import specific error type if needed for retries
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import * as crypto from 'crypto'; // Keep for other crypto uses if any
-import { createHash } from 'crypto'; // *** ADDED for createSafeIndex ***
+import { createHash } from 'crypto'; // *** Ensure this import is present ***
 import PQueue from 'p-queue';
 import { Buffer } from 'buffer';
 import bip39 from 'bip39'; // For mnemonic seed phrase generation/validation
@@ -33,12 +34,11 @@ import nacl from 'tweetnacl'; // Keep for keypair generation from derived seed
 import RateLimitedConnection from './lib/solana-connection.js';
 
 // --- Deployment Check Log ---
-// Use a version indicator reflecting the change if desired, e.g., 3.1.4-patch1
-console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} --- v3.1.4 (safeIndex patch) ---`);
+console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} --- v3.1.5 ---`); // Updated Version
 // --- END DEPLOYMENT CHECK ---
 
 
-console.log("⏳ Starting Solana Gambles Bot (Custodial, Buttons, v3.1.4 with safeIndex patch)... Checking environment variables...");
+console.log("⏳ Starting Solana Gambles Bot (Custodial, Buttons, v3.1.5)... Checking environment variables..."); // Updated Version
 
 // --- Environment Variable Configuration ---
 const REQUIRED_ENV_VARS = [
@@ -46,9 +46,9 @@ const REQUIRED_ENV_VARS = [
     'DATABASE_URL',
     'DEPOSIT_MASTER_SEED_PHRASE', // Expect BIP39 Mnemonic Seed Phrase (SECRET)
     'MAIN_BOT_PRIVATE_KEY',       // Used for general payouts (Withdrawals) (SECRET)
-    // Optional separate key for referral payouts (falls back to MAIN_BOT_PRIVATE_KEY)
     'REFERRAL_PAYOUT_PRIVATE_KEY',// (SECRET) - Presence checked, but allowed to be empty
     'RPC_URLS',                   // Comma-separated list of RPC URLs
+    'ADMIN_USER_IDS',             // *** ADDED REQUIREMENT for admin notifications *** Comma-separated Telegram User IDs
 ];
 
 // Check for Railway-specific variables if deployed there
@@ -69,6 +69,18 @@ REQUIRED_ENV_VARS.forEach((key) => {
         missingVars = true;
     }
 });
+// Specific check for ADMIN_USER_IDS content
+if (!process.env.ADMIN_USER_IDS) {
+     // Already caught by missing check above, but double-check
+     if (!missingVars) { // Avoid duplicate message if already missing
+         console.error(`❌ Environment variable ADMIN_USER_IDS is missing.`);
+         missingVars = true;
+     }
+} else if (process.env.ADMIN_USER_IDS.split(',').map(id => id.trim()).filter(id => /^\d+$/.test(id)).length === 0) {
+     console.error(`❌ Environment variable ADMIN_USER_IDS must contain at least one valid comma-separated Telegram User ID.`);
+     missingVars = true;
+}
+
 
 // Specific check for valid Seed Phrase
 console.log(`[Env Check] Checking DEPOSIT_MASTER_SEED_PHRASE... Present: ${!!process.env.DEPOSIT_MASTER_SEED_PHRASE}`);
@@ -129,7 +141,7 @@ if (missingVars) {
 // Optional vars with defaults (using BigInt where appropriate)
 const OPTIONAL_ENV_DEFAULTS = {
     // --- Operational ---
-    'ADMIN_USER_IDS': '',
+    // ADMIN_USER_IDS handled by REQUIRED check now
     'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60', // How long a unique deposit address is valid
     'DEPOSIT_CONFIRMATIONS': 'confirmed',   // Solana commitment level ('confirmed' or 'finalized')
     'WITHDRAWAL_FEE_LAMPORTS': '5000',      // Flat withdrawal fee (can be 0)
@@ -201,6 +213,8 @@ const OPTIONAL_ENV_DEFAULTS = {
 
 // Assign defaults for optional vars if they are missing
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
+    // Skip ADMIN_USER_IDS as it's now required
+    if (key === 'ADMIN_USER_IDS') return;
     if (process.env[key] === undefined) { // Check for undefined specifically
         process.env[key] = defaultValue;
     }
@@ -270,8 +284,8 @@ const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
     retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
     retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
     commitment: process.env.RPC_COMMITMENT, // Default 'confirmed'
-    httpHeaders: { 'User-Agent': `SolanaGamblesBot/3.1.4-safeIndex` }, // Indicate patch
-    // clientId: `SolanaGamblesBot/3.1.4-safeIndex` // Set within RateLimitedConnection now
+    httpHeaders: { 'User-Agent': `SolanaGamblesBot/3.1.5` }, // Updated version
+    // clientId: `SolanaGamblesBot/3.1.5` // Set within RateLimitedConnection now (Updated version)
 });
 console.log("✅ Multi-RPC Solana connection instance created.");
 
@@ -389,7 +403,7 @@ console.log("✅ Game Config Loaded and Validated.");
 
 // --- End of Part 1 ---
 // index.js - Part 2: Database Operations
-// --- VERSION: 3.1.1 --- (Added Deposit Logging)
+// --- VERSION: 3.1.5 --- (Fixed BigInt logging in queryDatabase)
 
 // --- Helper Function for DB Operations ---
 /**
@@ -406,9 +420,22 @@ async function queryDatabase(sql, params = [], dbClient = pool) {
         // Log enhanced error information
         console.error(`❌ DB Query Error:`);
         console.error(`   SQL: ${sql.substring(0, 500)}${sql.length > 500 ? '...' : ''}`); // Log truncated SQL
-        console.error(`   Params: ${JSON.stringify(params)}`);
+
+        // *** FIXED BigInt Logging Issue START ***
+        // Safely stringify parameters, converting BigInts to strings for logging
+        const safeParamsString = JSON.stringify(params, (key, value) =>
+            typeof value === 'bigint'
+                ? value.toString() // Convert BigInt to string
+                : value // Return other values unchanged
+        );
+        console.error(`   Params: ${safeParamsString}`); // Log the safe string
+        // *** FIXED BigInt Logging Issue END ***
+
         console.error(`   Error Code: ${error.code}`);
         console.error(`   Error Message: ${error.message}`);
+        if (error.constraint) { // Log constraint name if available (useful for unique/fk errors)
+            console.error(`   Constraint: ${error.constraint}`);
+        }
         // console.error(`   Stack: ${error.stack}`); // Optional: full stack trace
         throw error; // Re-throw the original error for upstream handling
     }
@@ -979,12 +1006,12 @@ async function markDepositAddressUsed(client, depositAddressId) {
         );
         if (res.rowCount > 0) {
              console.log(`${logPrefix} Successfully marked as 'used'. Invalidating cache entry.`); // [LOGGING ADDED] Success log
-            // Invalidate cache entry for this address
-             const addressRes = await queryDatabase('SELECT deposit_address FROM deposit_addresses WHERE id = $1', [depositAddressId], client);
-             if (addressRes.rowCount > 0) {
-                 removeActiveDepositAddressCache(addressRes.rows[0].deposit_address); // Cache helpers defined in Part 3
-                 console.log(`${logPrefix} Removed address ${addressRes.rows[0].deposit_address.slice(0,6)}.. from active cache.`); // [LOGGING ADDED] Cache remove log
-             }
+             // Invalidate cache entry for this address
+              const addressRes = await queryDatabase('SELECT deposit_address FROM deposit_addresses WHERE id = $1', [depositAddressId], client);
+              if (addressRes.rowCount > 0) {
+                  removeActiveDepositAddressCache(addressRes.rows[0].deposit_address); // Cache helpers defined in Part 3
+                  console.log(`${logPrefix} Removed address ${addressRes.rows[0].deposit_address.slice(0,6)}.. from active cache.`); // [LOGGING ADDED] Cache remove log
+              }
             return true;
         } else {
             console.warn(`${logPrefix} Failed to mark as 'used' (status might not be 'pending' or ID not found).`); // [LOGGING ADDED] Failure log
@@ -1011,8 +1038,10 @@ async function recordConfirmedDeposit(client, userId, depositAddressId, txSignat
     const query = `
         INSERT INTO deposits (user_id, deposit_address_id, tx_signature, amount_lamports, status, created_at, processed_at)
         VALUES ($1, $2, $3, $4, 'confirmed', NOW(), NOW())
+        ON CONFLICT (tx_signature) DO NOTHING -- Prevent duplicate inserts silently
         RETURNING id;
     `;
+    // Note: Added ON CONFLICT DO NOTHING for better idempotency handling upstream
     try {
         const res = await queryDatabase(query, [String(userId), depositAddressId, txSignature, BigInt(amountLamports)], client);
         if (res.rowCount > 0) {
@@ -1020,14 +1049,17 @@ async function recordConfirmedDeposit(client, userId, depositAddressId, txSignat
             console.log(`${logPrefix} Successfully recorded deposit with ID: ${depositId}`); // [LOGGING ADDED] Success log
             return { success: true, depositId: depositId };
         } else {
-            console.error(`${logPrefix} Failed to insert deposit record (no ID returned).`); // [LOGGING ADDED] Failure log
-            return { success: false, error: 'Failed to insert deposit record' };
+            // If rowCount is 0, it means ON CONFLICT DO NOTHING was triggered
+            console.warn(`${logPrefix} Deposit TX ${txSignature} already processed (ON CONFLICT triggered).`);
+             // Treat as failure for this specific attempt to prevent double crediting upstream
+            return { success: false, error: 'Deposit transaction already processed.' };
         }
     } catch (err) {
+        // Catch errors other than the ON CONFLICT case
         console.error(`${logPrefix} Error inserting deposit record:`, err.message, err.code); // [LOGGING ADDED] Error log
+        // If somehow a unique constraint error happens despite ON CONFLICT (shouldn't), log it
         if (err.code === '23505' && err.constraint === 'deposits_tx_signature_key') {
-            console.error(`${logPrefix} Deposit TX ${txSignature} already processed (unique constraint violation).`);
-            // Still treat as failure to prevent double crediting upstream
+            console.error(`${logPrefix} Deposit TX ${txSignature} already processed (Unique constraint violation despite ON CONFLICT?).`);
             return { success: false, error: 'Deposit transaction already processed.' };
         }
         // Let calling transaction handle rollback
@@ -1035,7 +1067,7 @@ async function recordConfirmedDeposit(client, userId, depositAddressId, txSignat
     }
 }
 
-// ** MOVED FROM PART 5 **
+// ** MOVED FROM PART 5 ** (Original code comment - this function is correctly placed here in Part 2)
 /**
  * Gets the next available index for deriving a deposit address for a user.
  * Counts existing addresses for the user.
@@ -1212,7 +1244,7 @@ async function createBetRecord(client, userId, chatId, gameType, betDetails, wag
     } catch (err) {
         console.error(`[DB CreateBet] Error for user ${userId}, game ${gameType}:`, err.message, err.code);
         // Check constraint violation?
-        if (err.constraint === 'wager_positive') {
+        if (err.constraint === 'bets_wager_positive') { // Assuming constraint name is 'bets_wager_positive' based on previous schema attempt
              return { success: false, error: 'Wager amount must be positive (DB check).' };
         }
         return { success: false, error: `Database error creating bet (${err.code || 'N/A'})` };
@@ -1328,17 +1360,19 @@ async function getBetDetails(betId) {
  * @param {bigint} payoutAmountLamports
  * @param {number | null} [triggeringBetId=null] Bet ID for 'initial_bet' type.
  * @param {bigint | null} [milestoneReachedLamports=null] Wager threshold for 'milestone' type.
+ * @param {pg.PoolClient | null} [client=null] Optional DB client if called within a transaction.
  * @returns {Promise<{success: boolean, payoutId?: number, error?: string}>}
  */
-async function recordPendingReferralPayout(referrerUserId, refereeUserId, payoutType, payoutAmountLamports, triggeringBetId = null, milestoneReachedLamports = null) {
+async function recordPendingReferralPayout(referrerUserId, refereeUserId, payoutType, payoutAmountLamports, triggeringBetId = null, milestoneReachedLamports = null, client = null) {
+    const db = client || pool; // Use client if provided, else pool
     const query = `
         INSERT INTO referral_payouts (
             referrer_user_id, referee_user_id, payout_type, payout_amount_lamports,
             triggering_bet_id, milestone_reached_lamports, status, created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())
-        ON CONFLICT ON CONSTRAINT unique_milestone_payout DO NOTHING -- Ignore duplicate milestone attempts
+        ON CONFLICT ON CONSTRAINT idx_refpayout_unique_milestone DO NOTHING -- Ignore duplicate milestone attempts based on index
         RETURNING id;
-    `; // Added ON CONFLICT clause
+    `; // Assuming the unique index name is idx_refpayout_unique_milestone
     const values = [
         String(referrerUserId),
         String(refereeUserId),
@@ -1348,7 +1382,7 @@ async function recordPendingReferralPayout(referrerUserId, refereeUserId, payout
         milestoneReachedLamports !== null ? BigInt(milestoneReachedLamports) : null
     ];
     try {
-        const res = await queryDatabase(query, values);
+        const res = await queryDatabase(query, values, db); // Use the correct db client/pool
         if (res.rows.length > 0) { // Row returned, insert was successful
             const payoutId = res.rows[0].id;
             console.log(`[DB Referral] Recorded pending ${payoutType} payout ID ${payoutId} for referrer ${referrerUserId} (triggered by ${refereeUserId}).`);
@@ -1358,6 +1392,7 @@ async function recordPendingReferralPayout(referrerUserId, refereeUserId, payout
                  console.warn(`[DB Referral] Duplicate milestone payout attempt for referrer ${referrerUserId}, referee ${refereeUserId}, milestone ${milestoneReachedLamports}. Ignoring.`);
                  return { success: false, error: 'Duplicate milestone payout attempt.' };
              } else {
+                  // This case (initial bet conflict) shouldn't happen unless logic allows multiple first bets?
                   console.error("[DB Referral] Failed to insert pending referral payout, RETURNING clause gave no ID (and not a milestone conflict).");
                   return { success: false, error: "Failed to insert pending referral payout." };
              }
@@ -1468,7 +1503,7 @@ async function getTotalReferralEarnings(userId) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.1.4 --- (Incorporating createSafeIndex workaround for ed25519-hd-key RangeError)
+// --- VERSION: 3.1.5 --- (Implemented safeIndex workaround, added notifyAdmin helper)
 
 // --- Solana Utilities --
 
@@ -1479,11 +1514,11 @@ function createSafeIndex(userId) {
     const hash = createHash('sha256')
         .update(String(userId))
         .digest();
-    
+
     // Take last 4 bytes and convert to UInt32 (always < 2^32)
     // Using last 4 bytes as in the proposal. First 4 bytes (original method) would also work.
-    const index = hash.readUInt32BE(hash.length - 4); 
-    
+    const index = hash.readUInt32BE(hash.length - 4);
+
     // Ensure it's below hardening threshold (2^31)
     return index % 2147483648; // 0 <= index < 2^31
 }
@@ -1616,6 +1651,11 @@ function isRetryableSolanaError(error) {
     if (error instanceof SendTransactionError && error.cause) {
         return isRetryableSolanaError(error.cause);
     }
+     // Handle TransactionExpiredBlockheightExceededError as potentially retryable (fetch new blockhash and try again)
+     if (error instanceof TransactionExpiredBlockheightExceededError) {
+        return true;
+     }
+
 
     // Check for explicit rate limit error structure from some RPC providers
      if (error?.data?.message?.toLowerCase().includes('rate limit exceeded') || error?.data?.message?.toLowerCase().includes('too many requests')) {
@@ -1671,6 +1711,7 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     if (!privateKey) {
         const errorMsg = `Missing private key env var ${privateKeyEnvVar} for payout source ${payoutSource} (Key Type: ${keyTypeForLog}).`;
         console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`);
+        await notifyAdmin(`🚨 CRITICAL: Missing private key env var ${privateKeyEnvVar} for payout source ${payoutSource}. Payout failed.`); // Notify admin
         return { success: false, error: errorMsg, isRetryable: false };
     }
 
@@ -1680,6 +1721,7 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     } catch (e) {
          const errorMsg = `Failed to decode private key ${keyTypeForLog} (${privateKeyEnvVar}): ${e.message}`;
          console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`);
+         await notifyAdmin(`🚨 CRITICAL: Failed to decode private key ${keyTypeForLog} (${privateKeyEnvVar}): ${e.message}. Payout failed.`); // Notify admin
          return { success: false, error: errorMsg, isRetryable: false };
     }
 
@@ -1689,7 +1731,8 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     try {
         // 1. Get latest blockhash
         console.log(`[${operationId}] Fetching latest blockhash...`);
-        const { blockhash, lastValidBlockHeight } = await solanaConnection.getLatestBlockhash(DEPOSIT_CONFIRMATION_LEVEL);
+        // Use 'confirmed' for blockhash fetching, consistent with DEPOSIT_CONFIRMATION_LEVEL default for payouts
+        const { blockhash, lastValidBlockHeight } = await solanaConnection.getLatestBlockhash('confirmed');
         if (!blockhash || !lastValidBlockHeight) {
             throw new Error('Failed to get valid latest blockhash object.');
         }
@@ -1734,10 +1777,10 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
             transaction,
             [payerWallet],
             {
-                commitment: DEPOSIT_CONFIRMATION_LEVEL,
-                skipPreflight: false,
-                preflightCommitment: DEPOSIT_CONFIRMATION_LEVEL,
-                lastValidBlockHeight: lastValidBlockHeight,
+                commitment: DEPOSIT_CONFIRMATION_LEVEL, // Use the standard confirmation level for final confirmation
+                skipPreflight: false, // Keep preflight check
+                preflightCommitment: DEPOSIT_CONFIRMATION_LEVEL, // Use same level for preflight
+                lastValidBlockHeight: lastValidBlockHeight, // Important for expiration check
             }
         );
 
@@ -1753,12 +1796,16 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
         const isRetryable = isRetryableSolanaError(error);
         let userFriendlyError = `Send/Confirm error: ${error.message}`;
         const errorMsgLower = String(error.message || '').toLowerCase();
+
         if (errorMsgLower.includes('insufficient lamports') || errorMsgLower.includes('insufficient funds')) {
-            userFriendlyError = `Insufficient funds in the ${keyTypeForLog} payout wallet.`;
-        } else if (errorMsgLower.includes('blockhash not found') || errorMsgLower.includes('block height exceeded')) {
-            userFriendlyError = 'Transaction expired (blockhash invalid).';
+            userFriendlyError = `Insufficient funds in the ${keyTypeForLog} payout wallet. Please check balance.`;
+            // Non-retryable, notify admin immediately
+            await notifyAdmin(`🚨 CRITICAL: Insufficient funds in ${keyTypeForLog} wallet (${payerWallet.publicKey.toBase58()}) for payout. Operation ID: ${operationId}`);
+        } else if (error instanceof TransactionExpiredBlockheightExceededError || errorMsgLower.includes('blockhash not found') || errorMsgLower.includes('block height exceeded')) {
+            userFriendlyError = 'Transaction expired (blockhash invalid). Will retry.';
         } else if (errorMsgLower.includes('transaction was not confirmed') || errorMsgLower.includes('timed out waiting')) {
             userFriendlyError = `Transaction confirmation timeout. Status unclear, may succeed later.`;
+            // Potentially retryable, but requires careful handling (check TX status later)
         } else if (isRetryable) {
              userFriendlyError = `Temporary network/RPC error: ${error.message}`;
         }
@@ -1783,11 +1830,36 @@ function analyzeTransactionAmounts(tx, targetAddress) {
     try { new PublicKey(targetAddress); } catch (e) { console.warn(`${logPrefix} Invalid targetAddress format: ${targetAddress}`); return { transferAmount: 0n, payerAddress: null }; }
     if (tx.meta?.err) { console.log(`${logPrefix} Transaction meta contains error. Returning zero amount. Error: ${JSON.stringify(tx.meta.err)}`); return { transferAmount: 0n, payerAddress: null }; }
 
+    // Prioritize using balance changes for accuracy
     if (tx.meta?.preBalances && tx.meta?.postBalances && tx.transaction?.message) {
         try {
-             const accountKeys = (tx.transaction.message.staticAccountKeys || tx.transaction.message.accountKeys).map(k => k.toBase58());
-             const header = tx.transaction.message.header;
-             const targetIndex = accountKeys.indexOf(targetAddress);
+             // Handle potential differences in accountKeys structure between legacy and versioned transactions
+             let accountKeysList = [];
+             if (tx.transaction.message.staticAccountKeys) { // Likely legacy
+                 accountKeysList = tx.transaction.message.staticAccountKeys.map(k => k.toBase58());
+             } else if (tx.transaction.message.accountKeys) { // Likely version 0
+                 // For version 0, accountKeys includes address lookup table accounts if used
+                 // Need to resolve writable/signer flags if using message directly
+                 // Simpler approach for this context: rely on `loadedAddresses` if present for v0 with LUTs
+                 if (tx.meta.loadedAddresses) {
+                     // Combine static keys with resolved LUT addresses
+                     const staticKeys = tx.transaction.message.accountKeys.map(k => k.toBase58());
+                     const writableLut = tx.meta.loadedAddresses.writable || [];
+                     const readonlyLut = tx.meta.loadedAddresses.readonly || [];
+                     accountKeysList = [...staticKeys, ...writableLut, ...readonlyLut];
+                 } else {
+                      // Version 0 without LUTs
+                      accountKeysList = tx.transaction.message.accountKeys.map(k => k.toBase58());
+                 }
+             } else {
+                 throw new Error("Could not determine account keys from transaction message.");
+             }
+
+             // Remove duplicates that might arise from LUT resolution
+             const uniqueAccountKeys = [...new Set(accountKeysList)];
+
+             const targetIndex = uniqueAccountKeys.indexOf(targetAddress);
+
              if (targetIndex !== -1 && tx.meta.preBalances.length > targetIndex && tx.meta.postBalances.length > targetIndex) {
                  const preBalance = BigInt(tx.meta.preBalances[targetIndex]);
                  const postBalance = BigInt(tx.meta.postBalances[targetIndex]);
@@ -1795,31 +1867,97 @@ function analyzeTransactionAmounts(tx, targetAddress) {
                  if (balanceChange > 0n) {
                      transferAmount = balanceChange;
                      console.log(`${logPrefix} Positive balance change detected: ${transferAmount} lamports.`);
-                      const signers = accountKeys.slice(0, header.numRequiredSignatures);
-                      for (const signerKey of signers) {
-                          const signerIndex = accountKeys.indexOf(signerKey);
-                          if (signerIndex !== -1 && signerIndex !== targetIndex && tx.meta.preBalances.length > signerIndex && tx.meta.postBalances.length > signerIndex) {
-                              const preSigner = BigInt(tx.meta.preBalances[signerIndex]);
-                              const postSigner = BigInt(tx.meta.postBalances[signerIndex]);
-                              if (postSigner < preSigner) { payerAddress = signerKey; console.log(`${logPrefix} Identified likely payer (signer with negative balance change): ${payerAddress}`); break; }
-                          }
-                      }
-                     if (!payerAddress && signers.length > 0) { payerAddress = signers[0]; console.log(`${logPrefix} Could not find signer with negative balance change, falling back to first signer as payer: ${payerAddress}`); }
-                 } else { console.log(`${logPrefix} No positive balance change found for target address.`); }
-             } else { console.log(`${logPrefix} Target address not found in account keys or balance arrays incomplete.`); }
-        } catch (e) { console.warn(`${logPrefix} Error analyzing balance changes: ${e.message}`); transferAmount = 0n; payerAddress = null; }
-    } else { console.log(`${logPrefix} Balance change analysis skipped: Meta or message data missing.`); }
 
-    if (transferAmount === 0n && tx.meta?.logMessages) {
-        console.log(`${logPrefix} Attempting analysis via log messages (Fallback)...`);
-        const sysTransferToRegex = /Transfer: src=([1-9A-HJ-NP-Za-km-z]+) dst=([1-9A-HJ-NP-Za-km-z]+) lamports=(\d+)/;
-        for (const log of tx.meta.logMessages) {
-            const matchNew = log.match(sysTransferToRegex);
-            if (matchNew && matchNew[2] === targetAddress) {
-                 const potentialPayer = matchNew[1]; const potentialAmount = BigInt(matchNew[3]);
-                 console.log(`${logPrefix} Found transfer via new log format: ${potentialAmount} lamports from ${potentialPayer}`);
-                 transferAmount = potentialAmount; payerAddress = potentialPayer; break;
+                     // Try to find payer based on signers with negative balance change
+                     // This part is heuristic and might be complex with v0 TXs / LUTs / complex instructions
+                     const header = tx.transaction.message.header;
+                     const signers = uniqueAccountKeys.slice(0, header.numRequiredSignatures); // Assuming signers are first
+
+                     for (const signerKey of signers) {
+                         const signerIndex = uniqueAccountKeys.indexOf(signerKey);
+                         // Check if balances array has this index (might not if complex tx structure)
+                         if (signerIndex !== -1 && signerIndex !== targetIndex && tx.meta.preBalances.length > signerIndex && tx.meta.postBalances.length > signerIndex) {
+                             const preSigner = BigInt(tx.meta.preBalances[signerIndex]);
+                             const postSigner = BigInt(tx.meta.postBalances[signerIndex]);
+                             // A simple transfer should result in a decrease roughly equal to transferAmount + fee
+                             // Allow for fee variation
+                             if (postSigner < preSigner) {
+                                 payerAddress = signerKey;
+                                 console.log(`${logPrefix} Identified likely payer (signer with negative balance change): ${payerAddress}`);
+                                 break;
+                             }
+                         }
+                     }
+                     // Fallback to first signer if specific payer not found
+                     if (!payerAddress && signers.length > 0) {
+                         payerAddress = signers[0];
+                         console.log(`${logPrefix} Could not find specific signer with negative balance change, falling back to first signer as payer: ${payerAddress}`);
+                     }
+
+                 } else { console.log(`${logPrefix} No positive balance change found for target address.`); }
+             } else { console.log(`${logPrefix} Target address not found in resolved account keys or balance arrays incomplete.`); }
+        } catch (e) { console.warn(`${logPrefix} Error analyzing balance changes: ${e.message}`); transferAmount = 0n; payerAddress = null; }
+    } else { console.log(`${logPrefix} Balance change analysis skipped: Meta or message data missing/incomplete.`); }
+
+    // Fallback: Check inner instructions for SystemProgram transfers if balance change failed
+    // This is less reliable as it doesn't guarantee it's the main transfer or account for fees
+    if (transferAmount === 0n && tx.meta?.innerInstructions) {
+        console.log(`${logPrefix} Attempting analysis via inner instructions (Fallback)...`);
+        const SystemProgramId = SystemProgram.programId.toBase58();
+        for (const instructionSet of tx.meta.innerInstructions) {
+            for (const innerIx of instructionSet.instructions) {
+                 // Check if it's a SystemProgram instruction
+                 if (tx.transaction.message.staticAccountKeys) { // Legacy parsing
+                     const programId = tx.transaction.message.staticAccountKeys[innerIx.programIdIndex]?.toBase58();
+                     if (programId === SystemProgramId) {
+                         // Attempt to decode transfer instruction data (simplistic check for amount)
+                         // Instruction data format: [instruction index (u32), lamports (u64)]
+                         // This is fragile and depends on exact instruction encoding.
+                         // A full parser like @solana/spl-token might be needed for robust parsing.
+                         // Let's skip complex parsing for now and rely on balance changes or logs primarily.
+                     }
+                 }
+                 // Add handling for Version 0 TX parsing if needed - becomes complex quickly
             }
+        }
+         // console.log(`${logPrefix} Inner instruction parsing did not yield result (or not implemented fully).`);
+    }
+
+    // Fallback 2: Use Log Messages (Less reliable than balance changes)
+    if (transferAmount === 0n && tx.meta?.logMessages) {
+        console.log(`${logPrefix} Attempting analysis via log messages (Fallback 2)...`);
+        // Regex might need adjustments based on actual log formats
+        const sysTransferToRegex = /Transfer: src=([1-9A-HJ-NP-Za-km-z]+) dst=([1-9A-HJ-NP-Za-km-z]+) lamports=(\d+)/;
+        const invokeLogRegex = /Program .* invoke \[\d+\]/; // Identify start of CPI logs
+        const successLogRegex = /Program .* success/; // Identify end of CPI logs
+
+        let inRelevantInvoke = true; // Assume top-level initially
+        for (const log of tx.meta.logMessages) {
+             if (invokeLogRegex.test(log)) {
+                 // Potentially entering CPI, maybe ignore transfers within? Depends on bot logic.
+                 // For simple deposits, we probably only care about top-level transfers.
+                 // This logic might need refinement based on expected transaction types.
+                 // Let's assume for now we only care about transfers not deep inside CPIs.
+                 // A simple depth counter could be used if needed.
+                 inRelevantInvoke = false; // Assume transfers inside CPIs are not the deposit
+             } else if (successLogRegex.test(log)) {
+                 inRelevantInvoke = true; // Exiting invoke context
+             }
+
+            // Check for simple transfer log IF we're likely at the top level
+             if (inRelevantInvoke) {
+                 const matchNew = log.match(sysTransferToRegex);
+                 if (matchNew && matchNew[2] === targetAddress) {
+                     const potentialPayer = matchNew[1]; const potentialAmount = BigInt(matchNew[3]);
+                     console.log(`${logPrefix} Found potential transfer via log: ${potentialAmount} lamports from ${potentialPayer}`);
+                     // Use this only if balance change method failed completely
+                     if (transferAmount === 0n) {
+                         transferAmount = potentialAmount;
+                         payerAddress = potentialPayer;
+                     }
+                     // Don't break, might be multiple transfers, balance change is better primary source
+                 }
+             }
         }
         if (transferAmount === 0n) { console.log(`${logPrefix} Log message parsing did not find a definitive transfer to the target address.`); }
     }
@@ -1831,10 +1969,62 @@ function analyzeTransactionAmounts(tx, targetAddress) {
 
 
 // --- Telegram Utilities ---
+
+// *** ADDED Admin Notification Helper ***
+/**
+ * Sends a message to all configured admin users.
+ * @param {string} message The message text to send.
+ */
+async function notifyAdmin(message) {
+    const adminIds = (process.env.ADMIN_USER_IDS || '').split(',')
+        .map(id => id.trim())
+        .filter(id => /^\d+$/.test(id)); // Ensure IDs are numeric strings
+
+    if (adminIds.length === 0) {
+        console.warn('[NotifyAdmin] No valid ADMIN_USER_IDS configured in environment variables. Cannot send notification.');
+        return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const fullMessage = `🚨 **BOT ALERT** 🚨\n[${timestamp}]\n\n${message}`;
+
+    console.log(`[NotifyAdmin] Sending alert: "${message.substring(0, 100)}..." to ${adminIds.length} admin(s).`);
+
+    // Use Promise.allSettled to send to all admins even if some fail
+    const results = await Promise.allSettled(
+        adminIds.map(adminId => safeSendMessage(adminId, fullMessage, { parse_mode: 'Markdown' })) // Use Markdown for simple bold/alert
+    );
+
+    results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+            console.error(`[NotifyAdmin] Failed to send notification to admin ID ${adminIds[index]}:`, result.reason || 'Unknown error');
+        }
+    });
+}
+
+
 async function safeSendMessage(chatId, text, options = {}) {
     if (!chatId || typeof text !== 'string' || text.trim() === '') { console.error("[safeSendMessage] Invalid input:", { chatId, text }); return undefined; }
     const MAX_LENGTH = 4096; if (text.length > MAX_LENGTH) { console.warn(`[safeSendMessage] Message for chat ${chatId} too long (${text.length} > ${MAX_LENGTH}), truncating.`); text = text.substring(0, MAX_LENGTH - 3) + "..."; }
-    return telegramSendQueue.add(async () => { try { const sentMessage = await bot.sendMessage(chatId, text, options); return sentMessage; } catch (error) { console.error(`❌ Telegram send error to chat ${chatId}: Code: ${error.code} | ${error.message}`); if (error.response?.body) { console.error(`   -> Response Body: ${JSON.stringify(error.response.body)}`); } return undefined; } });
+    // Add a small delay before adding to queue if needed, but p-queue interval handles rate limits
+    return telegramSendQueue.add(async () => {
+         try {
+             // console.log(`[TG Send Queue] Sending to ${chatId}: "${text.substring(0, 30)}..."`); // Optional debug log
+             const sentMessage = await bot.sendMessage(chatId, text, options);
+             return sentMessage;
+         } catch (error) {
+             console.error(`❌ Telegram send error to chat ${chatId}: Code: ${error.code} | ${error.message}`);
+             if (error.response?.body) {
+                 console.error(`   -> Response Body: ${JSON.stringify(error.response.body)}`);
+                 // Handle specific blocking errors if needed (e.g., user blocked bot)
+                 if (error.response.body.error_code === 403) {
+                     console.warn(`[TG Send] Bot blocked by user or kicked from chat ${chatId}.`);
+                     // Potentially update user status in DB if needed
+                 }
+             }
+             return undefined; // Indicate failure to send
+         }
+     });
 }
 const escapeMarkdownV2 = (text) => { if (text === null || typeof text === 'undefined') { return ''; } const textString = String(text); return textString.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1'); };
 function escapeHtml(text) { if (text === null || typeof text === 'undefined') { return ''; } const textString = String(text); return textString.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
@@ -1842,6 +2032,7 @@ async function getUserDisplayName(chatId, userId) { try { const member = await b
 
 
 // --- Cache Utilities ---
+// These remain unchanged from your original code
 function updateWalletCache(userId, data) { userId = String(userId); const existing = walletCache.get(userId) || {}; const entryTimestamp = Date.now(); walletCache.set(userId, { ...existing, ...data, timestamp: entryTimestamp }); setTimeout(() => { const current = walletCache.get(userId); if (current && current.timestamp === entryTimestamp && Date.now() - current.timestamp >= WALLET_CACHE_TTL_MS) { walletCache.delete(userId); } }, WALLET_CACHE_TTL_MS + 1000); }
 function getWalletCache(userId) { userId = String(userId); const entry = walletCache.get(userId); if (entry && Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) { return entry; } if (entry) { walletCache.delete(userId); } return undefined; }
 function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) { activeDepositAddresses.set(address, { userId: String(userId), expiresAt: expiresAtTimestamp }); console.log(`[Cache Update] Added/Updated deposit address ${address.slice(0,6)}.. for user ${userId} in cache. Expires: ${new Date(expiresAtTimestamp).toISOString()}`); const delay = expiresAtTimestamp - Date.now() + 1000; if (delay > 0) { setTimeout(() => { const current = activeDepositAddresses.get(address); if (current && current.userId === String(userId) && current.expiresAt === expiresAtTimestamp) { console.log(`[Cache Eviction] Deposit address ${address.slice(0,6)}.. expired and removed from cache.`); activeDepositAddresses.delete(address); } else if (current) { console.log(`[Cache Eviction] Deposit address ${address.slice(0,6)}.. cache timer fired, but entry was updated or removed. Ignoring eviction timer.`); } }, delay); } else { console.log(`[Cache Update] Deposit address ${address.slice(0,6)}.. was already expired when added to cache. Removing immediately.`); removeActiveDepositAddressCache(address); } }
@@ -1852,630 +2043,226 @@ function hasProcessedDepositTx(signature) { return processedDepositTxSignatures.
 
 
 // --- Other Utilities ---
+// This remains unchanged from your original code
 function generateReferralCode(length = 8) { const byteLength = Math.ceil(length / 2); const randomBytes = crypto.randomBytes(byteLength); const hexString = randomBytes.toString('hex').slice(0, length); return `ref_${hexString}`; }
 
 
 // --- End of Part 3 ---
-// index.js - Part 4: Game Logic Implementation
-// --- VERSION: 3.1.1 --- (No functional changes in this part)
+// index.js - Part 4: Game Logic
+// --- VERSION: 3.1.5 --- (No functional changes in this part for this update)
 
-// --- Game Logic Helpers ---
+// --- Game Logic Implementations ---
 
 /**
- * Selects a random winner from weighted options.
- * @param {Array<{name: string, weight: number}>} options Array of options with weights.
- * @returns {string} The name of the winning option.
+ * Plays a coinflip game.
+ * @param {string} choice 'heads' or 'tails'.
+ * @returns {{ result: 'win' | 'loss', outcome: 'heads' | 'tails' }}
  */
-function weightedRandom(options) {
-    let totalWeight = 0;
-    for (const option of options) {
-        totalWeight += option.weight;
-    }
-    let random = Math.random() * totalWeight;
-    for (const option of options) {
-        if (random < option.weight) {
-            return option.name;
-        }
-        random -= option.weight;
-    }
-    // Fallback in case of floating point issues
-    return options[options.length - 1].name;
+function playCoinflip(choice) {
+    const outcome = Math.random() < 0.5 ? 'heads' : 'tails';
+    const result = choice === outcome ? 'win' : 'loss';
+    return { result, outcome };
 }
 
-// --- Coinflip Game Logic ---
-
 /**
- * Handles Coinflip game logic, DB updates, and messaging.
- * @param {string} userId
- * @param {string} chatId
- * @param {bigint} wagerAmountLamports
- * @param {string} userChoice 'heads' or 'tails'
- * @param {number} betRecordId The ID from the 'bets' table.
- * @returns {Promise<boolean>} True if game processing and DB updates were successful.
+ * Simulates a simple race game outcome.
+ * @param {number} chosenLane (e.g., 1, 2, 3, 4)
+ * @param {number} [totalLanes=4]
+ * @returns {{ result: 'win' | 'loss', winningLane: number }}
  */
-async function handleCoinflipGame(userId, chatId, wagerAmountLamports, userChoice, betRecordId) {
-    const logPrefix = `[CF Bet ${betRecordId} User ${userId}]`;
-    const cfEdge = GAME_CONFIG.coinflip.houseEdge;
-    const displayName = await getUserDisplayName(chatId, userId); // Get name early for messages
-
-    // 1. Determine Result (with house edge)
-    const houseAutoWins = Math.random() < cfEdge;
-    let actualResult = (Math.random() < 0.5) ? 'heads' : 'tails';
-    let win;
-
-    if (houseAutoWins) {
-        console.log(`${logPrefix}: House edge (${(cfEdge * 100).toFixed(1)}%) triggered auto-loss.`);
-        win = false;
-        // Ensure the 'actualResult' shown to the user is the losing one
-        actualResult = (userChoice === 'heads') ? 'tails' : 'heads';
-    } else {
-        win = (actualResult === userChoice);
-    }
-
-    // 2. Prepare Results for DB/Messaging
-    let finalBetStatus = win ? 'completed_win' : 'completed_loss';
-    let payoutLamports = win ? wagerAmountLamports * 2n : 0n; // Total credited back (Wager + Win or 0)
-    let balanceChange = win ? wagerAmountLamports : 0n; // Net change for ledger (Win amount or 0)
-    let ledgerType = win ? 'bet_won' : null; // Ledger entry only needed for win/push balance changes
-
-    const wagerSOL = Number(wagerAmountLamports) / LAMPORTS_PER_SOL;
-    const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
-
-    // 3. Send Result Message (Corrected Escaping)
-    let resultMessage;
-    if (win) {
-        resultMessage = `🎉 ${displayName}, you won the coinflip\\! \\(Result: *${escapeMarkdownV2(actualResult)}*\\)\n` +
-                        `Payout: ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL added to your balance\\.\\.`; // Escaped !, (, ), .
-    } else {
-        resultMessage = `❌ ${displayName}, you lost the coinflip\\! \\(Result: *${escapeMarkdownV2(actualResult)}*\\)\\. Better luck next time\\.`; // Escaped !, (, ), ., .
-    }
-    await safeSendMessage(chatId, resultMessage, { parse_mode: 'MarkdownV2' });
-
-    // 4. Update Database
-    let client = null; // Define client outside try if needed in finally
-    try {
-        if (win) { // Only need DB transaction for wins to credit balance and update ledger
-            client = await pool.connect();
-            await client.query('BEGIN');
-
-            // Update balance and ledger
-            const balanceUpdateResult = await updateUserBalanceAndLedger(
-                client, userId, balanceChange, ledgerType, { betId: betRecordId }
-            );
-            if (!balanceUpdateResult.success) {
-                throw new Error(`Failed to credit winnings: ${balanceUpdateResult.error}`);
-            }
-
-            // Mark bet as completed
-            const betUpdateResult = await updateBetStatus(client, betRecordId, finalBetStatus, payoutLamports);
-            if (!betUpdateResult) {
-                throw new Error(`Failed to update bet status to ${finalBetStatus}.`);
-            }
-
-            await client.query('COMMIT');
-            console.log(`${logPrefix} Completed as WIN. Balance credited.`);
-        } else { // Loss - just update bet status (no balance change needed)
-            const betUpdateResult = await updateBetStatus(pool, betRecordId, finalBetStatus, payoutLamports); // Use pool directly
-            if (!betUpdateResult) {
-                 // Log error but don't necessarily fail the whole flow if only status update failed after loss
-                 console.error(`${logPrefix} Failed to update bet status to ${finalBetStatus} after loss.`);
-                 // Consider if this should still return true or false? Let's return true as game logic finished.
-            } else {
-                 console.log(`${logPrefix} Completed as LOSS.`);
-            }
-        }
-        return true; // Indicate successful processing
-
-    } catch (error) {
-        console.error(`${logPrefix} Error processing game result/updating DB:`, error);
-        if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error("Rollback failed:", rbErr); } }
-        // Attempt to mark bet as error
-        await updateBetStatus(pool, betRecordId, 'error_game_logic');
-        // Corrected Error Message Escaping
-        await safeSendMessage(chatId, `⚠️ Internal error processing coinflip result\\. Please contact support if your balance seems incorrect\\. Error ref: ${escapeMarkdownV2(betRecordId)}`, { parse_mode: 'MarkdownV2'});
-        return false; // Indicate failure
-    } finally {
-        if (client) client.release();
-    }
+function simulateRace(chosenLane, totalLanes = 4) {
+    // Simple random winner
+    const winningLane = Math.floor(Math.random() * totalLanes) + 1;
+    const result = chosenLane === winningLane ? 'win' : 'loss';
+    return { result, winningLane };
 }
 
-// --- Race Game Logic ---
-// Simple weighted random outcome based on fixed odds, adjusted for house edge
+/**
+ * Simulates a simple slots game spin. Returns payout multiplier.
+ * Symbols: Cherry (C), Lemon (L), Orange (O), Bell (B), Seven (7)
+ * Payouts (example): 777=100x, BBB=20x, OOO=10x, CCC=5x, Any two Cherries=2x
+ * @returns {{ result: 'win' | 'loss', symbols: [string, string, string], payoutMultiplier: number }}
+ */
+function simulateSlots() {
+    const symbols = ['C', 'L', 'O', 'B', '7'];
+    const weights = [5, 4, 3, 2, 1]; // Weighted probability: Cherry most common, 7 least common
 
-// Define Horses and Base Odds (Example)
-const RACE_HORSES = [
-    { name: "Solar Sprint", weight: 10, payoutMultiplier: 3.0 }, // Lower payout, higher chance
-    { name: "Comet Tail", weight: 7, payoutMultiplier: 4.5 },
-    { name: "Nova Speedster", weight: 5, payoutMultiplier: 6.0 },
-    { name: "Galaxy Gallop", weight: 3, payoutMultiplier: 9.0 },
-    { name: "Nebula Bolt", weight: 2, payoutMultiplier: 12.0 }, // Higher payout, lower chance
-];
+    const weightedSymbols = [];
+    symbols.forEach((symbol, index) => {
+        for (let i = 0; i < weights[index]; i++) {
+            weightedSymbols.push(symbol);
+        }
+    });
+
+    const getRandomSymbol = () => weightedSymbols[Math.floor(Math.random() * weightedSymbols.length)];
+
+    const reel1 = getRandomSymbol();
+    const reel2 = getRandomSymbol();
+    const reel3 = getRandomSymbol();
+    const resultSymbols = [reel1, reel2, reel3];
+
+    let payoutMultiplier = 0;
+    let result = 'loss';
+
+    // Check winning combinations
+    if (reel1 === '7' && reel2 === '7' && reel3 === '7') {
+        payoutMultiplier = 100;
+    } else if (reel1 === 'B' && reel2 === 'B' && reel3 === 'B') {
+        payoutMultiplier = 20;
+    } else if (reel1 === 'O' && reel2 === 'O' && reel3 === 'O') {
+        payoutMultiplier = 10;
+    } else if (reel1 === 'C' && reel2 === 'C' && reel3 === 'C') {
+        payoutMultiplier = 5;
+    } else {
+        // Check for two cherries (can be improved for combinations)
+        const cherryCount = resultSymbols.filter(s => s === 'C').length;
+        if (cherryCount >= 2) {
+            payoutMultiplier = 2;
+        }
+    }
+
+    if (payoutMultiplier > 0) {
+        result = 'win';
+    }
+
+    return { result, symbols: resultSymbols, payoutMultiplier };
+}
+
 
 /**
- * Handles Race game logic, DB updates, and messaging.
- * @param {string} userId
- * @param {string} chatId
- * @param {bigint} wagerAmountLamports
- * @param {string} chosenHorseName The name of the horse the user bet on.
- * @param {number} betRecordId The ID from the 'bets' table.
- * @returns {Promise<boolean>} True if game processing and DB updates were successful.
+ * Simulates a simplified Roulette spin (European style - 0 to 36).
+ * @param {string} betType - e.g., 'straight_17', 'red', 'black', 'even', 'odd', 'low' (1-18), 'high' (19-36)
+ * @param {number | null} [betValue=null] - The specific number for 'straight_X' bets.
+ * @returns {{ result: 'win' | 'loss', winningNumber: number, payoutMultiplier: number }}
  */
-async function handleRaceGame(userId, chatId, wagerAmountLamports, chosenHorseName, betRecordId) {
-    const logPrefix = `[Race Bet ${betRecordId} User ${userId}]`;
-    const raceEdge = GAME_CONFIG.race.houseEdge;
-    const displayName = await getUserDisplayName(chatId, userId);
-
-    // 1. Determine Winner (with house edge consideration)
-    const houseAutoWins = Math.random() < raceEdge;
-    let winningHorseName;
-    let win = false;
+function simulateRoulette(betType, betValue = null) {
+    const winningNumber = Math.floor(Math.random() * 37); // 0 to 36
+    let result = 'loss';
     let payoutMultiplier = 0;
 
-    if (houseAutoWins) {
-        console.log(`${logPrefix}: House edge (${(raceEdge * 100).toFixed(1)}%) triggered auto-loss.`);
-        // Pick a winner that the user *didn't* choose
-        const possibleWinners = RACE_HORSES.filter(h => h.name !== chosenHorseName);
-        if (possibleWinners.length === 0) { // Should only happen if only 1 horse exists
-            winningHorseName = RACE_HORSES[0].name; // Fallback
-        } else {
-            winningHorseName = weightedRandom(possibleWinners);
-        }
-        win = false;
-    } else {
-        // Normal weighted random selection
-        winningHorseName = weightedRandom(RACE_HORSES);
-        win = (winningHorseName === chosenHorseName);
-        if (win) {
-            const winningHorse = RACE_HORSES.find(h => h.name === winningHorseName);
-            payoutMultiplier = winningHorse?.payoutMultiplier || 0; // Get multiplier if won
-        }
+    const isRed = (num) => {
+        const reds = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36];
+        return reds.includes(num);
+    };
+    const isBlack = (num) => num !== 0 && !isRed(num);
+    const isEven = (num) => num !== 0 && num % 2 === 0;
+    const isOdd = (num) => num !== 0 && num % 2 !== 0;
+    const isLow = (num) => num >= 1 && num <= 18;
+    const isHigh = (num) => num >= 19 && num <= 36;
+
+    switch (betType) {
+        case 'straight':
+            if (betValue !== null && winningNumber === betValue) {
+                result = 'win';
+                payoutMultiplier = 35; // Pays 35 to 1 (total 36)
+            }
+            break;
+        case 'red':
+            if (isRed(winningNumber)) {
+                result = 'win';
+                payoutMultiplier = 1; // Pays 1 to 1 (total 2)
+            }
+            break;
+        case 'black':
+            if (isBlack(winningNumber)) {
+                result = 'win';
+                payoutMultiplier = 1;
+            }
+            break;
+        case 'even':
+            if (isEven(winningNumber)) {
+                result = 'win';
+                payoutMultiplier = 1;
+            }
+            break;
+        case 'odd':
+            if (isOdd(winningNumber)) {
+                result = 'win';
+                payoutMultiplier = 1;
+            }
+            break;
+        case 'low': // 1-18
+            if (isLow(winningNumber)) {
+                result = 'win';
+                payoutMultiplier = 1;
+            }
+            break;
+        case 'high': // 19-36
+            if (isHigh(winningNumber)) {
+                result = 'win';
+                payoutMultiplier = 1;
+            }
+            break;
+        default:
+            console.warn(`[simulateRoulette] Unknown bet type: ${betType}`);
+            // Treat as loss
+            break;
     }
 
-    // 2. Prepare Results
-    let finalBetStatus = win ? 'completed_win' : 'completed_loss';
-    // Payout = Wager * Multiplier (if win), 0 otherwise
-    let payoutLamports = win ? wagerAmountLamports * BigInt(Math.round(payoutMultiplier * 100)) / 100n : 0n; // Use BigInt math for multiplier
-    let balanceChange = win ? payoutLamports - wagerAmountLamports : 0n; // Net change = Winnings
-    let ledgerType = win ? 'bet_won' : null;
+     // Adjust multiplier: we return the factor for the WINNINGS, not total return
+     // e.g., 1 to 1 win returns 1 * wager as profit, total 2 * wager.
+     // e.g., 35 to 1 win returns 35 * wager as profit, total 36 * wager.
+     // Payout amount = wager * (1 + multiplier) <- THIS IS WRONG for standard casino terms
+     // Payout amount = wager + (wager * multiplier) <---- Standard casino payout (original wager + winnings)
+     // Amount credited back to balance = wager * (payoutMultiplier for winnings) + original wager
+     // We will return the multiplier FOR THE WINNINGS (35 for straight, 1 for even money)
+     // The calling code will calculate payout = wager + (wager * multiplier) if win, 0 if loss.
 
-    const wagerSOL = Number(wagerAmountLamports) / LAMPORTS_PER_SOL;
-    const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
-    const winAmountSOL = Number(balanceChange) / LAMPORTS_PER_SOL;
-
-    // 3. Send Result Message (Corrected Escaping)
-    let resultMessage = `🐎 The race is over\\! Winner: *${escapeMarkdownV2(winningHorseName)}*\\!\n\n`; // Escaped ! (x2)
-    if (win) {
-        resultMessage += `🎉 ${displayName}, your horse *${escapeMarkdownV2(chosenHorseName)}* won\\!\n` + // Escaped !
-                         `Payout: ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL \\(\\+${escapeMarkdownV2(winAmountSOL.toFixed(SOL_DECIMALS))} SOL profit\\) added to balance\\.`; // Escaped (, +, ), .
-    } else {
-        resultMessage += `❌ ${displayName}, your horse *${escapeMarkdownV2(chosenHorseName)}* didn't win this time\\. Better luck next race\\!`; // Escaped ., !
-    }
-    await safeSendMessage(chatId, resultMessage, { parse_mode: 'MarkdownV2' });
-
-    // 4. Update Database (Similar pattern to Coinflip)
-    let client = null;
-    try {
-        if (win) { // Transaction only needed for wins
-            client = await pool.connect();
-            await client.query('BEGIN');
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, balanceChange, ledgerType, { betId: betRecordId });
-            if (!balanceUpdateResult.success) throw new Error(`Failed to credit winnings: ${balanceUpdateResult.error}`);
-            const betUpdateResult = await updateBetStatus(client, betRecordId, finalBetStatus, payoutLamports);
-            if (!betUpdateResult) throw new Error(`Failed to update bet status to ${finalBetStatus}.`);
-            await client.query('COMMIT');
-            console.log(`${logPrefix} Completed as WIN. Balance credited.`);
-        } else { // Loss
-            const betUpdateResult = await updateBetStatus(pool, betRecordId, finalBetStatus, payoutLamports);
-            if (!betUpdateResult) console.error(`${logPrefix} Failed to update bet status to ${finalBetStatus} after loss.`);
-            else console.log(`${logPrefix} Completed as LOSS.`);
-        }
-        return true;
-    } catch (error) {
-        console.error(`${logPrefix} Error processing race result/DB:`, error);
-        if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error("Rollback failed:", rbErr); } }
-        await updateBetStatus(pool, betRecordId, 'error_game_logic');
-        // Corrected Error Message Escaping
-        await safeSendMessage(chatId, `⚠️ Internal error processing race result\\. Please contact support if your balance seems incorrect\\. Error ref: ${escapeMarkdownV2(betRecordId)}`, { parse_mode: 'MarkdownV2'});
-        return false;
-    } finally {
-        if (client) client.release();
-    }
-}
-
-
-// --- Slots Game Logic ---
-
-// Define Symbols and Payouts (Example 3-Reel)
-// Weights determine frequency, Payouts determine multiplier for wager
-const SLOTS_SYMBOLS = [
-    { symbol: '🍒', weight: 25, payout: { 3: 5, 2: 2 } },   // Payout for 3 or 2 matching on payline
-    { symbol: '🍋', weight: 20, payout: { 3: 10, 2: 3 } },
-    { symbol: '🍊', weight: 15, payout: { 3: 15, 2: 4 } },
-    { symbol: '🍉', weight: 10, payout: { 3: 25, 2: 5 } },
-    { symbol: '🔔', weight: 8, payout: { 3: 50 } },
-    { symbol: '⭐', weight: 5, payout: { 3: 100 } },
-    { symbol: '💎', weight: 2, payout: { 3: 250 } },       // Jackpot symbol
-    { symbol: '❌', weight: 15, payout: {} },              // Blank/Miss symbol - Symbol needs escaping if used in msg
-];
-const SLOTS_REELS = 3;
-const SLOTS_PAYLINE = [1, 1, 1]; // Index of row for payline (0=top, 1=middle, 2=bottom) - Middle row
-
-/**
- * Simulates a single reel spin returning one symbol based on weights.
- */
-function spinReel(symbols) {
-    return weightedRandom(symbols.map(s => ({ name: s.symbol, weight: s.weight })));
+    return { result, winningNumber, payoutMultiplier };
 }
 
 /**
- * Handles Slots game logic, DB updates, and messaging.
- * @param {string} userId
- * @param {string} chatId
- * @param {bigint} wagerAmountLamports
- * @param {number} betRecordId The ID from the 'bets' table.
- * @returns {Promise<boolean>} True if game processing and DB updates were successful.
+ * Simulates a simplified game of Casino War. Ace is high.
+ * @returns {{ result: 'win' | 'loss' | 'push', playerCard: string, dealerCard: string, playerRank: number, dealerRank: number }}
  */
-async function handleSlotsGame(userId, chatId, wagerAmountLamports, betRecordId) {
-    const logPrefix = `[Slots Bet ${betRecordId} User ${userId}]`;
-    // Note: Slots house edge is controlled implicitly by the payout table vs probabilities.
-    // The env var SLOTS_HOUSE_EDGE isn't directly used in spin logic but serves as a target for tuning payouts.
-    const displayName = await getUserDisplayName(chatId, userId);
-
-    // 1. Spin Reels
-    const reelResults = [];
-    for (let i = 0; i < SLOTS_REELS; i++) {
-        reelResults.push(spinReel(SLOTS_SYMBOLS));
-    }
-    const paylineResult = reelResults; // In this simple case, the result *is* the middle payline
-
-    // 2. Determine Payout
-    let winAmountMultiplier = 0;
-    let winningSymbol = null;
-    let matchCount = 0;
-
-    // Check for 3 of a kind on the payline
-    if (paylineResult[0] === paylineResult[1] && paylineResult[1] === paylineResult[2]) {
-        winningSymbol = paylineResult[0];
-        matchCount = 3;
-    } else if (paylineResult[0] === paylineResult[1]) { // Check for 2 of a kind starting from left
-        winningSymbol = paylineResult[0];
-        matchCount = 2;
-    } // Add more complex payline checks if needed (e.g., right-to-left, other symbol combos)
-
-    if (winningSymbol) {
-        const symbolConfig = SLOTS_SYMBOLS.find(s => s.symbol === winningSymbol);
-        if (symbolConfig && symbolConfig.payout[matchCount]) {
-            winAmountMultiplier = symbolConfig.payout[matchCount];
-        }
-    }
-
-    // 3. Prepare Results
-    const win = winAmountMultiplier > 0;
-    let finalBetStatus = win ? 'completed_win' : 'completed_loss';
-    let payoutLamports = win ? wagerAmountLamports * BigInt(Math.round(winAmountMultiplier * 100)) / 100n : 0n; // Total credited back
-    let balanceChange = win ? payoutLamports - wagerAmountLamports : 0n; // Net change = Winnings
-    let ledgerType = win ? 'bet_won' : null;
-
-    const wagerSOL = Number(wagerAmountLamports) / LAMPORTS_PER_SOL;
-    const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
-    const winAmountSOL = Number(balanceChange) / LAMPORTS_PER_SOL;
-
-    // 4. Send Result Message (Corrected Escaping)
-    // Escape the | symbol if using it literally, or use different separators
-    const displayReels = paylineResult.map(s => escapeMarkdownV2(s)).join(' \\| '); // Escape symbols and the separator
-    let resultMessage = `🎰 Spin Result: \\| ${displayReels} \\|\n\n`; // Escape outer |
-    if (win) {
-        resultMessage += `🎉 ${displayName}, you won \\(${escapeMarkdownV2(matchCount)}x ${escapeMarkdownV2(winningSymbol)}\\)\\! Multiplier: ${escapeMarkdownV2(winAmountMultiplier)}x\n` + // Escaped (, ), !
-                         `Payout: ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL \\(\\+${escapeMarkdownV2(winAmountSOL.toFixed(SOL_DECIMALS))} SOL profit\\) added to balance\\.`; // Escaped (, +, ), .
-    } else {
-        resultMessage += `❌ ${displayName}, no win this time\\. Spin again\\!`; // Escaped ., !
-    }
-    await safeSendMessage(chatId, resultMessage, { parse_mode: 'MarkdownV2' });
-
-    // 5. Update Database (Similar pattern)
-    let client = null;
-    try {
-        if (win) { // Transaction only needed for wins
-            client = await pool.connect();
-            await client.query('BEGIN');
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, balanceChange, ledgerType, { betId: betRecordId });
-            if (!balanceUpdateResult.success) throw new Error(`Failed to credit winnings: ${balanceUpdateResult.error}`);
-            const betUpdateResult = await updateBetStatus(client, betRecordId, finalBetStatus, payoutLamports);
-            if (!betUpdateResult) throw new Error(`Failed to update bet status to ${finalBetStatus}.`);
-            await client.query('COMMIT');
-            console.log(`${logPrefix} Completed as WIN. Balance credited.`);
-        } else { // Loss
-            const betUpdateResult = await updateBetStatus(pool, betRecordId, finalBetStatus, payoutLamports);
-            if (!betUpdateResult) console.error(`${logPrefix} Failed to update bet status to ${finalBetStatus} after loss.`);
-            else console.log(`${logPrefix} Completed as LOSS.`);
-        }
-        return true;
-    } catch (error) {
-        console.error(`${logPrefix} Error processing slots result/DB:`, error);
-        if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error("Rollback failed:", rbErr); } }
-        await updateBetStatus(pool, betRecordId, 'error_game_logic');
-        // Corrected Error Message Escaping
-        await safeSendMessage(chatId, `⚠️ Internal error processing slots result\\. Please contact support if your balance seems incorrect\\. Error ref: ${escapeMarkdownV2(betRecordId)}`, { parse_mode: 'MarkdownV2'});
-        return false;
-    } finally {
-        if (client) client.release();
-    }
-}
-
-// --- Roulette Game Logic ---
-// Simplified: Assumes betDetails is an object like { "red": amount, "17": amount, "odd": amount }
-// Uses American Roulette wheel (0, 00, 1-36)
-
-const ROULETTE_NUMBERS = Array.from({ length: 38 }, (_, i) => {
-    if (i === 37) return '00'; // Index 37 represents '00'
-    return String(i); // Indices 0-36 represent '0' through '36'
-});
-const ROULETTE_RED = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36].map(String);
-const ROULETTE_BLACK = [2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35].map(String);
-
-/**
- * Calculates Roulette winnings for a given spin result and user bets.
- * @param {string} winningNumber The winning number ('0', '00', '1'-'36').
- * @param {object} userBets Object where keys are bet types ('red', 'black', 'odd', 'even', '1-18', '19-36', '0', '17', etc.) and values are wager amounts (as bigints).
- * @returns {bigint} Total payout lamports for this spin (includes original wager on winning bets).
- */
-function calculateRoulettePayout(winningNumber, userBets) {
-    let totalPayout = 0n;
-    const numInt = parseInt(winningNumber); // NaN for '0', '00'
-    const isZero = winningNumber === '0' || winningNumber === '00';
-    const isRed = ROULETTE_RED.includes(winningNumber);
-    const isBlack = ROULETTE_BLACK.includes(winningNumber);
-    const isOdd = !isZero && numInt % 2 !== 0;
-    const isEven = !isZero && numInt % 2 === 0;
-    const isLow = !isZero && numInt >= 1 && numInt <= 18;
-    const isHigh = !isZero && numInt >= 19 && numInt <= 36;
-
-    for (const betType in userBets) {
-        const wager = userBets[betType]; // Already BigInt
-        let payoutMultiplier = 0;
-
-        // Check bet types
-        if (betType === winningNumber) payoutMultiplier = 36; // Straight up (pays 35:1 + wager)
-        else if (betType === 'red' && isRed) payoutMultiplier = 2; // Red (pays 1:1 + wager)
-        else if (betType === 'black' && isBlack) payoutMultiplier = 2;
-        else if (betType === 'odd' && isOdd) payoutMultiplier = 2;
-        else if (betType === 'even' && isEven) payoutMultiplier = 2;
-        else if (betType === '1-18' && isLow) payoutMultiplier = 2; // Corrected betType string
-        else if (betType === '19-36' && isHigh) payoutMultiplier = 2;// Corrected betType string
-        // Add checks for splits, streets, corners, dozens, columns if supporting more complex bets
-
-        if (payoutMultiplier > 0) {
-            totalPayout += wager * BigInt(payoutMultiplier);
-        }
-    }
-    return totalPayout;
-}
-
-
-/**
- * Handles Roulette game logic, DB updates, and messaging.
- * @param {string} userId
- * @param {string} chatId
- * @param {bigint} totalWagerAmountLamports Total wager across all placements.
- * @param {object} userBets Object mapping bet types to wager amounts (BigInts).
- * @param {number} betRecordId The ID from the 'bets' table.
- * @returns {Promise<boolean>} True if game processing and DB updates were successful.
- */
-async function handleRouletteGame(userId, chatId, totalWagerAmountLamports, userBets, betRecordId) {
-    const logPrefix = `[Roulette Bet ${betRecordId} User ${userId}]`;
-    const displayName = await getUserDisplayName(chatId, userId);
-
-    // 1. Spin the Wheel
-    const winningIndex = Math.floor(Math.random() * ROULETTE_NUMBERS.length);
-    const winningNumber = ROULETTE_NUMBERS[winningIndex];
-
-    // 2. Calculate Payout
-    const payoutLamports = calculateRoulettePayout(winningNumber, userBets); // Total credited back
-
-    // 3. Prepare Results
-    const win = payoutLamports > 0n;
-    let finalBetStatus = win ? 'completed_win' : 'completed_loss'; // Roulette usually doesn't "push" overall
-    // If payout > wager, it's a net win. If payout < wager, it's a net loss but still 'completed_win' technically if any bet hit.
-    // Let's simplify: if payout > 0, status is win, otherwise loss.
-    finalBetStatus = payoutLamports > 0n ? 'completed_win' : 'completed_loss';
-    // Net balance change = Payout - Total Wager
-    let balanceChange = payoutLamports - totalWagerAmountLamports;
-    let ledgerType = null;
-    let effectiveLedgerAmount = 0n;
-
-    if (balanceChange > 0n) { // Net Win
-         ledgerType = 'bet_won';
-         effectiveLedgerAmount = balanceChange; // Credit only the net winnings
-    } else if (balanceChange === 0n && win) { // Exact Push (Payout == Wager)
-         ledgerType = 'bet_push_return';
-         effectiveLedgerAmount = totalWagerAmountLamports; // Credit back the original wager
-    }
-    // If balanceChange < 0 (Net Loss), ledgerType remains null, no balance change needed here
-
-    const wagerSOL = Number(totalWagerAmountLamports) / LAMPORTS_PER_SOL;
-    const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
-    const netChangeSOL = Number(balanceChange) / LAMPORTS_PER_SOL;
-
-    // Determine winning color for message
-    let winningColor = 'Green';
-    if (ROULETTE_RED.includes(winningNumber)) winningColor = 'Red';
-    else if (ROULETTE_BLACK.includes(winningNumber)) winningColor = 'Black';
-
-    // 4. Send Result Message (Corrected Escaping)
-    let resultMessage = `⚪️ Roulette spin\\! The ball landed on: *${escapeMarkdownV2(winningColor)} ${escapeMarkdownV2(winningNumber)}*\\!\n\n`; // Escaped ! (x2)
-    if (payoutLamports > 0n) {
-        resultMessage += `🎉 ${displayName}, you won\\!\n` + // Escaped !
-                         `Total Payout: ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL ` +
-                         `\\(${netChangeSOL >= 0 ? '\\+' : ''}${escapeMarkdownV2(netChangeSOL.toFixed(SOL_DECIMALS))} SOL net\\) added to balance\\.`; // Escaped (, conditional +, ), .
-    } else {
-        resultMessage += `❌ ${displayName}, no winning bets this spin\\. Better luck next time\\!`; // Escaped ., !
-    }
-    await safeSendMessage(chatId, resultMessage, { parse_mode: 'MarkdownV2' });
-
-    // 5. Update Database
-    let client = null;
-    try {
-        // Only need DB transaction if there's a positive ledger change (Win or Push)
-        if (ledgerType) {
-            client = await pool.connect();
-            await client.query('BEGIN');
-
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, effectiveLedgerAmount, ledgerType, { betId: betRecordId });
-            if (!balanceUpdateResult.success) throw new Error(`Failed to credit balance: ${balanceUpdateResult.error}`);
-
-            const betUpdateResult = await updateBetStatus(client, betRecordId, finalBetStatus, payoutLamports);
-            if (!betUpdateResult) throw new Error(`Failed to update bet status to ${finalBetStatus}.`);
-
-            await client.query('COMMIT');
-            console.log(`${logPrefix} Completed as ${finalBetStatus}. Balance updated.`);
-        } else { // Net Loss
-            const betUpdateResult = await updateBetStatus(pool, betRecordId, 'completed_loss', 0n); // Payout is 0
-            if (!betUpdateResult) console.error(`${logPrefix} Failed to update bet status to completed_loss after loss.`);
-            else console.log(`${logPrefix} Completed as LOSS.`);
-        }
-        return true;
-    } catch (error) {
-        console.error(`${logPrefix} Error processing roulette result/DB:`, error);
-        if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error("Rollback failed:", rbErr); } }
-        await updateBetStatus(pool, betRecordId, 'error_game_logic');
-        // Corrected Error Message Escaping
-        await safeSendMessage(chatId, `⚠️ Internal error processing roulette result\\. Please contact support if your balance seems incorrect\\. Error ref: ${escapeMarkdownV2(betRecordId)}`, { parse_mode: 'MarkdownV2'});
-        return false;
-    } finally {
-        if (client) client.release();
-    }
-}
-
-
-// --- Casino War Game Logic ---
-// Simplified: Single deck, Ace high. Tie results in player loss (simplest edge).
-
-const WAR_SUITS = ['♠', '♥', '♦', '♣'];
-const WAR_RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-const WAR_CARD_VALUES = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14 };
-
-/** Creates and shuffles a standard 52-card deck. */
-function getShuffledWarDeck() {
+function simulateWar() {
+    const suits = ['H', 'D', 'C', 'S']; // Hearts, Diamonds, Clubs, Spades
+    const ranks = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A'];
     const deck = [];
-    for (const suit of WAR_SUITS) {
-        for (const rank of WAR_RANKS) {
-            deck.push({ rank, suit, value: WAR_CARD_VALUES[rank] });
+    for (const suit of suits) {
+        for (const rank of ranks) {
+            deck.push(rank + suit);
         }
     }
-    // Simple shuffle (Fisher-Yates)
+
+    // Simple shuffle (Fisher-Yates variation)
     for (let i = deck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [deck[i], deck[j]] = [deck[j], deck[i]];
     }
-    return deck;
-}
 
-/**
- * Handles Casino War game logic, DB updates, and messaging.
- * @param {string} userId
- * @param {string} chatId
- * @param {bigint} wagerAmountLamports
- * @param {number} betRecordId The ID from the 'bets' table.
- * @returns {Promise<boolean>} True if game processing and DB updates were successful.
- */
-async function handleWarGame(userId, chatId, wagerAmountLamports, betRecordId) {
-    const logPrefix = `[War Bet ${betRecordId} User ${userId}]`;
-    const displayName = await getUserDisplayName(chatId, userId);
-
-    // 1. Deal Cards
-    const deck = getShuffledWarDeck();
-    if (deck.length < 2) { // Should never happen with standard deck
-        console.error(`${logPrefix} Deck shuffling failed.`);
-        await updateBetStatus(pool, betRecordId, 'error_game_logic');
-         // Corrected Error Message Escaping
-         await safeSendMessage(chatId, `⚠️ Internal error dealing cards\\. Please contact support\\. Error ref: ${escapeMarkdownV2(betRecordId)}`, { parse_mode: 'MarkdownV2'});
-        return false;
-    }
     const playerCard = deck.pop();
     const dealerCard = deck.pop();
 
-    // 2. Determine Outcome
-    let resultText = ''; // We'll build this into the final message
-    let win = false;
-    let push = false; // In this simple version, tie = loss
+    const getRankValue = (card) => {
+        const rank = card.substring(0, card.length - 1); // Get rank part
+        if (rank === 'A') return 14;
+        if (rank === 'K') return 13;
+        if (rank === 'Q') return 12;
+        if (rank === 'J') return 11;
+        if (rank === 'T') return 10;
+        return parseInt(rank, 10);
+    };
 
-    if (playerCard.value > dealerCard.value) {
-        win = true;
-        resultText = "You Win\\!"; // Escape !
-    } else if (playerCard.value < dealerCard.value) {
-        win = false;
-        resultText = "Dealer Wins\\!"; // Escape !
-    } else { // Tie
-        win = false; // Player loses on tie in this simplified version (provides house edge)
-        push = false;
-        resultText = "Tie\\! \\(Dealer Wins\\)"; // Escape !, (, )
-        // Alternative: Implement actual "Go to War" logic if desired (more complex)
+    const playerRank = getRankValue(playerCard);
+    const dealerRank = getRankValue(dealerCard);
+
+    let result = 'loss';
+    if (playerRank > dealerRank) {
+        result = 'win';
+    } else if (playerRank === dealerRank) {
+        // Simplified: In real War, this leads to "Going to War" or surrendering.
+        // Here, we'll just treat it as a push (bet returned).
+        result = 'push';
     }
+    // else playerRank < dealerRank -> loss (default)
 
-    // 3. Prepare Results
-    let finalBetStatus = win ? 'completed_win' : (push ? 'completed_push' : 'completed_loss');
-    let payoutLamports = win ? wagerAmountLamports * 2n : (push ? wagerAmountLamports : 0n); // Total credited back
-    let balanceChange = win ? wagerAmountLamports : (push ? wagerAmountLamports : 0n); // Net change OR wager return
-    let ledgerType = win ? 'bet_won' : (push ? 'bet_push_return' : null); // Null for loss
-
-    const wagerSOL = Number(wagerAmountLamports) / LAMPORTS_PER_SOL;
-    const payoutSOL = Number(payoutLamports) / LAMPORTS_PER_SOL;
-    const winAmountSOL = win ? Number(balanceChange) / LAMPORTS_PER_SOL : 0;
-
-    // 4. Send Result Message (Corrected Escaping)
-    let resultMessage = `🃏 Casino War Results 🃏\n\n` + // No escaping needed for emojis
-                        `Your Card: ${escapeMarkdownV2(playerCard.rank)}${escapeMarkdownV2(playerCard.suit)} \\(Value: ${escapeMarkdownV2(playerCard.value)}\\)\n` + // Escape rank, suit, value, (, )
-                        `Dealer Card: ${escapeMarkdownV2(dealerCard.rank)}${escapeMarkdownV2(dealerCard.suit)} \\(Value: ${escapeMarkdownV2(dealerCard.value)}\\)\n\n` + // Escape rank, suit, value, (, )
-                        `*${resultText}*\n\n`; // resultText is already escaped
-
-    if (win) {
-        resultMessage += `🎉 ${displayName}, you won\\!\n` + // Escape !
-                         `Payout: ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL \\(\\+${escapeMarkdownV2(winAmountSOL.toFixed(SOL_DECIMALS))} SOL profit\\) added to balance\\.`; // Escape (, +, ), .
-    } else if (push) { // If push logic were implemented
-         resultMessage += ` PUSH\\! Your wager of ${escapeMarkdownV2(wagerSOL.toFixed(SOL_DECIMALS))} SOL has been returned\\.`; // Escape !, .
-    } else { // Loss
-        resultMessage += `❌ ${displayName}, you lost this hand\\. Try again\\!`; // Escape ., !
-    }
-    await safeSendMessage(chatId, resultMessage, { parse_mode: 'MarkdownV2' });
-
-    // 5. Update Database
-    let client = null;
-    try {
-        // Transaction needed for wins or pushes
-        if (win || push) {
-            client = await pool.connect();
-            await client.query('BEGIN');
-
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, balanceChange, ledgerType, { betId: betRecordId });
-            if (!balanceUpdateResult.success) throw new Error(`Failed to credit balance: ${balanceUpdateResult.error}`);
-
-            const betUpdateResult = await updateBetStatus(client, betRecordId, finalBetStatus, payoutLamports);
-            if (!betUpdateResult) throw new Error(`Failed to update bet status to ${finalBetStatus}.`);
-
-            await client.query('COMMIT');
-            console.log(`${logPrefix} Completed as ${finalBetStatus}. Balance updated.`);
-        } else { // Loss
-            const betUpdateResult = await updateBetStatus(pool, betRecordId, 'completed_loss', 0n);
-            if (!betUpdateResult) console.error(`${logPrefix} Failed to update bet status to completed_loss after loss.`);
-            else console.log(`${logPrefix} Completed as LOSS.`);
-        }
-        return true;
-    } catch (error) {
-        console.error(`${logPrefix} Error processing War result/DB:`, error);
-        if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error("Rollback failed:", rbErr); } }
-        await updateBetStatus(pool, betRecordId, 'error_game_logic');
-         // Corrected Error Message Escaping
-         await safeSendMessage(chatId, `⚠️ Internal error processing War result\\. Please contact support if your balance seems incorrect\\. Error ref: ${escapeMarkdownV2(betRecordId)}`, { parse_mode: 'MarkdownV2'});
-        return false;
-    } finally {
-        if (client) client.release();
-    }
+    return { result, playerCard, dealerCard, playerRank, dealerRank };
 }
-
 
 // --- End of Part 4 ---
 // index.js - Part 5: Telegram Command & Callback Handlers
-// --- VERSION: 3.1.1 --- (Added Deposit Logging)
+// --- VERSION: 3.1.5 --- (Updated help version, added admin notify on handler errors)
 
 // --- Main Message Handler ---
 
@@ -2556,8 +2343,8 @@ async function handleMessage(msg) {
             // If not in a state and not a command, ignore in groups, maybe reply in private?
             if (msg.chat.type === 'private') {
                  if (!currentState || currentState.state === 'idle') {
-                     // Escaped Message
-                     await safeSendMessage(chatId, "Please use a command or select an option from the menu\\. Try /help or /start", { parse_mode: 'MarkdownV2' });
+                      // Escaped Message
+                      await safeSendMessage(chatId, "Please use a command or select an option from the menu\\. Try /help or /start", { parse_mode: 'MarkdownV2' });
                  }
             }
             return;
@@ -2642,6 +2429,10 @@ async function handleMessage(msg) {
     } catch (error) {
         console.error(`${logPrefix} Error processing message/command:`, error);
         userStateCache.delete(userId); // Clear state on error
+
+        // *** ADDED: Notify admin on unexpected handler errors ***
+        await notifyAdmin(`🚨 ERROR in handleMessage for User ${userId} (${logPrefix}):\n${error.message}\nStack: ${error.stack?.substring(0, 500)}`);
+
         try {
             // Escaped Message
             await safeSendMessage(chatId, "⚠️ An unexpected error occurred processing your request\\. Please try again or contact support\\.", { parse_mode: 'MarkdownV2'});
@@ -2727,10 +2518,15 @@ async function handleCallbackQuery(callbackQuery) {
                     console.error(`${logPrefix} Failed to place coinflip bet: ${betError}`);
                     // Ensure user state is clear and inform user if possible (placeBet should ideally inform)
                     userStateCache.delete(userId);
+                    // Notify admin about bet placement failure beyond insufficient funds
+                    if (betError !== 'Insufficient balance') {
+                         await notifyAdmin(`🚨 ERROR placing Coinflip Bet for User ${userId} (${logPrefix}). Error: ${betError}`);
+                    }
                     break;
                 }
 
-                const gameSuccess = await handleCoinflipGame(userId, String(chatId), cfWager, choice, betId);
+                // Pass betId to game handler
+                const gameSuccess = await handleCoinflipGame(userId, String(chatId), cfWager, choice, betId); // Pass betId
                 if (gameSuccess) { await _handleReferralChecks(userId, betId, cfWager, logPrefix); }
                 break;
 
@@ -2746,9 +2542,16 @@ async function handleCallbackQuery(callbackQuery) {
                  userStateCache.delete(userId); // Clear state
 
                  const { success: raceBetPlaced, betId: raceBetId, error: raceBetError } = await placeBet(userId, String(chatId), 'race', { horse: chosenHorseName }, raceWager);
-                 if (!raceBetPlaced || !raceBetId) { console.error(`${logPrefix} Failed to place race bet: ${raceBetError}`); userStateCache.delete(userId); break; }
+                 if (!raceBetPlaced || !raceBetId) {
+                      console.error(`${logPrefix} Failed to place race bet: ${raceBetError}`);
+                      userStateCache.delete(userId);
+                       if (raceBetError !== 'Insufficient balance') {
+                           await notifyAdmin(`🚨 ERROR placing Race Bet for User ${userId} (${logPrefix}). Error: ${raceBetError}`);
+                       }
+                      break;
+                 }
 
-                 const raceGameSuccess = await handleRaceGame(userId, String(chatId), raceWager, chosenHorseName, raceBetId);
+                 const raceGameSuccess = await handleRaceGame(userId, String(chatId), raceWager, chosenHorseName, raceBetId); // Pass betId
                  if (raceGameSuccess) { await _handleReferralChecks(userId, raceBetId, raceWager, logPrefix); }
                  break;
 
@@ -2762,9 +2565,16 @@ async function handleCallbackQuery(callbackQuery) {
                  userStateCache.delete(userId); // Clear state
 
                  const { success: slotsBetPlaced, betId: slotsBetId, error: slotsBetError } = await placeBet(userId, String(chatId), 'slots', {}, slotsWager);
-                 if (!slotsBetPlaced || !slotsBetId) { console.error(`${logPrefix} Failed to place slots bet: ${slotsBetError}`); userStateCache.delete(userId); break; }
+                 if (!slotsBetPlaced || !slotsBetId) {
+                      console.error(`${logPrefix} Failed to place slots bet: ${slotsBetError}`);
+                      userStateCache.delete(userId);
+                      if (slotsBetError !== 'Insufficient balance') {
+                          await notifyAdmin(`🚨 ERROR placing Slots Bet for User ${userId} (${logPrefix}). Error: ${slotsBetError}`);
+                      }
+                      break;
+                 }
 
-                 const slotsGameSuccess = await handleSlotsGame(userId, String(chatId), slotsWager, slotsBetId);
+                 const slotsGameSuccess = await handleSlotsGame(userId, String(chatId), slotsWager, slotsBetId); // Pass betId
                  if (slotsGameSuccess) { await _handleReferralChecks(userId, slotsBetId, slotsWager, logPrefix); }
                  break;
 
@@ -2778,81 +2588,95 @@ async function handleCallbackQuery(callbackQuery) {
                  userStateCache.delete(userId); // Clear state
 
                  const { success: warBetPlaced, betId: warBetId, error: warBetError } = await placeBet(userId, String(chatId), 'war', {}, warWager);
-                 if (!warBetPlaced || !warBetId) { console.error(`${logPrefix} Failed to place War bet: ${warBetError}`); userStateCache.delete(userId); break; }
+                 if (!warBetPlaced || !warBetId) {
+                      console.error(`${logPrefix} Failed to place War bet: ${warBetError}`);
+                      userStateCache.delete(userId);
+                      if (warBetError !== 'Insufficient balance') {
+                          await notifyAdmin(`🚨 ERROR placing War Bet for User ${userId} (${logPrefix}). Error: ${warBetError}`);
+                      }
+                      break;
+                 }
 
-                 const warGameSuccess = await handleWarGame(userId, String(chatId), warWager, warBetId);
+                 const warGameSuccess = await handleWarGame(userId, String(chatId), warWager, warBetId); // Pass betId
                  if (warGameSuccess) { await _handleReferralChecks(userId, warBetId, warWager, logPrefix); }
                  break;
 
 
-             // --- Withdrawal Confirmation ---
-             case 'withdraw_confirm':
-                 if (!currentState || currentState.state !== 'awaiting_withdrawal_confirm' || !currentState.data?.amountLamports || !currentState.data?.recipientAddress) { throw new Error("Invalid state for withdrawal confirmation."); }
-                 const { amountLamports: withdrawAmountStr, recipientAddress: withdrawAddress } = currentState.data;
-                 const withdrawAmount = BigInt(withdrawAmountStr);
-                 const fee = WITHDRAWAL_FEE_LAMPORTS;
-                 const finalSendAmount = withdrawAmount;
-                 const totalDeduction = withdrawAmount + fee;
+              // --- Withdrawal Confirmation ---
+              case 'withdraw_confirm':
+                   if (!currentState || currentState.state !== 'awaiting_withdrawal_confirm' || !currentState.data?.amountLamports || !currentState.data?.recipientAddress) { throw new Error("Invalid state for withdrawal confirmation."); }
+                   const { amountLamports: withdrawAmountStr, recipientAddress: withdrawAddress } = currentState.data;
+                   const withdrawAmount = BigInt(withdrawAmountStr);
+                   const fee = WITHDRAWAL_FEE_LAMPORTS;
+                   const finalSendAmount = withdrawAmount;
+                   const totalDeduction = withdrawAmount + fee;
 
-                 console.log(`${logPrefix} User confirmed withdrawal of ${Number(finalSendAmount) / LAMPORTS_PER_SOL} SOL to ${withdrawAddress}`);
-                 userStateCache.delete(userId); // Clear state
+                   console.log(`${logPrefix} User confirmed withdrawal of ${Number(finalSendAmount) / LAMPORTS_PER_SOL} SOL to ${withdrawAddress}`);
+                   userStateCache.delete(userId); // Clear state
 
-                 // Escaped Message
-                 await bot.editMessageText(`💸 Processing withdrawal request\\.\\.\\. Please wait\\.`, { chat_id: chatId, message_id: messageId, reply_markup: undefined }).catch(()=>{});
+                   // Escaped Message
+                   await bot.editMessageText(`💸 Processing withdrawal request\\.\\.\\. Please wait\\.`, { chat_id: chatId, message_id: messageId, reply_markup: undefined }).catch(()=>{});
 
-                 const currentBalance = await getUserBalance(userId);
-                 if (currentBalance < totalDeduction) {
-                     // Escaped Message
-                     await safeSendMessage(chatId, `⚠️ Withdrawal failed\\. Your current balance \\(${escapeMarkdownV2((Number(currentBalance) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\) is insufficient for the requested amount plus fee \\(${escapeMarkdownV2((Number(totalDeduction) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\)\\.`, { parse_mode: 'MarkdownV2' });
-                     break;
-                 }
+                   const currentBalance = await getUserBalance(userId);
+                   if (currentBalance < totalDeduction) {
+                       // Escaped Message
+                       await safeSendMessage(chatId, `⚠️ Withdrawal failed\\. Your current balance \\(${escapeMarkdownV2((Number(currentBalance) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\) is insufficient for the requested amount plus fee \\(${escapeMarkdownV2((Number(totalDeduction) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\)\\.`, { parse_mode: 'MarkdownV2' });
+                       break;
+                   }
 
-                 const wdRequest = await createWithdrawalRequest(userId, withdrawAmount, fee, withdrawAddress);
-                 if (!wdRequest.success || !wdRequest.withdrawalId) {
-                      // Escaped Message
-                     await safeSendMessage(chatId, `⚠️ Failed to initiate withdrawal request in database\\. Please try again or contact support\\. Error: ${escapeMarkdownV2(wdRequest.error || 'DB Error')}`, { parse_mode: 'MarkdownV2' });
-                     break;
-                 }
-                 const withdrawalId = wdRequest.withdrawalId; // Get ID for logging/job
+                   const wdRequest = await createWithdrawalRequest(userId, withdrawAmount, fee, withdrawAddress);
+                   if (!wdRequest.success || !wdRequest.withdrawalId) {
+                        const errMsg = wdRequest.error || 'DB Error creating withdrawal request.';
+                        // Escaped Message
+                        await safeSendMessage(chatId, `⚠️ Failed to initiate withdrawal request in database\\. Please try again or contact support\\. Error: ${escapeMarkdownV2(errMsg)}`, { parse_mode: 'MarkdownV2' });
+                        // Notify Admin
+                        await notifyAdmin(`🚨 ERROR creating Withdrawal Request for User ${userId} (${logPrefix}). Error: ${errMsg}`);
+                        break;
+                   }
+                   const withdrawalId = wdRequest.withdrawalId; // Get ID for logging/job
 
-                 console.log(`${logPrefix} Withdrawal request ${withdrawalId} created in DB. Adding to payout queue.`); // [LOGGING ADDED] Log DB success and queue add
+                   console.log(`${logPrefix} Withdrawal request ${withdrawalId} created in DB. Adding to payout queue.`); // [LOGGING ADDED] Log DB success and queue add
 
-                 await addPayoutJob(
-                     { type: 'payout_withdrawal', withdrawalId: withdrawalId, userId: userId },
-                     parseInt(process.env.PAYOUT_JOB_RETRIES, 10),
-                     parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10)
-                 );
-                 // Escaped Message
-                 await safeSendMessage(chatId, `✅ Withdrawal request submitted for ${escapeMarkdownV2((Number(finalSendAmount) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. You will be notified upon completion\\.`, { parse_mode: 'MarkdownV2' });
-                 break;
+                   await addPayoutJob(
+                       { type: 'payout_withdrawal', withdrawalId: withdrawalId, userId: userId },
+                       parseInt(process.env.PAYOUT_JOB_RETRIES, 10),
+                       parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10)
+                   );
+                   // Escaped Message
+                   await safeSendMessage(chatId, `✅ Withdrawal request submitted for ${escapeMarkdownV2((Number(finalSendAmount) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. You will be notified upon completion\\.`, { parse_mode: 'MarkdownV2' });
+                   break;
 
-             // --- Generic Cancel ---
-             case 'cancel_action':
-                 console.log(`${logPrefix} User cancelled action.`);
-                 const cancelledState = currentState?.state || 'unknown';
-                 userStateCache.delete(userId);
-                 // Escaped Message
-                 await bot.editMessageText(`Action cancelled \\(${escapeMarkdownV2(cancelledState)}\\)\\.`, { chat_id: chatId, message_id: messageId, reply_markup: undefined }).catch(()=>{});
-                 break;
+               // --- Generic Cancel ---
+               case 'cancel_action':
+                   console.log(`${logPrefix} User cancelled action.`);
+                   const cancelledState = currentState?.state || 'unknown';
+                   userStateCache.delete(userId);
+                   // Escaped Message
+                   await bot.editMessageText(`Action cancelled \\(${escapeMarkdownV2(cancelledState)}\\)\\.`, { chat_id: chatId, message_id: messageId, reply_markup: undefined }).catch(()=>{});
+                   break;
 
-             default:
-                 console.warn(`${logPrefix} Received unknown callback action: ${action}`);
-                 // Only answer with alert if the initial silent answer failed or is too old
-                 // await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown button action.", show_alert: true }).catch(() => {}); // Show alert to user
-                 break;
+               default:
+                   console.warn(`${logPrefix} Received unknown callback action: ${action}`);
+                   // Only answer with alert if the initial silent answer failed or is too old
+                   // await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown button action.", show_alert: true }).catch(() => {}); // Show alert to user
+                   break;
         }
 
     } catch (error) {
         console.error(`${logPrefix} Error processing callback query data '${callbackData}':`, error);
         userStateCache.delete(userId); // Clear state on error
+
+         // *** ADDED: Notify admin on unexpected handler errors ***
+         await notifyAdmin(`🚨 ERROR in handleCallbackQuery for User ${userId} (${logPrefix}) Data: ${callbackData}:\n${error.message}\nStack: ${error.stack?.substring(0, 500)}`);
+
         try {
             // Escaped Message
             // Attempt to edit the original message with an error
             await bot.editMessageText(`⚠️ Error: ${escapeMarkdownV2(error.message)}`, { chat_id: chatId, message_id: messageId, reply_markup: undefined, parse_mode: 'MarkdownV2' }).catch(async (editError) => {
-                 // If editing fails (e.g., message too old), send a new message
-                 console.warn(`${logPrefix} Failed to edit message with error, sending new message. Edit Error: ${editError.message}`);
-                 // Escaped Message
-                 await safeSendMessage(chatId, `⚠️ An error occurred processing your last action\\. Please try again\\. Error: ${escapeMarkdownV2(error.message)}`, { parse_mode: 'MarkdownV2' });
+                // If editing fails (e.g., message too old), send a new message
+                console.warn(`${logPrefix} Failed to edit message with error, sending new message. Edit Error: ${editError.message}`);
+                // Escaped Message
+                await safeSendMessage(chatId, `⚠️ An error occurred processing your last action\\. Please try again\\. Error: ${escapeMarkdownV2(error.message)}`, { parse_mode: 'MarkdownV2' });
             });
         } catch (sendError) {
             // Fallback if even sending a new message fails
@@ -2891,7 +2715,7 @@ async function placeBet(userId, chatId, gameType, betDetails, wagerAmount) {
             const currentBalance = await getUserBalance(userId); // Fetch balance to show user
              // Escaped Message
              await safeSendMessage(chatId, `⚠️ Bet failed\\! ${escapeMarkdownV2(errorMsg)}\\. Your balance: ${escapeMarkdownV2((Number(currentBalance)/LAMPORTS_PER_SOL).toFixed(4))} SOL\\.`, { parse_mode: 'MarkdownV2'});
-            return { success: false, error: errorMsg };
+            return { success: false, error: errorMsg }; // Return specific error
         }
         console.log(`${logPrefix} Balance updated successfully. New balance: ${balanceUpdateResult.newBalance}`); // [LOGGING ADDED] Step success log
 
@@ -2904,6 +2728,10 @@ async function placeBet(userId, chatId, gameType, betDetails, wagerAmount) {
             console.error(`${logPrefix} Failed to create bet record: ${errorMsg}. Rolled back.`); // [LOGGING ADDED] Failure log + rollback
              // Escaped Message
              await safeSendMessage(chatId, `⚠️ Bet failed due to internal error recording the bet\\. Your balance has not been charged\\. Please try again\\. Error: ${escapeMarkdownV2(errorMsg)}`, { parse_mode: 'MarkdownV2'});
+             // Also notify admin for non-obvious errors
+             if (!errorMsg.includes('Wager amount must be positive')) {
+                 await notifyAdmin(`🚨 ERROR creating Bet Record for User ${userId} (${logPrefix}). Error: ${errorMsg}`);
+             }
             return { success: false, error: errorMsg };
         }
         const betId = betRecordResult.betId;
@@ -2926,6 +2754,8 @@ async function placeBet(userId, chatId, gameType, betDetails, wagerAmount) {
         } else {
             console.error(`${logPrefix} Unexpected error placing bet (no client):`, error); // [LOGGING ADDED] Error before client connect
         }
+         // Notify Admin for unexpected errors
+         await notifyAdmin(`🚨 UNEXPECTED ERROR in placeBet for User ${userId} (${logPrefix}):\n${error.message}\nStack: ${error.stack?.substring(0, 500)}`);
          // Escaped Message
          await safeSendMessage(chatId, `⚠️ An unexpected error occurred while placing your bet\\. Please try again or contact support\\.`, { parse_mode: 'MarkdownV2'});
         return { success: false, error: 'Unexpected error placing bet.' };
@@ -3033,7 +2863,7 @@ async function handleAmountInput(msg, currentState) {
         if (!gameCfg) {
              console.error(`${logPrefix} Invalid game key derived from state: ${gameKey}`);
              userStateCache.delete(userId);
-              // Escaped Message
+             // Escaped Message
               await safeSendMessage(chatId, `⚠️ Internal error starting game\\. Please try again\\.`, { parse_mode: 'MarkdownV2'});
              return;
         }
@@ -3111,8 +2941,8 @@ async function handleWithdrawalAddressInput(msg, currentState) {
     }
     // Prevent withdrawal to bot's own payout addresses
     const botKeys = [process.env.MAIN_BOT_PRIVATE_KEY, process.env.REFERRAL_PAYOUT_PRIVATE_KEY].filter(Boolean)
-                           .map(pkStr => { try { return Keypair.fromSecretKey(bs58.decode(pkStr)).publicKey.toBase58(); } catch { return null; }})
-                           .filter(Boolean);
+                         .map(pkStr => { try { return Keypair.fromSecretKey(bs58.decode(pkStr)).publicKey.toBase58(); } catch { return null; }})
+                         .filter(Boolean);
     if (botKeys.includes(address)) {
          // Escaped Message
          await safeSendMessage(chatId, `⚠️ You cannot withdraw funds to the bot's own operational addresses\\. Please enter your personal wallet address\\.`, { parse_mode: 'MarkdownV2' });
@@ -3168,8 +2998,8 @@ async function handleStartCommand(msg, args) {
        parse_mode: 'MarkdownV2' };
     // Escaped Message
     const welcomeMsg = `👋 Welcome, ${escapeMarkdownV2(firstName)}\\!\n\n` + // Escaped !
-                       `I am a Solana\\-based gaming bot\\. Use the buttons below to play, manage funds, or get help\\.\n\n` + // Escaped -, . (x2)
-                       `*Remember to gamble responsibly\\!*`; // Escaped !
+                     `I am a Solana\\-based gaming bot\\. Use the buttons below to play, manage funds, or get help\\.\n\n` + // Escaped -, . (x2)
+                     `*Remember to gamble responsibly\\!*`; // Escaped !
     await safeSendMessage(chatId, welcomeMsg, options);
 }
 
@@ -3182,8 +3012,8 @@ async function handleHelpCommand(msg, args) {
     const minWithdrawSOL = (Number(MIN_WITHDRAWAL_LAMPORTS) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
     const refRewardPercent = (REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(2);
 
-    // Escaped Help Message (Escape all ., -, !, \, /, <, >, %, +, =, |)
-    const helpMsg = `*Solana Gambles Bot Help* 🤖 \\(v3\\.1\\.1\\)\n\n` + // Escaped ( ) . - Updated Version
+    // Escaped Help Message (Escape all ., -, !, \, /, <, >, %, +, =, |) - Updated Version
+    const helpMsg = `*Solana Gambles Bot Help* 🤖 \\(v3\\.1\\.5\\)\n\n` + // *** Updated Version ***
                     `This bot uses a *custodial* model\\. Deposit SOL to play instantly using your internal balance\\. Winnings are added to your balance, and you can withdraw anytime\\. \n\n`+ // Escaped . (x3)
                     `*How to Play:*\n` +
                     `1\\. Use \`/deposit\` to get a unique address & send SOL\\. Wait for confirmation\\. \n` + // Escaped . (x2)
@@ -3202,7 +3032,7 @@ async function handleHelpCommand(msg, args) {
                     `*Referral Program:* 🤝\n` +
                     `Use \`/referral\` to get your code/link\\. New users start with \`/start <YourCode>\`\\. You earn SOL based on their first bet and their total wager volume \\(${escapeMarkdownV2(refRewardPercent)}\\% milestone bonus\\)\\. Rewards are paid to your linked wallet\\.\n\n` + // Escaped . (x4) % ( )
                     `*Important Notes:*\n` +
-                    `\\- Only deposit to addresses given by \`/deposit\`\\. Each address is temporary and for one deposit only\\. \n` + // Escaped - . (x2)
+                    `\\- Only deposit to addresses given by \`/deposit\`\\. Each address is temporary and for one deposit only\\. It expires in ${escapeMarkdownV2(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES)} minutes\\. \n` + // Escaped - . (x3)
                     `\\- You *must* set a withdrawal address using \`/wallet <address>\` before withdrawing\\. \n` + // Escaped - . < >
                     `\\- Withdrawals have a fee \\(${escapeMarkdownV2(feeSOL)} SOL\\) and minimum \\(${escapeMarkdownV2(minWithdrawSOL)} SOL\\)\\.\n` + // Escaped - ( ) ( ) .
                     `\\- Please gamble responsibly\\. Contact support if you encounter issues\\.`; // Escaped - . (x2)
@@ -3230,7 +3060,7 @@ async function handleWalletCommand(msg, args) {
     } else {
         console.log(`${logPrefix} Displaying wallet info.`); // [LOGGING ADDED] Log action
         const userDetails = await getUserWalletDetails(userId);
-        const userBalance = await getUserBalance(userId);
+        const userBalance = await getUserBalance(userId); // Ensures user/balance exists
         // Escaped Message
         let walletMsg = `*Your Wallet & Referral Info* 💼\n\n` +
                         `*Balance:* ${escapeMarkdownV2((Number(userBalance) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\n`;
@@ -3239,9 +3069,10 @@ async function handleWalletCommand(msg, args) {
         } else {
             walletMsg += `*Withdrawal Address:* Not Set \\(Use \`/wallet <YourSolAddress>\`\\)\n`; // Escaped ( ) < >
         }
-        // Handle referral code generation if missing (like in original code, ensure user exists first)
+        // Handle referral code generation if missing (like in original code, ensure user exists first via getUserBalance)
         let currentRefCode = userDetails?.referral_code;
-        if (!currentRefCode && userDetails) { // Only try to generate if user exists but lacks code
+        // Check if user exists (implicit via userBalance call succeeding) but code is missing
+        if (!currentRefCode && userBalance !== null) { // Check if userBalance isn't null (meaning user exists)
              console.log(`${logPrefix} User exists but lacks referral code. Generating and attempting to save.`);
              const genCode = generateReferralCode();
              let client = null;
@@ -3269,6 +3100,7 @@ async function handleWalletCommand(msg, args) {
              } catch (e) {
                   if (client) try { await client.query('ROLLBACK'); } catch (rbErr) { /* ignore */ }
                   console.error(`${logPrefix} Error generating/saving referral code: ${e.message}`);
+                  // Notify Admin? Low priority maybe.
              } finally {
                   if (client) client.release();
              }
@@ -3298,7 +3130,7 @@ async function handleReferralCommand(msg, args) {
         await safeSendMessage(chatId, `❌ You need to link your wallet first using \`/wallet <YourSolAddress>\` before using the referral system\\. This ensures rewards can be paid out\\.`, { parse_mode: 'MarkdownV2' }); return; }
     if (!userDetails.referral_code) {
         // Attempt to generate/assign if missing (similar logic to /wallet)
-         console.warn(`[Cmd /referral User ${userId}] User has linked wallet but missing referral code. Attempting generation.`);
+         console.warn(`[Cmd /referral User ${userId}] User has linked wallet but missing referral code. Attempting generation via wallet command logic.`);
          // Trigger /wallet logic internally to try and fix this - maybe refactor later
          await handleWalletCommand(msg, ''); // Call /wallet view logic which includes generation attempt
          return; // Exit, /wallet will display updated info or error
@@ -3321,7 +3153,7 @@ async function handleReferralCommand(msg, args) {
             const lowerBound = tierIndex === 0 ? 1 : REFERRAL_INITIAL_BONUS_TIERS[tierIndex - 1].maxCount + 1;
             countLabel = `${lowerBound}\\-${tier.maxCount}`; // e.g. 1-10, 11-25
         }
-        return `   \\- ${escapeMarkdownV2(countLabel)} refs: ${escapeMarkdownV2((tier.percent * 100).toFixed(0))}\\%`; // Escape - %
+        return `     \\- ${escapeMarkdownV2(countLabel)} refs: ${escapeMarkdownV2((tier.percent * 100).toFixed(0))}\\%`; // Escape - %
        }).join('\n');
 
     // Escaped Multi-line Message
@@ -3359,7 +3191,7 @@ async function handleDepositCommand(msg, args) {
         const addressIndex = await getNextDepositAddressIndex(userId); // Uses function moved to Part 2
         console.log(`${logPrefix} Next deposit index determined: ${addressIndex}.`); // [LOGGING ADDED] Step log
 
-        // 3. Generate unique address (Function in Part 3 now contains detailed logs)
+        // 3. Generate unique address (Function in Part 3 now uses safeIndex)
         console.log(`${logPrefix} Generating unique deposit address...`); // [LOGGING ADDED] Step log
         const derivedInfo = await generateUniqueDepositAddress(userId, addressIndex);
         if (!derivedInfo) {
@@ -3400,6 +3232,8 @@ async function handleDepositCommand(msg, args) {
 
     } catch (error) {
         console.error(`${logPrefix} Error: ${error.message}`); // Log the specific error that caused the failure
+         // Notify Admin
+         await notifyAdmin(`🚨 ERROR during /deposit for User ${userId} (${logPrefix}):\n${error.message}`);
         // Escaped Message
         await safeSendMessage(chatId, `❌ Error generating deposit address: ${escapeMarkdownV2(error.message)}\\. Please try again later or contact support\\.`, { parse_mode: 'MarkdownV2' });
     }
@@ -3431,11 +3265,13 @@ async function handleWithdrawCommand(msg, args) {
         userStateCache.set(userId, { state: 'awaiting_withdrawal_amount', chatId: String(chatId), messageId: msg.message_id, timestamp: Date.now(), data: {} });
          // Escaped Message
          await safeSendMessage(chatId, `💸 Your withdrawal address: \`${escapeMarkdownV2(linkedAddress)}\`\n` +
-                                     `Minimum withdrawal: ${escapeMarkdownV2((Number(MIN_WITHDRAWAL_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. Fee: ${escapeMarkdownV2((Number(WITHDRAWAL_FEE_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. \n\n` + // Escaped . (x2) :
-                                     `Please enter the amount of SOL you wish to withdraw:`, // Escaped :
-                                     { parse_mode: 'MarkdownV2' });
+                                       `Minimum withdrawal: ${escapeMarkdownV2((Number(MIN_WITHDRAWAL_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. Fee: ${escapeMarkdownV2((Number(WITHDRAWAL_FEE_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. \n\n` + // Escaped . (x2) :
+                                       `Please enter the amount of SOL you wish to withdraw:`, // Escaped :
+                                       { parse_mode: 'MarkdownV2' });
     } catch (error) {
         console.error(`${logPrefix} Error starting withdrawal: ${error.message}`);
+         // Notify Admin
+         await notifyAdmin(`🚨 ERROR starting /withdraw for User ${userId} (${logPrefix}):\n${error.message}`);
          // Escaped Message
          await safeSendMessage(chatId, `❌ Error starting withdrawal process\\. Please try again later\\.`, { parse_mode: 'MarkdownV2' });
     }
@@ -3502,7 +3338,7 @@ async function handleAdminCommand(msg, args) {
                  const depAddrCacheSize = activeDepositAddresses.size; const processedTxCacheSize = processedDepositTxSignatures.size;
                  const dbPoolTotal = pool.totalCount; const dbPoolIdle = pool.idleCount; const dbPoolWaiting = pool.waitingCount;
                  // Escaped Status Message
-                 let statusMsg = `*Bot Status* \\(v3\\.1\\.1\\) \\- ${escapeMarkdownV2(new Date().toISOString())}\n\n` + // Escaped ()- Updated Version
+                 let statusMsg = `*Bot Status* \\(v3\\.1\\.5\\) \\- ${escapeMarkdownV2(new Date().toISOString())}\n\n` + // *** Updated Version ***
                                  `*Queues*:\n` +
                                  `  Msg: ${msgQueueSize}, Callback: ${cbQueueSize}, Payout: ${payoutQueueSize}, Deposit: ${depositQSize}, TG Send: ${tgSendQSize}\n`+
                                  `*Caches*:\n` +
@@ -3511,7 +3347,7 @@ async function handleAdminCommand(msg, args) {
                                  `  Total: ${dbPoolTotal}, Idle: ${dbPoolIdle}, Waiting: ${dbPoolWaiting}\n` +
                                  `*State*: Initialized: ${isFullyInitialized}\n`;
                  await safeSendMessage(chatId, statusMsg, { parse_mode: 'MarkdownV2' }); break;
-              }
+             }
             case 'getbalance': { /* ... getbalance logic ... */
                  const keyTypes = ['main', 'referral']; let balanceMsg = '*Payout Wallet Balances:*\n';
                  for (const type of keyTypes) { /* ... key selection logic ... */
@@ -3520,37 +3356,52 @@ async function handleAdminCommand(msg, args) {
                      else if (type === 'referral') { keyEnvVar = process.env.REFERRAL_PAYOUT_PRIVATE_KEY ? 'REFERRAL_PAYOUT_PRIVATE_KEY' : 'MAIN_BOT_PRIVATE_KEY'; keyDesc = `Referral \\(${escapeMarkdownV2(process.env.REFERRAL_PAYOUT_PRIVATE_KEY ? 'Dedicated' : 'Using Main')}\\)`;} // Escape ()
                      const pk = process.env[keyEnvVar];
                      if (pk) { try { const keypair = Keypair.fromSecretKey(bs58.decode(pk)); const balance = await solanaConnection.getBalance(keypair.publicKey);
-                            balanceMsg += `  \\- ${escapeMarkdownV2(keyDesc)} \\(${escapeMarkdownV2(keypair.publicKey.toBase58().slice(0,6))}\\.\\.\\): ${escapeMarkdownV2((Number(balance)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\n`; // Escape -, ., (, )
-                         } catch (e) { balanceMsg += `  \\- ${escapeMarkdownV2(keyDesc)}: Error fetching balance \\- ${escapeMarkdownV2(e.message)}\n`; } // Escape - (x2)
-                     } else { balanceMsg += `  \\- ${escapeMarkdownV2(keyDesc)}: Private key not set\n`; } // Escape -
+                          balanceMsg += `   \\- ${escapeMarkdownV2(keyDesc)} \\(${escapeMarkdownV2(keypair.publicKey.toBase58().slice(0,6))}\\.\\.\\): ${escapeMarkdownV2((Number(balance)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\n`; // Escape -, ., (, )
+                         } catch (e) { balanceMsg += `   \\- ${escapeMarkdownV2(keyDesc)}: Error fetching balance \\- ${escapeMarkdownV2(e.message)}\n`; } // Escape - (x2)
+                     } else { balanceMsg += `   \\- ${escapeMarkdownV2(keyDesc)}: Private key not set\n`; } // Escape -
                  } await safeSendMessage(chatId, balanceMsg, { parse_mode: 'MarkdownV2' }); break;
-              }
+             }
             case 'getconfig': { /* ... getconfig logic ... */
                  let configText = "*Current Config \\(Non\\-Secret Env Vars\\):*\n\n"; // Escaped ()-
                  const sensitiveKeywords = ['TOKEN', 'DATABASE_URL', 'KEY', 'SECRET', 'PASSWORD', 'SEED'];
-                 const allVars = {...OPTIONAL_ENV_DEFAULTS, ...process.env};
-                 for (const key in allVars) {
-                     // Only show keys that are required or part of optional defaults
+                 const allVars = {...OPTIONAL_ENV_DEFAULTS, ...process.env}; // Combine defaults and actual env
+                 // Add required vars to the list we iterate over
+                 const keysToShow = [...new Set([...REQUIRED_ENV_VARS, ...Object.keys(OPTIONAL_ENV_DEFAULTS)])];
+
+                 for (const key of keysToShow.sort()) { // Sort keys alphabetically
+                     // Only show keys relevant to this config setup
                      if (REQUIRED_ENV_VARS.includes(key) || OPTIONAL_ENV_DEFAULTS.hasOwnProperty(key)) {
                           const isSensitive = sensitiveKeywords.some(k => key.toUpperCase().includes(k));
                           let value = process.env[key];
                           let source = ''; // Track if default or set
-                          if (value === undefined && OPTIONAL_ENV_DEFAULTS.hasOwnProperty(key)) {
-                                value = OPTIONAL_ENV_DEFAULTS[key];
-                                source = ' \\(Default\\)'; // Escaped ()
-                          } else if (value !== undefined && OPTIONAL_ENV_DEFAULTS.hasOwnProperty(key) && value === OPTIONAL_ENV_DEFAULTS[key]) {
-                                // Value is set but it matches the default
-                                // source = ' (Matches Default)'; // Optionally indicate
-                          }
-                          value = value ?? '[Not Set]'; // Handle truly unset required vars (shouldn't happen after startup checks)
+                          let displayValue = '';
 
-                          configText += `\\- ${escapeMarkdownV2(key)}: ${isSensitive && key !== 'RPC_URLS' ? '[Set, Redacted]' : escapeMarkdownV2(value)}${source}\n`; // Escape -
+                          if (value !== undefined) {
+                              // Value is explicitly set in environment
+                              displayValue = isSensitive && key !== 'RPC_URLS' ? '[Set, Redacted]' : escapeMarkdownV2(value);
+                              if (OPTIONAL_ENV_DEFAULTS.hasOwnProperty(key) && value === OPTIONAL_ENV_DEFAULTS[key]) {
+                                   source = ' \\(Matches Default\\)'; // Escaped ()
+                              } else {
+                                   source = ' \\(Set\\)'; // Escaped ()
+                              }
+                          } else if (OPTIONAL_ENV_DEFAULTS.hasOwnProperty(key)) {
+                              // Value is not set, using default
+                              value = OPTIONAL_ENV_DEFAULTS[key]; // Get default value
+                              displayValue = isSensitive && key !== 'RPC_URLS' ? '[Default, Redacted]' : escapeMarkdownV2(value);
+                              source = ' \\(Default\\)'; // Escaped ()
+                          } else {
+                               // Required variable that is somehow missing (shouldn't happen after startup checks)
+                               displayValue = '[MISSING REQUIRED]';
+                               source = ' \\(ERROR\\)'; // Escaped ()
+                          }
+                          configText += `\\- ${escapeMarkdownV2(key)}: ${displayValue}${source}\n`; // Escape -
                      }
                  }
                  configText += "\n*Game Config Limits \\(Lamports\\):*\n" + "```json\n" + JSON.stringify(GAME_CONFIG, (k, v) => typeof v === 'bigint' ? v.toString() : v, 2) + "\n```"; // Use JSON code block
                  await safeSendMessage(chatId, configText.substring(0, 4090), { parse_mode: 'MarkdownV2' }); break; // Substring to avoid length limits
-              }
-            case 'setloglevel': case 'finduser':
+             }
+            case 'setloglevel': // Add basic implementation example if needed
+            case 'finduser':
                  // Escaped Message
                  await safeSendMessage(chatId, `Admin command \`${escapeMarkdownV2(subCommand)}\` not fully implemented yet\\.`, { parse_mode: 'MarkdownV2'}); break;
             default:
@@ -3559,6 +3410,8 @@ async function handleAdminCommand(msg, args) {
         }
     } catch (adminError) {
         console.error(`${logPrefix} Admin command error (${subCommand}):`, adminError);
+         // Notify Admin about the admin command failure itself
+         await notifyAdmin(`🚨 ERROR executing Admin Command \`${subCommand}\` for User ${userId}:\n${adminError.message}`);
          // Escaped Message
          await safeSendMessage(chatId, `Error executing admin command \`${escapeMarkdownV2(subCommand)}\`: \`${escapeMarkdownV2(adminError.message)}\``, { parse_mode: 'MarkdownV2' });
     }
@@ -3566,7 +3419,7 @@ async function handleAdminCommand(msg, args) {
 
 
 // --- Referral Check & Payout Triggering Logic ---
-
+// This function remains unchanged from your original code in terms of logic flow
 /** Handles checking for and processing referral bonuses after a bet completes. */
 async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountLamports, logPrefix = '') {
      refereeUserId = String(refereeUserId);
@@ -3581,7 +3434,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
               client = await pool.connect(); await client.query('BEGIN');
               await updateUserWagerStats(refereeUserId, wagerAmountLamports, client);
               await client.query('COMMIT'); return;
-           }
+          }
          const referrerUserId = refereeDetails.referred_by_user_id;
          const referrerDetails = await getUserWalletDetails(referrerUserId);
          if (!referrerDetails?.external_withdrawal_address) { /* ... (handle referrer no wallet + update stats) ... */
@@ -3589,7 +3442,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
               client = await pool.connect(); await client.query('BEGIN');
               await updateUserWagerStats(refereeUserId, wagerAmountLamports, client); // Still update referee stats
               await client.query('COMMIT'); return;
-           }
+          }
 
          client = await pool.connect(); await client.query('BEGIN'); // Start TX
          let newLastMilestonePaid = refereeDetails.last_milestone_paid_lamports;
@@ -3605,25 +3458,30 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
               const initialBonusAmount = wagerAmountLamports * BigInt(Math.round(bonusTier.percent * 100)) / 100n;
               console.log(`${logPrefix} Referrer Count: ${referrerCount}, Tier Percent: ${bonusTier.percent}, Bonus Amount: ${initialBonusAmount}`);
               if (initialBonusAmount > 0n) {
-                   const payoutRecord = await recordPendingReferralPayout(referrerUserId, refereeUserId, 'initial_bet', initialBonusAmount, completedBetId, null, client); // Pass client
+                   // Pass client to recordPendingReferralPayout
+                   const payoutRecord = await recordPendingReferralPayout(referrerUserId, refereeUserId, 'initial_bet', initialBonusAmount, completedBetId, null, client);
                    if (payoutRecord.success && payoutRecord.payoutId) {
                         await addPayoutJob({ type: 'payout_referral', payoutId: payoutRecord.payoutId, userId: referrerUserId }, parseInt(process.env.PAYOUT_JOB_RETRIES, 10), parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10));
                         console.log(`${logPrefix} Initial bonus payout job queued (ID: ${payoutRecord.payoutId}).`);
                         payoutQueued = true;
-                   } else if (payoutRecord.error !== 'Duplicate milestone payout attempt.') { console.error(`${logPrefix} Failed to record initial bonus payout: ${payoutRecord.error}`); }
+                   } else if (payoutRecord.error !== 'Duplicate milestone payout attempt.') {
+                        console.error(`${logPrefix} Failed to record initial bonus payout: ${payoutRecord.error}`);
+                        // Notify admin about DB failure during bonus recording
+                        await notifyAdmin(`🚨 ERROR recording Initial Bonus Payout in DB for Referrer ${referrerUserId} / Referee ${refereeUserId} (${logPrefix}). Error: ${payoutRecord.error}`);
+                   }
               } else { console.log(`${logPrefix} Calculated initial bonus is zero.`); }
-           }
+          }
 
          // Check Milestone Bonus
          const newTotalWagered = (refereeDetails.total_wagered || 0n) + wagerAmountLamports;
          let milestoneCrossed = null;
          // Iterate thresholds in ascending order
          for (const threshold of REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS) {
-             if (newTotalWagered >= threshold && threshold > refereeDetails.last_milestone_paid_lamports) {
-                 milestoneCrossed = threshold; // Keep track of the highest threshold crossed
-             } else if (newTotalWagered < threshold) {
-                 break; // Stop checking once total wagered is less than the threshold
-             }
+              if (newTotalWagered >= threshold && threshold > refereeDetails.last_milestone_paid_lamports) {
+                  milestoneCrossed = threshold; // Keep track of the highest threshold crossed
+              } else if (newTotalWagered < threshold) {
+                  break; // Stop checking once total wagered is less than the threshold
+              }
           }
 
          if (milestoneCrossed) { /* ... (calculate bonus, record, queue) ... */
@@ -3638,36 +3496,40 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
                         console.log(`${logPrefix} Milestone bonus payout job queued (ID: ${payoutRecord.payoutId}).`);
                         newLastMilestonePaid = milestoneCrossed; // Update marker *only if* payout recorded successfully
                         payoutQueued = true;
-                   } else if (payoutRecord.error !== 'Duplicate milestone payout attempt.') { console.error(`${logPrefix} Failed to record milestone bonus payout: ${payoutRecord.error}`); }
+                   } else if (payoutRecord.error !== 'Duplicate milestone payout attempt.') {
+                        console.error(`${logPrefix} Failed to record milestone bonus payout: ${payoutRecord.error}`);
+                         // Notify admin about DB failure during bonus recording
+                         await notifyAdmin(`🚨 ERROR recording Milestone Bonus Payout in DB for Referrer ${referrerUserId} / Referee ${refereeUserId} / Milestone ${milestoneCrossed} (${logPrefix}). Error: ${payoutRecord.error}`);
+                   }
               } else { console.log(`${logPrefix} Calculated milestone bonus is zero.`); }
-           }
+          }
 
          // Update Referee Wager Stats (Commit or Rollback)
-         // Only update if a milestone was crossed OR this is the first bet (to ensure total_wagered is updated)
-         if (newLastMilestonePaid !== refereeDetails.last_milestone_paid_lamports || isFirst) {
-              console.log(`${logPrefix} Updating referee wager stats. New Milestone Paid Level: ${newLastMilestonePaid}`);
-             const statsUpdated = await updateUserWagerStats(refereeUserId, wagerAmountLamports, client, newLastMilestonePaid);
-             if (!statsUpdated) { console.error(`${logPrefix} CRITICAL: Failed to update referee wager stats. Rolling back.`); await client.query('ROLLBACK'); }
-             else { await client.query('COMMIT'); console.log(`${logPrefix} Referral checks completed. Transaction committed.`); }
-         } else {
-              // No milestone crossed, no first bet - just need to update total wagered without changing milestone level
-              console.log(`${logPrefix} No new milestone crossed. Updating wager stats only.`);
-              const statsUpdated = await updateUserWagerStats(refereeUserId, wagerAmountLamports, client, null); // Pass null for milestone
-              if (!statsUpdated) { console.error(`${logPrefix} CRITICAL: Failed to update referee wager stats (no milestone change). Rolling back.`); await client.query('ROLLBACK'); }
-              else { await client.query('COMMIT'); console.log(`${logPrefix} Referral checks completed (no milestone change). Transaction committed.`); }
-         }
-
+         // Always update wager stats now, passing the potentially updated milestone marker
+          console.log(`${logPrefix} Updating referee wager stats. New Milestone Paid Level: ${newLastMilestonePaid}`);
+          const statsUpdated = await updateUserWagerStats(refereeUserId, wagerAmountLamports, client, newLastMilestonePaid);
+          if (!statsUpdated) {
+               console.error(`${logPrefix} CRITICAL: Failed to update referee wager stats. Rolling back.`);
+               // Notify admin! This shouldn't fail if user exists.
+               await notifyAdmin(`🚨 CRITICAL ERROR updating referee wager stats for User ${refereeUserId} (${logPrefix}) after Bet ${completedBetId}. Rolling back.`);
+               await client.query('ROLLBACK');
+          } else {
+               await client.query('COMMIT');
+               console.log(`${logPrefix} Referral checks completed. Transaction committed.`);
+          }
 
      } catch (error) { /* ... (error logging and rollback) ... */
          console.error(`${logPrefix} Error during referral checks: ${error.message}`);
-         if (client) { try { await client.query('ROLLBACK'); console.log(`${logPrefix} Transaction rolled back due to error.`); } catch (rbErr) { /* ignore */ } }
+          // Notify admin for unexpected errors during check
+          await notifyAdmin(`🚨 UNEXPECTED ERROR during _handleReferralChecks for User ${refereeUserId} / Bet ${completedBetId} (${logPrefix}):\n${error.message}\nStack: ${error.stack?.substring(0, 500)}`);
+         if (client) { try { await client.query('ROLLBACK'); console.log(`${logPrefix} Transaction rolled back due to error.`); } catch (rbErr) { console.error(`${logPrefix} Rollback failed: ${rbErr.message}`);} }
      } finally { if (client) client.release(); }
 }
 
 
 // --- End of Part 5 ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
-// --- VERSION: 3.1.1 --- (Added Deposit Logging)
+// --- VERSION: 3.1.5 --- (Added Idempotency, Admin Notify, RPC Retry, Expired Status Update)
 
 // --- Payout Job Handling ---
 
@@ -3693,6 +3555,7 @@ async function addPayoutJob(jobDetails, maxRetries, baseRetryDelayMs) {
                     await handleReferralPayoutJob(jobDetails);
                 } else {
                     console.error(`${logPrefix} Unknown job type: ${jobType}`);
+                    await notifyAdmin(`🚨 CRITICAL: Unknown payout job type encountered: ${jobType} for Job ID ${jobId}.`);
                     // Don't retry unknown types
                     return;
                 }
@@ -3707,6 +3570,7 @@ async function addPayoutJob(jobDetails, maxRetries, baseRetryDelayMs) {
 
                 if (!isRetryable || attempt > maxRetries) {
                     console.error(`${logPrefix} Final attempt failed or error not retryable. Marking job as failed.`);
+                    await notifyAdmin(`🚨 PAYOUT FAILED (Final): ${jobType} ID ${jobId}. User: ${jobDetails.userId}. Reason: Max retries or non-retryable error - ${error.message}`);
                     try {
                         // Mark as failed in DB - Use the standalone update functions
                         const failureReason = `Max retries (${maxRetries}) exceeded or non-retryable error: ${error.message.substring(0, 200)}`; // Truncate error
@@ -3719,6 +3583,7 @@ async function addPayoutJob(jobDetails, maxRetries, baseRetryDelayMs) {
                     } catch (dbError) {
                         console.error(`${logPrefix} CRITICAL: Failed to mark job as failed in DB after final error: ${dbError.message}`);
                         // Notify admin urgently here
+                        await notifyAdmin(`🚨 CRITICAL DB ERROR: Failed to mark ${jobType} ID ${jobId} as FAILED in DB after payout failure. User: ${jobDetails.userId}. DB Error: ${dbError.message}`);
                     }
                     // Notify user about final failure
                     if (jobDetails.userId) {
@@ -3743,12 +3608,16 @@ async function addPayoutJob(jobDetails, maxRetries, baseRetryDelayMs) {
     }).catch(queueError => {
         // Catch errors from adding the job itself (e.g., queue timed out immediately)
         console.error(`${logPrefix} Error adding/processing job in payout queue:`, queueError.message);
+        notifyAdmin(`🚨 CRITICAL QUEUE ERROR for ${jobType} ID ${jobId}. Error adding to queue: ${queueError.message}`);
         // Attempt to mark as failed as a last resort
         try {
              const queueFailureReason = `Queue processing error: ${queueError.message.substring(0, 200)}`;
              if (jobType === 'payout_withdrawal' && jobDetails.withdrawalId) updateWithdrawalStatus(jobDetails.withdrawalId, 'failed', null, null, queueFailureReason);
              else if (jobType === 'payout_referral' && jobDetails.payoutId) updateReferralPayoutStatus(jobDetails.payoutId, 'failed', null, null, queueFailureReason);
-        } catch (dbError) { console.error(`${logPrefix} Failed to mark job as failed after queue error: ${dbError.message}`); }
+        } catch (dbError) {
+            console.error(`${logPrefix} Failed to mark job as failed after queue error: ${dbError.message}`);
+            notifyAdmin(`🚨 CRITICAL DB ERROR: Failed to mark ${jobType} ID ${jobId} as FAILED after QUEUE error. DB Error: ${dbError.message}`);
+        }
     });
 }
 
@@ -3763,6 +3632,8 @@ async function handleWithdrawalPayoutJob(job) {
 
     if (!details) {
         console.error(`${logPrefix} Withdrawal record not found.`);
+        // Non-retryable, notify admin
+        await notifyAdmin(`🚨 CRITICAL ERROR: Withdrawal record ID ${withdrawalId} not found during payout job processing.`);
         throw new Error("Withdrawal record not found. Not retryable."); // Throw non-retryable error
     }
     // Allow processing if 'pending' or 'processing' (in case retry starts after marking processing)
@@ -3816,6 +3687,7 @@ async function handleWithdrawalPayoutJob(job) {
                 // Mark withdrawal as failed - this state requires manual intervention
                 await updateWithdrawalStatus(withdrawalId, 'failed', null, null, `CRITICAL: Internal balance deduction failed after successful send (TX: ${signature})`);
                 // Notify Admin!
+                await notifyAdmin(`🚨 ${criticalErrorMsg}`);
                 // Throw a specific error to prevent retry of this state
                 const criticalError = new Error(criticalErrorMsg);
                 criticalError.isRetryable = false; // Ensure this isn't retried
@@ -3828,15 +3700,17 @@ async function handleWithdrawalPayoutJob(job) {
             const statusUpdated = await updateWithdrawalStatus(withdrawalId, 'completed', client, signature);
             if (!statusUpdated) {
                 // Also CRITICAL: Sent and deducted, but couldn't mark withdrawal complete.
-                const criticalErrorMsg = `CRITICAL ERROR: Sent ${amountToSend} lamports (TX: ${signature}), deducted balance, but failed to mark withdrawal as completed.`;
+                const criticalErrorMsg = `CRITICAL ERROR: Sent ${amountToSend} lamports (TX: ${signature}), deducted balance for User ${details.user_id}, but failed to mark withdrawal ID ${withdrawalId} as completed.`;
                 console.error(`${logPrefix} ${criticalErrorMsg}`);
                 // Rollback balance deduction to keep state consistent (forces retry or manual check)
                 await client.query('ROLLBACK');
                  console.log(`${logPrefix} Rolled back balance deduction due to failure marking withdrawal complete.`);
                 client.release(); client = null;
+                // Notify Admin!
+                await notifyAdmin(`🚨 ${criticalErrorMsg} Needs manual verification!`);
                 // Throw error, likely retryable (e.g., temporary DB issue preventing status update)
-                const updateError = new Error(criticalErrorMsg + " Will retry.");
-                updateError.isRetryable = true;
+                const updateError = new Error(criticalErrorMsg + " Will retry marking complete.");
+                updateError.isRetryable = true; // Allow retry for marking complete
                 throw updateError;
             }
              console.log(`${logPrefix} Withdrawal marked as 'completed' successfully.`);
@@ -3869,13 +3743,14 @@ async function handleWithdrawalPayoutJob(job) {
         }
     } catch (error) {
         // Catch errors from sendSol OR the DB transaction block
-        if (client) { try { await client.query('ROLLBACK'); console.log(`${logPrefix} Transaction rolled back due to error.`); } catch (rbErr) { /* ignore */ } }
+        if (client) { try { await client.query('ROLLBACK'); console.log(`${logPrefix} Transaction rolled back due to error.`); } catch (rbErr) { console.error(`${logPrefix} Rollback error: ${rbErr.message}`); } }
         console.error(`${logPrefix} Processing failed during execution. Error: ${error.message}`);
         // Re-throw the error to be caught by the retry logic in addPayoutJob
         // Ensure retryable status is attached if known
         if (error.isRetryable === undefined) {
              error.isRetryable = isRetryableSolanaError(error);
         }
+        // Do not notify admin here, the retry loop will handle final failure notification
         throw error;
     } finally {
         if (client) client.release();
@@ -3884,7 +3759,7 @@ async function handleWithdrawalPayoutJob(job) {
 
 /** Handles referral payout jobs. Throws error on failure for retry logic. */
 async function handleReferralPayoutJob(job) {
-    const { payoutId } = job; // Get needed data from job (might contain more than just ID)
+    const { payoutId, userId } = job; // userId here is the referrer receiving the payout
     const logPrefix = `[RefPayoutJob ID:${payoutId}]`;
 
     console.log(`${logPrefix} Starting payout processing...`);
@@ -3892,6 +3767,8 @@ async function handleReferralPayoutJob(job) {
 
     if (!details) {
         console.error(`${logPrefix} Referral payout record not found.`);
+        // Non-retryable, notify admin
+        await notifyAdmin(`🚨 CRITICAL ERROR: Referral Payout record ID ${payoutId} not found during payout job processing.`);
         throw new Error("Referral payout record not found. Not retryable.");
     }
     if (details.status !== 'pending' && details.status !== 'processing') {
@@ -3899,7 +3776,15 @@ async function handleReferralPayoutJob(job) {
         return;
     }
 
-    const referrerUserId = details.referrer_user_id;
+    const referrerUserId = details.referrer_user_id; // This should match job.userId
+    if (referrerUserId !== userId) {
+         console.error(`${logPrefix} Mismatch between job user ID (${userId}) and record referrer ID (${referrerUserId}). Skipping.`);
+         await notifyAdmin(`🚨 CRITICAL ERROR: User ID mismatch in Referral Payout Job ID ${payoutId}. Job User: ${userId}, Record User: ${referrerUserId}.`);
+         // Mark as failed? Or just ignore? Let's mark failed.
+         await updateReferralPayoutStatus(payoutId, 'failed', null, null, 'User ID mismatch in job vs record.');
+         throw new Error("User ID mismatch. Not retryable.");
+    }
+
     const payoutAmount = details.payout_amount_lamports;
     const payoutSOL = (Number(payoutAmount) / LAMPORTS_PER_SOL);
 
@@ -3920,6 +3805,8 @@ async function handleReferralPayoutJob(job) {
             console.error(`${logPrefix} ${errorMsg}`);
             // Mark as failed, not retryable as user needs to link wallet
             await updateReferralPayoutStatus(payoutId, 'failed', null, null, 'Referrer has no linked wallet set.');
+             // Notify Admin
+             await notifyAdmin(`🚨 Referral Payout FAILED: Payout ID ${payoutId}, Referrer ${referrerUserId} has no linked wallet.`);
             // Don't throw, just exit processing for this job
             return;
         }
@@ -3937,23 +3824,24 @@ async function handleReferralPayoutJob(job) {
             const recorded = await updateReferralPayoutStatus(payoutId, 'paid', null, signature); // Use pool directly for final status update
             if (!recorded) {
                  // CRITICAL: Payment sent, but failed to record 'paid' status. Requires manual check.
-                 console.error(`${logPrefix} CRITICAL ERROR - Referral payment sent (TX: ${signature}) but FAILED to record 'paid' status! Manual check needed.`);
-                 // Don't throw error here to prevent retry loop, but log severity
+                 const criticalErrorMsg = `CRITICAL ERROR: Referral payment sent (TX: ${signature}) for Payout ID ${payoutId} / User ${referrerUserId} but FAILED to record 'paid' status! Manual check needed.`;
+                 console.error(`${logPrefix} ${criticalErrorMsg}`);
                  // Notify Admin!
-                 // Consider alternative recovery or logging mechanism
+                 await notifyAdmin(`🚨 ${criticalErrorMsg}`);
+                 // Don't throw error here to prevent retry loop, just log severity and alert admin.
             } else {
                  console.log(`${logPrefix} SUCCESS! ✅ Referral payout complete. TX: ${signature}`);
                  // 4. Notify Referrer (Best effort)
                  try {
-                      console.log(`${logPrefix} Sending notification to referrer ${referrerUserId}...`);
-                      // Escaped Message
-                      await safeSendMessage(
-                          referrerUserId,
-                          `💰 You received a referral reward of ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL\\! Check your linked wallet: \`${escapeMarkdownV2(recipientAddress)}\``,
-                          { parse_mode: 'MarkdownV2' }
-                      ).catch(e => console.error(`${logPrefix} Failed to send referral notification to user ${referrerUserId}: ${e.message}`)); // Log notification failure but don't fail job
+                     console.log(`${logPrefix} Sending notification to referrer ${referrerUserId}...`);
+                     // Escaped Message
+                     await safeSendMessage(
+                         referrerUserId,
+                         `💰 You received a referral reward of ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL\\! Check your linked wallet: \`${escapeMarkdownV2(recipientAddress)}\``,
+                         { parse_mode: 'MarkdownV2' }
+                     ).catch(e => console.error(`${logPrefix} Failed to send referral notification to user ${referrerUserId}: ${e.message}`)); // Log notification failure but don't fail job
                  } catch (notifyError) {
-                      console.warn(`${logPrefix} Failed to send referral payout notification to user ${referrerUserId}: ${notifyError.message}`);
+                     console.warn(`${logPrefix} Failed to send referral payout notification to user ${referrerUserId}: ${notifyError.message}`);
                  }
             }
         } else {
@@ -3969,8 +3857,9 @@ async function handleReferralPayoutJob(job) {
          console.error(`${logPrefix} Processing failed during execution. Error: ${error.message}`);
          // Re-throw error for retry logic
          if (error.isRetryable === undefined) {
-              error.isRetryable = isRetryableSolanaError(error);
+             error.isRetryable = isRetryableSolanaError(error);
          }
+         // Do not notify admin here, the retry loop will handle final failure notification
          throw error;
     }
     // No client release needed as DB updates use pool directly or handle their own client lifecycle if modified
@@ -3996,7 +3885,7 @@ async function monitorDepositsPolling() {
          return;
     }
     monitorDepositsPolling.isRunning = true;
-    console.log(`${logPrefix} Starting deposit check cycle...`); // [LOGGING ADDED] Entry log
+    // console.log(`${logPrefix} Starting deposit check cycle...`); // Less verbose start log
 
     const startTime = Date.now();
     let checkedAddresses = 0;
@@ -4006,7 +3895,7 @@ async function monitorDepositsPolling() {
     try {
         // 1. Fetch a batch of active, non-expired addresses from DB
         const batchSize = parseInt(process.env.DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE, 10);
-        console.log(`${logPrefix} Fetching up to ${batchSize} pending addresses from DB...`); // [LOGGING ADDED] Step log
+        // console.log(`${logPrefix} Fetching up to ${batchSize} pending addresses from DB...`); // Less verbose
         const pendingAddresses = await queryDatabase(
             `SELECT id, user_id, deposit_address, expires_at FROM deposit_addresses WHERE status = 'pending' AND expires_at > NOW() ORDER BY created_at ASC LIMIT $1`,
             [batchSize]
@@ -4014,15 +3903,15 @@ async function monitorDepositsPolling() {
         addressesToCheck = pendingAddresses.length; // [LOGGING ADDED] Store count
 
         if (addressesToCheck === 0) {
-            console.log(`${logPrefix} No pending addresses found to check in this cycle.`); // [LOGGING MODIFIED] Clarity
+            // console.log(`${logPrefix} No pending addresses found to check in this cycle.`); // Less verbose
             monitorDepositsPolling.isRunning = false;
             return;
         }
-        console.log(`${logPrefix} Found ${addressesToCheck} pending addresses. Checking signatures...`); // [LOGGING ADDED] Log count
+        // console.log(`${logPrefix} Found ${addressesToCheck} pending addresses. Checking signatures...`); // Less verbose
 
         // 2. For each address, check for recent signatures
         const sigFetchLimit = parseInt(process.env.DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT, 10);
-        console.log(`${logPrefix} Checking up to ${sigFetchLimit} signatures per address.`); // [LOGGING ADDED] Log limit
+        // console.log(`${logPrefix} Checking up to ${sigFetchLimit} signatures per address.`); // Less verbose
         for (const addrInfo of pendingAddresses) {
             const addrPrefix = `[DepositMonitor Addr:${addrInfo.deposit_address.slice(0,6)}..]`; // [LOGGING ADDED] Address-specific prefix
             checkedAddresses++;
@@ -4032,21 +3921,25 @@ async function monitorDepositsPolling() {
                 // Fetch recent signatures confirmed on the network
                 const signaturesInfo = await solanaConnection.getSignaturesForAddress(
                     pubKey,
-                    { limit: sigFetchLimit }, // Removed commitment here, rely on connection default or DEPOSIT_CONFIRMATION_LEVEL? Let's stick to default for now.
+                    { limit: sigFetchLimit },
+                    DEPOSIT_CONFIRMATION_LEVEL // Explicitly use configured level here
                 );
                 // console.log(`${addrPrefix} Found ${signaturesInfo.length} signatures.`); // Optional verbose log
 
                 for (const sigInfo of signaturesInfo) {
                      const sigPrefix = `${addrPrefix} TX:${sigInfo.signature.slice(0,6)}..`; // [LOGGING ADDED] Signature-specific prefix
-                    // Check if successful (no error) and not already processed this session
+                     // Check if successful (no error) and not already processed this session
                     if (!sigInfo.err && !hasProcessedDepositTx(sigInfo.signature)) {
-                        foundSignatures++;
-                        console.log(`${sigPrefix} Potential deposit found! Queuing for processing.`); // [LOGGING ADDED] Found log
-                        // Add job to the dedicated deposit processing queue
-                        depositProcessorQueue.add(() => processDepositTransaction(sigInfo.signature, addrInfo.deposit_address))
-                            .catch(e => console.error(`${sigPrefix} Error queueing deposit processing: ${e.message}`));
-                        // Add to cache immediately to prevent re-queueing in the same cycle or near future
-                        addProcessedDepositTx(sigInfo.signature); // Logged within function
+                         foundSignatures++;
+                         console.log(`${sigPrefix} Potential deposit found! Queuing for processing.`); // [LOGGING ADDED] Found log
+                         // Add job to the dedicated deposit processing queue
+                         depositProcessorQueue.add(() => processDepositTransaction(sigInfo.signature, addrInfo.deposit_address))
+                             .catch(e => {
+                                 console.error(`${sigPrefix} Error queueing deposit processing: ${e.message}`);
+                                 notifyAdmin(`🚨 ERROR queueing deposit processing for ${sigPrefix}. Queue Error: ${e.message}`);
+                              });
+                         // Add to cache immediately to prevent re-queueing in the same cycle or near future
+                         addProcessedDepositTx(sigInfo.signature); // Logged within function
                     } else if (sigInfo.err) {
                          // console.log(`${sigPrefix} Ignoring failed transaction.`); // Optional verbose log
                     } else if (hasProcessedDepositTx(sigInfo.signature)){
@@ -4060,20 +3953,26 @@ async function monitorDepositsPolling() {
                 // Don't stop the whole loop, just log error for this address
                 console.error(`${addrPrefix} Error checking signatures: ${error.message}`);
                 // Check if error is rate limit (429) - maybe pause briefly?
-                 if (isRetryableSolanaError(error) && String(error.message).includes('429')) {
-                     console.warn(`${logPrefix} Hit rate limit checking address. Pausing briefly...`);
+                 if (isRetryableSolanaError(error) && (String(error.message).includes('429') || error.status === 429)) {
+                     console.warn(`${logPrefix} Hit rate limit checking address ${addrInfo.deposit_address}. Pausing briefly...`);
                      await new Promise(r => setTimeout(r, 1500)); // Pause 1.5s on rate limit
+                 } else if (!isRetryableSolanaError(error)) {
+                      // Notify admin if non-retryable error fetching signatures for an address
+                      await notifyAdmin(`🚨 Non-retryable RPC error checking signatures for address ${addrInfo.deposit_address} (${addrPrefix}). Error: ${error.message}`);
                  }
             }
         } // End loop through addresses
-         console.log(`${logPrefix} Finished checking signatures for ${checkedAddresses} addresses.`); // [LOGGING ADDED] End loop log
+         // console.log(`${logPrefix} Finished checking signatures for ${checkedAddresses} addresses.`); // Less verbose
 
     } catch (error) {
         console.error(`${logPrefix} Error during deposit monitoring cycle:`, error);
+        await notifyAdmin(`🚨 ERROR during deposit monitoring cycle: ${error.message}`);
     } finally {
         const duration = Date.now() - startTime;
-        // [LOGGING MODIFIED] Logged results more consistently
-        console.log(`${logPrefix} Cycle finished in ${duration}ms. Fetched: ${addressesToCheck}. Checked: ${checkedAddresses}. Found/Queued: ${foundSignatures}.`);
+        // [LOGGING MODIFIED] Logged results more consistently, less verbosely unless findings
+        if (addressesToCheck > 0 || foundSignatures > 0) {
+             console.log(`${logPrefix} Cycle finished in ${duration}ms. Fetched: ${addressesToCheck}. Checked: ${checkedAddresses}. Found/Queued: ${foundSignatures}.`);
+        }
         monitorDepositsPolling.isRunning = false; // Release lock
     }
 }
@@ -4087,89 +3986,121 @@ monitorDepositsPolling.isRunning = false; // Initialize lock state
  */
 async function processDepositTransaction(signature, depositAddress) {
     const logPrefix = `[ProcessDeposit TX:${signature.slice(0, 6)} Addr:${depositAddress.slice(0,6)}]`;
-    console.log(`${logPrefix} Starting processing...`); // [LOGGING ADDED] Entry log
+    console.log(`${logPrefix} Starting processing...`);
     let client = null; // DB client for transaction
     let userIdForNotifyOnError = null; // Store user ID if found early
 
     try {
         // 0. Double-check if processed (queue might have duplicates if added quickly)
         if (hasProcessedDepositTx(signature)) {
-            console.log(`${logPrefix} Signature already processed/cached. Skipping.`); // [LOGGING ADDED] Already processed check
+            console.log(`${logPrefix} Signature already processed/cached (pre-check). Skipping.`);
             return;
         }
 
         // Attempt to find user ID early for potential error notifications
-        console.log(`${logPrefix} Looking up deposit address info...`); // [LOGGING ADDED] Step log
+        // console.log(`${logPrefix} Looking up deposit address info...`); // Less verbose
         const initialAddrInfo = await findDepositAddressInfo(depositAddress); // findDepositAddressInfo has its own logs
-        if (initialAddrInfo) userIdForNotifyOnError = initialAddrInfo.userId;
-        else {
-             // If address info not found initially, maybe it expired between monitor and processing?
-             console.warn(`${logPrefix} Could not find initial deposit address info (possibly expired or invalid).`);
-             addProcessedDepositTx(signature); // Mark as processed to avoid retries if address is truly gone
-             return;
+        if (initialAddrInfo) {
+            userIdForNotifyOnError = initialAddrInfo.userId;
+        } else {
+            // If address info not found initially, maybe it expired between monitor and processing?
+            console.warn(`${logPrefix} Could not find initial deposit address info (possibly expired or invalid). Ignoring TX.`);
+            addProcessedDepositTx(signature); // Mark as processed to avoid retries if address is truly gone
+            return;
         }
-        console.log(`${logPrefix} Found initial info for User: ${userIdForNotifyOnError}`); // [LOGGING ADDED] User identified
+        // console.log(`${logPrefix} Found initial info for User: ${userIdForNotifyOnError}`); // Less verbose
 
-        // 1. Fetch transaction details
-        console.log(`${logPrefix} Fetching transaction details from RPC...`); // [LOGGING ADDED] Step log
-        const tx = await solanaConnection.getTransaction(signature, {
-            maxSupportedTransactionVersion: 0, // Specify version for reliable parsing
-            commitment: DEPOSIT_CONFIRMATION_LEVEL
-        });
+        // 1. Fetch transaction details with retries
+        console.log(`${logPrefix} Fetching transaction details from RPC...`);
+        let tx = null;
+        let fetchAttempt = 0;
+        const maxFetchAttempts = 3; // Retry fetching TX details
+        while (fetchAttempt < maxFetchAttempts && tx === null) {
+            fetchAttempt++;
+            try {
+                tx = await solanaConnection.getTransaction(signature, {
+                    maxSupportedTransactionVersion: 0, // Specify version for reliable parsing
+                    commitment: DEPOSIT_CONFIRMATION_LEVEL
+                });
+                if (tx) break; // Success
+                // If tx is null but no error thrown, RPC might just not see it yet
+                console.log(`${logPrefix} TX details null on attempt ${fetchAttempt}. Retrying soon...`);
+
+            } catch (rpcError) {
+                console.warn(`${logPrefix} RPC Error fetching TX details (Attempt ${fetchAttempt}/${maxFetchAttempts}): ${rpcError.message}`);
+                if (fetchAttempt >= maxFetchAttempts || !isRetryableSolanaError(rpcError)) {
+                    throw rpcError; // Throw if max attempts reached or error is not retryable
+                }
+                 // Wait before retrying
+                 await new Promise(resolve => setTimeout(resolve, 1000 * fetchAttempt));
+            }
+             // Wait a bit even if tx is null without error before retrying
+             if (tx === null && fetchAttempt < maxFetchAttempts) {
+                 await new Promise(resolve => setTimeout(resolve, 1500 * fetchAttempt));
+             }
+        }
+
 
         if (!tx) {
-             // This might be temporary RPC issue, log but don't mark processed yet
-             console.warn(`${logPrefix} Transaction not found via RPC. Might retry later if queue allows.`);
-             throw new Error("Transaction not found via RPC.");
+            // If still not found after retries, log and give up for now
+            console.error(`${logPrefix} Transaction not found via RPC after ${maxFetchAttempts} attempts. Aborting processing for now.`);
+            // Do not cache signature - allow monitor to potentially find and retry later if temporary RPC issue
+            throw new Error(`Transaction ${signature} not found via RPC after retries.`);
         }
-        console.log(`${logPrefix} Transaction details fetched successfully.`); // [LOGGING ADDED] Step success log
+        console.log(`${logPrefix} Transaction details fetched successfully.`);
 
         if (tx.meta?.err) {
-            console.log(`${logPrefix} Transaction failed on-chain. Ignoring. Error: ${JSON.stringify(tx.meta.err)}`); // [LOGGING ADDED] TX failed log
+            console.log(`${logPrefix} Transaction failed on-chain. Ignoring. Error: ${JSON.stringify(tx.meta.err)}`);
             addProcessedDepositTx(signature); // Cache failed TX sig to prevent reprocessing
             return;
         }
-        console.log(`${logPrefix} Transaction confirmed successful on-chain (meta.err is null).`); // [LOGGING ADDED] TX success log
+        // console.log(`${logPrefix} Transaction confirmed successful on-chain (meta.err is null).`); // Less verbose
 
         // 2. Re-validate deposit address info (status might have changed, use initialAddrInfo from above)
-        console.log(`${logPrefix} Re-validating deposit address status and expiry...`); // [LOGGING ADDED] Step log
+        // console.log(`${logPrefix} Re-validating deposit address status and expiry...`); // Less verbose
         const addrInfo = initialAddrInfo; // Already fetched
         const { userId, status: addrStatus, id: depositAddressId, expiresAt } = addrInfo;
 
         if (addrStatus !== 'pending') {
-             console.warn(`${logPrefix} Deposit address status is '${addrStatus}', not 'pending'. Ignoring TX.`); // [LOGGING ADDED] Status check fail
+             console.warn(`${logPrefix} Deposit address status is '${addrStatus}', not 'pending'. Ignoring TX.`);
              addProcessedDepositTx(signature); // Mark as processed as address is no longer valid for deposits
              return;
         }
-        if (new Date() > expiresAt) {
-             console.warn(`${logPrefix} Deposit address has expired (${expiresAt.toISOString()}). Ignoring TX.`); // [LOGGING ADDED] Expiry check fail
-             // Consider marking address as 'expired' in DB here? Requires separate query.
-             addProcessedDepositTx(signature); // Mark as processed
+        const now = Date.now(); // Get current time for expiry check
+        if (now > expiresAt.getTime()) {
+             console.warn(`${logPrefix} Deposit address has expired (${expiresAt.toISOString()}). Ignoring TX.`);
+             // Mark address as 'expired' in DB outside transaction (best effort)
+             try {
+                 await queryDatabase("UPDATE deposit_addresses SET status='expired' WHERE id = $1 AND status = 'pending'", [depositAddressId]);
+                 console.log(`${logPrefix} Marked address ID ${depositAddressId} as expired in DB.`);
+             } catch (dbErr) {
+                  console.error(`${logPrefix} Failed to mark expired address ID ${depositAddressId} status in DB: ${dbErr.message}`);
+                  // Log error but continue processing failure path
+             }
+             addProcessedDepositTx(signature); // Mark TX as processed
              return;
         }
-        console.log(`${logPrefix} Deposit address validation passed (Pending & Not Expired). AddrID: ${depositAddressId}`); // [LOGGING ADDED] Validation pass
+        // console.log(`${logPrefix} Deposit address validation passed (Pending & Not Expired). AddrID: ${depositAddressId}`); // Less verbose
 
         // 3. Analyze amount transferred *to the unique address*
-        console.log(`${logPrefix} Analyzing transaction amounts...`); // [LOGGING ADDED] Step log
+        // console.log(`${logPrefix} Analyzing transaction amounts...`); // Less verbose
         const { transferAmount, payerAddress } = analyzeTransactionAmounts(tx, depositAddress); // analyzeTransactionAmounts has its own logs
         if (transferAmount <= 0n) {
-             console.warn(`${logPrefix} No positive SOL transfer found to the deposit address. Ignoring.`); // [LOGGING ADDED] Amount check fail
+             console.warn(`${logPrefix} No positive SOL transfer found to the deposit address. Ignoring.`);
              addProcessedDepositTx(signature); // Mark as processed
              return;
         }
-        console.log(`${logPrefix} Confirmed ${Number(transferAmount) / LAMPORTS_PER_SOL} SOL deposit from ${payerAddress || 'unknown sender'}. Processing DB updates...`); // [LOGGING ADDED] Amount confirmed
+        console.log(`${logPrefix} Confirmed ${Number(transferAmount) / LAMPORTS_PER_SOL} SOL deposit from ${payerAddress || 'unknown sender'}. Processing DB updates...`);
 
         // --- 4. Process Deposit within DB Transaction ---
-        console.log(`${logPrefix} Starting DB transaction...`); // [LOGGING ADDED] Step log
+        console.log(`${logPrefix} Starting DB transaction...`);
         client = await pool.connect();
         await client.query('BEGIN');
 
         // 4a. Ensure user/balance records exist (should be redundant but safe)
-        // console.log(`${logPrefix} Ensuring user/balance exists...`); // Optional log
         await ensureUserExists(userId, client);
 
         // 4b. Credit user's internal balance & Add ledger entry
-        console.log(`${logPrefix} Updating user balance and adding ledger entry...`); // [LOGGING ADDED] Step log
         const balanceUpdateResult = await updateUserBalanceAndLedger(
             client, userId, transferAmount, 'deposit',
             { depositId: null }, // Placeholder, will update below
@@ -4177,72 +4108,76 @@ async function processDepositTransaction(signature, depositAddress) {
         );
         if (!balanceUpdateResult.success) {
              // If this fails, it's likely a DB issue, rollback and let retry handle it
-             console.error(`${logPrefix} Failed to update balance: ${balanceUpdateResult.error}`);
              throw new Error(`Failed to update balance: ${balanceUpdateResult.error}`);
         }
-         console.log(`${logPrefix} Balance updated. New Balance: ${balanceUpdateResult.newBalance}`); // [LOGGING ADDED] Step success log
+        // console.log(`${logPrefix} Balance updated. New Balance: ${balanceUpdateResult.newBalance}`); // Less verbose
 
-        // 4c. Record the confirmed deposit (Function has internal logs)
-        console.log(`${logPrefix} Recording confirmed deposit in 'deposits' table...`); // [LOGGING ADDED] Step log
+        // 4c. Record the confirmed deposit (Function now uses ON CONFLICT DO NOTHING)
         const depositRecordResult = await recordConfirmedDeposit(
             client, userId, depositAddressId, signature, transferAmount
         );
-        if (!depositRecordResult.success || !depositRecordResult.depositId) {
-            // If this fails (e.g., duplicate TX sig), rollback and handle error
-             console.error(`${logPrefix} Failed to record confirmed deposit: ${depositRecordResult.error}`);
-            throw new Error(depositRecordResult.error || "Failed to record confirmed deposit in DB.");
+        if (!depositRecordResult.success) {
+             // This now primarily catches non-conflict DB errors or the case where conflict WAS detected
+             // If error is 'Deposit transaction already processed.', it means conflict occurred.
+             // We check for this specific error string to handle idempotency.
+             if (depositRecordResult.error === 'Deposit transaction already processed.') {
+                  console.warn(`${logPrefix} Handled expected conflict for already processed TX ${signature} during record insert.`);
+                  // This specific case is NOT an error for the overall flow, treat as success.
+                  // Balance would not have been updated again due to earlier checks or potential rollback if this happened first.
+                  // We just need to ensure the address is marked used and cache is updated.
+                  // Rollback this attempt, but don't throw error.
+                   await client.query('ROLLBACK');
+                   client.release(); client = null;
+                   addProcessedDepositTx(signature); // Ensure cached
+                   console.log(`${logPrefix} Gracefully handled duplicate TX processing attempt.`);
+                   return; // Exit successfully
+             } else {
+                // Otherwise, it's an unexpected DB error during insert
+                throw new Error(depositRecordResult.error || "Failed to record confirmed deposit in DB.");
+             }
         }
         const newDepositId = depositRecordResult.depositId;
-        console.log(`${logPrefix} Deposit recorded successfully. Deposit ID: ${newDepositId}`); // [LOGGING ADDED] Step success log
+        // console.log(`${logPrefix} Deposit recorded successfully. Deposit ID: ${newDepositId}`); // Less verbose
 
         // 4d. Update the ledger entry with the new deposit ID
-        console.log(`${logPrefix} Updating ledger entry with Deposit ID ${newDepositId}...`); // [LOGGING ADDED] Step log
         const ledgerUpdateRes = await queryDatabase(
              `UPDATE ledger SET related_deposit_id = $1
                WHERE user_id = $2 AND transaction_type = 'deposit' AND amount_lamports = $3 AND related_deposit_id IS NULL
                ORDER BY id DESC LIMIT 1`, // Target the most recent matching entry by ID
              [newDepositId, userId, transferAmount],
              client
-          );
+         );
          if (ledgerUpdateRes.rowCount === 0) {
               console.warn(`${logPrefix} Could not find matching ledger entry to update related_deposit_id for deposit ${newDepositId}. Balance was still updated.`);
-              // This might indicate a logic issue or race condition, but proceed for now.
-         } else {
-              console.log(`${logPrefix} Ledger entry updated successfully.`); // [LOGGING ADDED] Step success log
+              // Potentially notify admin? Low priority if balance is correct.
          }
 
-
-        // 4e. Mark deposit address as used (Function has internal logs)
-        console.log(`${logPrefix} Marking deposit address ${depositAddressId} as 'used'...`); // [LOGGING ADDED] Step log
+        // 4e. Mark deposit address as used
         const markedUsed = await markDepositAddressUsed(client, depositAddressId);
         if (!markedUsed) {
              // This shouldn't happen if status was 'pending' before, indicates DB issue or race condition
-             console.error(`${logPrefix} Failed to mark deposit address ID ${depositAddressId} as used.`);
              throw new Error(`Failed to mark deposit address ID ${depositAddressId} as used (was status pending?).`);
         }
-         console.log(`${logPrefix} Deposit address marked as 'used'.`); // [LOGGING ADDED] Step success log
+        // console.log(`${logPrefix} Deposit address marked as 'used'.`); // Less verbose
 
         // 4f. Check for Referral Linking on First Deposit
-        console.log(`${logPrefix} Checking if this is user's first deposit...`); // [LOGGING ADDED] Step log
-        // Count *committed* deposits for this user before this one
         const depositCountRes = await queryDatabase('SELECT COUNT(*) as count FROM deposits WHERE user_id = $1', [userId], client);
         const isFirstDeposit = parseInt(depositCountRes.rows[0].count, 10) === 1; // Count includes the one we just inserted
 
         if (isFirstDeposit) {
-            console.log(`${logPrefix} First deposit detected for user ${userId}. Checking for pending referral...`); // [LOGGING ADDED] First deposit detected
+            console.log(`${logPrefix} First deposit detected for user ${userId}. Checking for pending referral...`);
             const pending = pendingReferrals.get(userId);
-            const now = Date.now();
-            if (pending && (now - pending.timestamp < PENDING_REFERRAL_TTL_MS)) {
+            const referralCheckTime = Date.now();
+            if (pending && (referralCheckTime - pending.timestamp < PENDING_REFERRAL_TTL_MS)) {
                 const referrerUserId = pending.referrerUserId;
-                 console.log(`${logPrefix} Pending referral found for referrer ${referrerUserId}. Attempting to link...`); // [LOGGING ADDED] Pending referral found
+                 console.log(`${logPrefix} Pending referral found for referrer ${referrerUserId}. Attempting to link...`);
                 const linked = await linkReferral(userId, referrerUserId, client); // Attempt to link in DB TX
                 if (linked) {
-                    console.log(`${logPrefix} Linked user ${userId} to referrer ${referrerUserId}. Removing from pending map.`); // [LOGGING ADDED] Link success
+                    console.log(`${logPrefix} Linked user ${userId} to referrer ${referrerUserId}. Removing from pending map.`);
                     pendingReferrals.delete(userId); // Clean up map entry on successful link
-                     // Optionally notify referrer?
+                     // Optionally notify referrer? (Keep existing notification logic)
                      try {
-                         // Escaped Message
-                         const refereeDisplayName = await getUserDisplayName(referrerUserId, userId); // Get referee display name relative to referrer's potential chat? Safer to use user ID directly? Let's assume safeSendMessage handles finding user.
+                         const refereeDisplayName = await getUserDisplayName(referrerUserId, userId);
                          const referrerChatId = referrerUserId; // Send to private chat
                          await safeSendMessage(
                              referrerChatId,
@@ -4252,26 +4187,23 @@ async function processDepositTransaction(signature, depositAddress) {
                      } catch(e){console.warn(`${logPrefix} Failed getting display name or sending referral link notification`, e)}
                 } else {
                     // linkReferral logs the reason (already referred, self-referral, etc)
-                    console.log(`${logPrefix} Failed to link pending referral (see previous logs). Removing from pending map.`); // [LOGGING ADDED] Link failed
+                    console.log(`${logPrefix} Failed to link pending referral (see previous logs). Removing from pending map.`);
                     pendingReferrals.delete(userId); // Still remove pending referral
                 }
             } else if (pending) {
-                console.log(`${logPrefix} Pending referral expired for user ${userId}. Removing from map.`); // [LOGGING ADDED] Pending expired
+                console.log(`${logPrefix} Pending referral expired for user ${userId}. Removing from map.`);
                 pendingReferrals.delete(userId);
-            } else {
-                 console.log(`${logPrefix} No pending referral found for user.`); // [LOGGING ADDED] No pending
             }
-             // Ensure the new user gets a referral code generated if they weren't referred
-             console.log(`${logPrefix} Ensuring user has a referral code...`); // [LOGGING ADDED] Ensure ref code step
-             await queryDatabase(`UPDATE wallets SET referral_code = COALESCE(referral_code, $2) WHERE user_id = $1`, [userId, generateReferralCode()], client);
-        } else {
-             console.log(`${logPrefix} Not user's first deposit (Count: ${depositCountRes.rows[0].count}). Skipping referral link check.`); // [LOGGING ADDED] Not first deposit
+            // Ensure the new user gets a referral code generated if they weren't referred
+            // console.log(`${logPrefix} Ensuring user has a referral code...`); // Less verbose
+            await queryDatabase(`UPDATE wallets SET referral_code = COALESCE(referral_code, $2) WHERE user_id = $1`, [userId, generateReferralCode()], client);
         }
+         // console.log(`${logPrefix} Not user's first deposit. Skipping referral link check.`); // Less verbose
 
         // --- 5. Commit DB Transaction ---
-        console.log(`${logPrefix} Committing DB transaction...`); // [LOGGING ADDED] Step log
+        console.log(`${logPrefix} Committing DB transaction...`);
         await client.query('COMMIT');
-        console.log(`${logPrefix} DB Transaction committed successfully.`); // [LOGGING ADDED] Step success log
+        console.log(`${logPrefix} DB Transaction committed successfully.`);
 
         // 6. Add signature to processed cache AFTER successful commit
         addProcessedDepositTx(signature); // Logged within function
@@ -4279,38 +4211,54 @@ async function processDepositTransaction(signature, depositAddress) {
         // 7. Notify User AFTER successful commit
         // Escaped Message
         const amountSOL = (Number(transferAmount) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
-        console.log(`${logPrefix} Sending deposit success notification to user ${userId}...`); // [LOGGING ADDED] Step log
+        console.log(`${logPrefix} Sending deposit success notification to user ${userId}...`);
         await safeSendMessage(
             userId,
             `✅ Deposit successful\\! ${escapeMarkdownV2(amountSOL)} SOL has been added to your balance\\. Use /wallet to check\\.`,
             { parse_mode: 'MarkdownV2' }
-        ).catch(e => console.error(`${logPrefix} Failed to send deposit success notification to user ${userId}: ${e.message}`)); // Log notification failure but don't fail job
-        console.log(`${logPrefix} Processing complete.`); // [LOGGING ADDED] Final success log
+        ).catch(e => console.error(`${logPrefix} Failed to send deposit success notification to user ${userId}: ${e.message}`));
+        console.log(`${logPrefix} Processing complete.`);
 
     } catch (error) {
+        // Centralized error handling for the transaction block
         if (client) { try { await client.query('ROLLBACK'); console.log(`${logPrefix} Transaction rolled back due to error.`); } catch (rbErr) { console.error(`${logPrefix} Rollback failed:`, rbErr); } }
         console.error(`${logPrefix} Error processing deposit: ${error.message}`); // Log specific error
 
-        // If we identified the user, notify them of the failure
-        if (userIdForNotifyOnError) {
-            console.log(`${logPrefix} Sending deposit failure notification to user ${userIdForNotifyOnError}...`); // [LOGGING ADDED] Step log
-             // Escaped Message
-             await safeSendMessage(
-                 userIdForNotifyOnError,
-                 `⚠️ There was an issue processing your deposit \\(TX: \`${escapeMarkdownV2(signature)}\`\\)\\. If funds left your wallet but your balance wasn't updated, please contact support\\. Error: ${escapeMarkdownV2(error.message)}`,
-                 { parse_mode: 'MarkdownV2'}
-             ).catch(e => console.error(`${logPrefix} Failed to send deposit failure notification to user ${userIdForNotifyOnError}: ${e.message}`));
-        }
-
-        // Add to processed cache only on definitive, non-retryable errors to prevent loops
-        const errMsgLower = error.message.toLowerCase();
-        if (errMsgLower.includes('already used') || errMsgLower.includes('expired') || errMsgLower.includes('not found') || errMsgLower.includes('not positive sol transfer') || errMsgLower.includes('status is') || errMsgLower.includes('transaction failed on-chain') || errMsgLower.includes('already processed')) {
-             console.log(`${logPrefix} Adding signature to processed cache due to non-retryable error.`); // [LOGGING ADDED] Caching error sig
-            addProcessedDepositTx(signature);
+        // *** Catch specific unique constraint violation for idempotency ***
+        // PostgreSQL unique violation code is '23505'
+        if (error.code === '23505' && error.constraint === 'deposits_tx_signature_key') {
+             console.warn(`${logPrefix} Handled expected unique constraint violation for TX ${signature}. Assuming already processed.`);
+             addProcessedDepositTx(signature); // Cache signature to prevent retries
+             // DO NOT notify user or admin about failure in this specific case
         } else {
-             console.log(`${logPrefix} Error seems potentially temporary, not adding signature to processed cache yet.`); // [LOGGING ADDED] Not caching temp error sig
+            // Handle all other errors
+            const failureReason = error.message || 'Unknown error during processing.';
+            console.error(`${logPrefix} Unhandled error during deposit processing: ${failureReason}`);
+
+            // Notify Admin for all other errors
+            await notifyAdmin(`🚨 ERROR processing Deposit TX ${signature} Addr ${depositAddress} User ${userIdForNotifyOnError || 'Unknown'}:\n${failureReason}\nStack: ${error.stack?.substring(0,300)}`);
+
+            // Notify User (if user ID known)
+            if (userIdForNotifyOnError) {
+                console.log(`${logPrefix} Sending deposit failure notification to user ${userIdForNotifyOnError}...`);
+                 // Escaped Message
+                 await safeSendMessage(
+                     userIdForNotifyOnError,
+                     `⚠️ There was an issue processing your deposit \\(TX: \`${escapeMarkdownV2(signature)}\`\\)\\. If funds left your wallet but your balance wasn't updated, please contact support\\. Error: ${escapeMarkdownV2(failureReason)}`,
+                     { parse_mode: 'MarkdownV2'}
+                 ).catch(e => console.error(`${logPrefix} Failed to send deposit failure notification to user ${userIdForNotifyOnError}: ${e.message}`));
+            }
+
+            // Add to processed cache only on definitive, non-retryable errors to prevent loops
+            // Let the retry logic in the caller (monitor or queue) handle temporary issues.
+            // Only cache if the error strongly implies this TX cannot be processed later.
+            const errMsgLower = failureReason.toLowerCase();
+            if (errMsgLower.includes('already used') || errMsgLower.includes('expired') || errMsgLower.includes('not found') || errMsgLower.includes('not positive sol transfer') || errMsgLower.includes('status is') || errMsgLower.includes('transaction failed on-chain')) {
+                 console.log(`${logPrefix} Adding signature to processed cache due to non-retryable error.`);
+                 addProcessedDepositTx(signature);
+            }
         }
-        // Do not re-throw error here, allow queue worker to finish gracefully. Retries handled by addPayoutJob logic if applicable (not applicable here as it's deposit queue).
+        // Do not re-throw error here, allow queue worker to finish gracefully. Error is logged/reported.
     } finally {
         if (client) client.release();
     }
@@ -4329,6 +4277,9 @@ function setupTelegramListeners() {
              // Optionally notify user if possible/safe
              if(err.message?.includes('timeout')) {
                  safeSendMessage(msg.chat.id, "Processing your request timed out, please try again shortly\\.").catch(()=>{}); // Escaped .
+             } else {
+                 // Notify admin for unexpected queue processing errors
+                 notifyAdmin(`🚨 ERROR in Message Queue for Msg ID ${msg?.message_id} User ${msg?.from?.id}:\n${err.message}`);
              }
         });
     });
@@ -4338,6 +4289,8 @@ function setupTelegramListeners() {
         // Add to callback queue for processing
         callbackQueue.add(() => handleCallbackQuery(callbackQuery)).catch(err => {
             console.error(`⚠️ Callback query processing queue error for query ID ${callbackQuery?.id}:`, err);
+             // Notify admin for unexpected queue processing errors
+             notifyAdmin(`🚨 ERROR in Callback Queue for Query ID ${callbackQuery?.id} User ${callbackQuery?.from?.id}:\n${err.message}`);
             // Attempt to answer callback query to clear loading state even on error
             bot.answerCallbackQuery(callbackQuery.id, { text: "Error processing action." }).catch(e => console.warn("Failed to answer callback query on error:", e.message));
         });
@@ -4346,6 +4299,7 @@ function setupTelegramListeners() {
     // Basic Error Listeners
     bot.on('polling_error', (error) => {
         console.error(`❌ Telegram Polling Error: Code ${error.code} | ${error.message}`);
+        notifyAdmin(`🚨 Telegram Polling Error: Code ${error.code} | ${error.message}`); // Notify admin
         // Handle specific errors like ETELEGRAM: 401 Unauthorized, 409 Conflict, etc.
         if (error.code === 'EFATAL' || error.message.includes('401')) {
              console.error("❌❌ CRITICAL POLLING ERROR (e.g., Bad Token?). Shutting down.");
@@ -4361,10 +4315,12 @@ function setupTelegramListeners() {
     });
     bot.on('webhook_error', (error) => {
         console.error(`❌ Telegram Webhook Error: Code ${error.code} | ${error.message}`);
+        notifyAdmin(`🚨 Telegram Webhook Error: Code ${error.code} | ${error.message}`); // Notify admin
         // Potentially try to switch back to polling if webhook fails persistently? More complex logic needed.
     });
     bot.on('error', (error) => { // General non-request related errors
         console.error('❌ General Bot Error:', error);
+        notifyAdmin(`🚨 General Telegram Bot Error:\n${error.message}\nStack: ${error.stack?.substring(0,500)}`); // Notify admin
     });
 
     console.log("✅ Telegram listeners registered.");
@@ -4382,7 +4338,7 @@ function setupExpressRoutes() {
         res.status(200).json({
             status: 'ok',
             initialized: isFullyInitialized,
-            version: '3.1.1', // Updated Version
+            version: '3.1.5', // Updated Version
             timestamp: new Date().toISOString(),
             // Add more stats later if needed (e.g., queue sizes, cache sizes from global vars)
         });
@@ -4402,7 +4358,7 @@ function setupExpressRoutes() {
     app.get('/railway-health', (req, res) => { // For Railway health checks
        res.status(isFullyInitialized ? 200 : 503).json({
             status: isFullyInitialized ? 'ready' : 'initializing',
-            version: '3.1.1' // Updated Version
+            version: '3.1.5' // Updated Version
          });
     });
     app.get('/prestop', (req, res) => { // For Railway graceful shutdown signal
@@ -4420,10 +4376,12 @@ function setupExpressRoutes() {
             if (req.body.message) {
                  messageQueue.add(() => bot.processUpdate(req.body)).catch(queueError => {
                       console.error("❌ Error adding webhook message update to queue:", queueError);
+                      notifyAdmin(`🚨 ERROR adding Webhook Message update to queue: ${queueError.message}`);
                  });
             } else if (req.body.callback_query) {
                  callbackQueue.add(() => bot.processUpdate(req.body)).catch(queueError => {
                       console.error("❌ Error adding webhook callback update to queue:", queueError);
+                      notifyAdmin(`🚨 ERROR adding Webhook Callback update to queue: ${queueError.message}`);
                  });
             } else {
                  // Ignore other update types for now
@@ -4440,17 +4398,17 @@ function setupExpressRoutes() {
 
 // --- Database Initialization Function ---
 async function initializeDatabase() {
-    console.log("⚙️ Initializing Database schema (v3.1.1)..."); // Updated version
+    console.log("⚙️ Initializing Database schema (v3.1.5)..."); // Updated version
     let client = null;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
         // Use queryDatabase helper for consistency and logging
-        console.log("  Ensuring core extensions...");
+        console.log("   Ensuring core extensions...");
         // await queryDatabase(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`, [], client); // Example if needed later
 
-        console.log("  Creating/Verifying tables...");
+        console.log("   Creating/Verifying tables...");
         // Wallets (User Info)
         await queryDatabase(`
             CREATE TABLE IF NOT EXISTS wallets (
@@ -4496,10 +4454,11 @@ async function initializeDatabase() {
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 expires_at TIMESTAMPTZ NOT NULL
             );`, [], client);
-         // Add derivation_path column if missing from older schema
+         // Add/ensure columns exist
          await queryDatabase(`ALTER TABLE deposit_addresses ADD COLUMN IF NOT EXISTS derivation_path TEXT;`, [], client);
-         // Ensure derivation_path is NOT NULL if adding it later (might require default or update)
-         // For simplicity, assume new tables or handle migration separately if needed.
+         // Ensure derivation_path is NOT NULL if adding it later (might require default or update) - Assume new tables or handle migration separately.
+         // Ensure status column allows 'expired'
+         // No explicit ALTER TYPE needed if it's TEXT, just ensure logic uses 'expired'
 
         // Deposits Log
         await queryDatabase(`
@@ -4513,6 +4472,8 @@ async function initializeDatabase() {
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW() -- When balance was credited
             );`, [], client);
+        // Ensure unique constraint name is 'deposits_tx_signature_key' if relying on it in code, or check error.constraint
+        // The standard name for UNIQUE column constraint is usually deposits_tx_signature_key
 
         // Withdrawals Log
         await queryDatabase(`
@@ -4528,8 +4489,9 @@ async function initializeDatabase() {
                 error_message TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 processed_at TIMESTAMPTZ, -- When processing started
-                completed_at TIMESTAMPTZ  -- When completed or failed definitively
+                completed_at TIMESTAMPTZ   -- When completed or failed definitively
             );`, [], client);
+         // Ensure constraint name if needed: withdrawals_payout_tx_signature_key
 
         // Referral Payouts
         await queryDatabase(`
@@ -4581,14 +4543,14 @@ async function initializeDatabase() {
             WHERE table_name = 'ledger' AND constraint_name = 'ledger_related_ref_payout_id_fkey';
             `, [], client);
         if (fkCheck.rowCount === 0) {
-            console.log("  Adding foreign key constraint ledger_related_ref_payout_id_fkey...");
+            console.log("   Adding foreign key constraint ledger_related_ref_payout_id_fkey...");
             await queryDatabase(`
-                ALTER TABLE ledger
-                ADD CONSTRAINT ledger_related_ref_payout_id_fkey
-                FOREIGN KEY (related_ref_payout_id)
-                REFERENCES referral_payouts(id)
-                ON DELETE SET NULL;
-                `, [], client);
+                 ALTER TABLE ledger
+                 ADD CONSTRAINT ledger_related_ref_payout_id_fkey
+                 FOREIGN KEY (related_ref_payout_id)
+                 REFERENCES referral_payouts(id)
+                 ON DELETE SET NULL;
+                 `, [], client);
         }
 
 
@@ -4610,14 +4572,16 @@ async function initializeDatabase() {
         // Add/ensure columns exist
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS bet_details JSONB;`, [], client);
         // Ensure wager column exists AND has the check constraint - Add column first, then constraint if needed
-        await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS wager_amount_lamports BIGINT NOT NULL DEFAULT 1;`, [], client); // Add with default temporarily
-        await queryDatabase(`ALTER TABLE bets ALTER COLUMN wager_amount_lamports DROP DEFAULT;`, [], client); // Remove default
+        await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS wager_amount_lamports BIGINT;`, [], client); // Ensure column exists
+         // Ensure NOT NULL (might require setting a temp default if adding to existing table with NULLs)
+         // Assuming new table or manual handling for existing NULLs if column added previously without NOT NULL
+         await queryDatabase(`ALTER TABLE bets ALTER COLUMN wager_amount_lamports SET NOT NULL;`, [], client);
          const checkConstraintCheck = await queryDatabase(`
-             SELECT constraint_name FROM information_schema.constraint_column_usage
-             WHERE table_name = 'bets' AND column_name = 'wager_amount_lamports' AND constraint_name LIKE 'bets_wager_amount_lamports_check%';
-         `, [], client);
+              SELECT conname FROM pg_constraint
+              WHERE conrelid = 'bets'::regclass AND conname = 'bets_wager_positive';
+         `, [], client); // Check specific constraint name
          if (checkConstraintCheck.rowCount === 0) {
-              console.log("  Adding check constraint for bets.wager_amount_lamports...");
+              console.log("   Adding check constraint bets_wager_positive...");
               await queryDatabase(`ALTER TABLE bets ADD CONSTRAINT bets_wager_positive CHECK (wager_amount_lamports > 0);`, [], client);
          }
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS payout_amount_lamports BIGINT;`, [], client);
@@ -4626,7 +4590,7 @@ async function initializeDatabase() {
 
 
         // --- INDEXES ---
-        console.log("  Creating/Verifying indexes...");
+        console.log("   Creating/Verifying indexes...");
         // Wallets
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_wallets_ref_code ON wallets(referral_code) WHERE referral_code IS NOT NULL;`, [], client);
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_wallets_referred_by ON wallets(referred_by_user_id) WHERE referred_by_user_id IS NOT NULL;`, [], client);
@@ -4635,8 +4599,10 @@ async function initializeDatabase() {
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_depaddr_user ON deposit_addresses(user_id);`, [], client);
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_depaddr_addr_pending ON deposit_addresses(deposit_address) WHERE status = 'pending';`, [], client);
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_depaddr_expires ON deposit_addresses(expires_at);`, [], client);
+        await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_depaddr_status ON deposit_addresses(status);`, [], client); // Add index on status
         // Deposits
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_deposits_user ON deposits(user_id);`, [], client);
+        await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_deposits_tx_sig ON deposits(tx_signature);`, [], client); // Ensure index exists for unique constraint check
         // Withdrawals
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_status ON withdrawals(user_id, status);`, [], client);
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals(status);`, [], client);
@@ -4645,6 +4611,7 @@ async function initializeDatabase() {
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_ledger_user_time ON ledger(user_id, created_at DESC);`, [], client);
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_ledger_type ON ledger(transaction_type);`, [], client);
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_ledger_ref_payout_id ON ledger(related_ref_payout_id) WHERE related_ref_payout_id IS NOT NULL;`, [], client);
+        await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_ledger_deposit_id ON ledger(related_deposit_id) WHERE related_deposit_id IS NOT NULL;`, [], client); // Add index for deposit lookup
         // Referral Payouts
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_refpayout_referrer ON referral_payouts(referrer_user_id);`, [], client);
         await queryDatabase(`CREATE INDEX IF NOT EXISTS idx_refpayout_referee ON referral_payouts(referee_user_id);`, [], client);
@@ -4682,7 +4649,7 @@ async function setupTelegramWebhook() {
                 await bot.deleteWebHook({ drop_pending_updates: true }).catch(e => console.warn(`Ignoring webhook delete error: ${e.message}`));
                 console.log(`Webhook Attempt ${attempts + 1}: Setting webhook...`);
                 await bot.setWebHook(webhookUrl, {
-                    max_connections: parseInt(process.env.WEBHOOK_MAX_CONN || '20', 10), // Increased default
+                    max_connections: parseInt(process.env.WEBHOOK_MAX_CONN || '40', 10), // Default increased slightly
                     allowed_updates: ["message", "callback_query"], // Listen for both
                     // drop_pending_updates: true // Alternative way? Check node-telegram-bot-api docs
                 });
@@ -4734,16 +4701,21 @@ async function startPollingIfNeeded() {
         console.error("❌ Error managing polling state:", err.message);
          if (err.code === 'ETELEGRAM' && err.message.includes('409 Conflict')) {
               console.error("❌❌❌ Conflict! Another instance seems to be running with this token. Exiting.");
-              // Force exit immediately on conflict
-              shutdown('POLLING_CONFLICT_FATAL', false).catch(() => process.exit(1));
-              setTimeout(() => process.exit(1), 5000); // Force exit if shutdown hangs
+               // Force exit immediately on conflict
+               await notifyAdmin(`🚨 FATAL ERROR: Telegram polling/webhook conflict detected. Another instance likely running. Shutting down.`);
+               shutdown('POLLING_CONFLICT_FATAL', false).catch(() => process.exit(1));
+               setTimeout(() => process.exit(1), 5000); // Force exit if shutdown hangs
          } else if (err.response?.statusCode === 401 || err.message.includes('401 Unauthorized')) {
               console.error("❌❌❌ Unauthorized! Check BOT_TOKEN. Exiting.");
-              // Force exit immediately on auth error
-              shutdown('POLLING_AUTH_FATAL', false).catch(() => process.exit(1));
-              setTimeout(() => process.exit(1), 5000); // Force exit if shutdown hangs
+               // Force exit immediately on auth error
+               await notifyAdmin(`🚨 FATAL ERROR: Telegram polling/webhook unauthorized (401). Check BOT_TOKEN. Shutting down.`);
+               shutdown('POLLING_AUTH_FATAL', false).catch(() => process.exit(1));
+               setTimeout(() => process.exit(1), 5000); // Force exit if shutdown hangs
+         } else {
+              // Notify admin about other polling state errors
+              await notifyAdmin(`🚨 ERROR managing Telegram polling state: ${err.message}`);
          }
-         // Otherwise, log the error but try to continue (might be temporary)
+        // Otherwise, log the error but try to continue (might be temporary)
     }
 }
 
@@ -4772,6 +4744,7 @@ function startDepositMonitor() {
         console.log(`${logPrefix} Performing initial deposit monitor run...`); // [LOGGING ADDED] Initial run execution log
         monitorDepositsPolling().catch(err => {
             console.error(`${logPrefix} Error during initial run:`, err); // [LOGGING ADDED] Log initial run error
+            notifyAdmin(`🚨 ERROR during initial Deposit Monitor run: ${err.message}`);
         });
     }, initialDelay);
     // Optional: Store initialTimer if cleanup is needed on immediate shutdown
@@ -4783,6 +4756,8 @@ function startDepositMonitor() {
         monitorDepositsPolling().catch(err => {
             // Catch errors from the async function itself to prevent interval from stopping
             console.error(`${logPrefix} Error during interval run:`, err); // [LOGGING ADDED] Log interval error
+             // Notify admin only for persistent or severe errors maybe? Or just log for now.
+             // notifyAdmin(`🚨 ERROR during scheduled Deposit Monitor run: ${err.message}`);
         });
     }, finalIntervalMs);
     console.log(`${logPrefix} Deposit monitor started with Interval ID: ${depositMonitorIntervalId}.`); // [LOGGING ADDED] Final success log
@@ -4791,43 +4766,15 @@ function startDepositMonitor() {
 
 // --- Graceful Shutdown Handler ---
 let isShuttingDown = false;
-const shutdown = async (signal, isRailwayRotation = false) => {
-    if (isShuttingDown && !isRailwayRotation) { // Allow rotation signal even if shutdown started
+const shutdown = async (signal, isRailwayRotation = false) => { // isRailwayRotation flag currently unused, simplifying
+    if (isShuttingDown) {
         console.log("--> Shutdown already in progress...");
         return;
     }
     isShuttingDown = true;
-    console.log(`\n🛑 ${signal} received, ${isRailwayRotation ? 'initiating container rotation' : 'shutting down gracefully'}...`);
+    console.log(`\n🛑 ${signal} received, shutting down gracefully...`);
+    await notifyAdmin(`ℹ️ Bot instance shutting down (Signal: ${signal}).`);
 
-    // --- Railway Specific Rotation Handling ---
-    // Railway sends SIGTERM for rotations. We might not need special logic if SIGTERM handling is fast enough.
-    // Keeping this block for clarity if specific rotation actions were needed.
-    if (isRailwayRotation) {
-        console.log("--> Railway Rotation: Preparing for handoff (Closing server, stopping monitor, brief queue drain).");
-        // 1. Stop accepting new work
-        if (depositMonitorIntervalId) { clearInterval(depositMonitorIntervalId); depositMonitorIntervalId = null; console.log("   - Stopped deposit monitor."); }
-        if (server) { server.close(() => console.log("   - Express server closed for rotation.")); }
-        else { console.log("   - Express server already closed or not started.");}
-        // 2. Allow brief drain (optional, short timeout)
-        const drainTimeout = 1000; // 1 second max wait during rotation
-        console.log(`   - Allowing ${drainTimeout}ms for minimal queue drain...`);
-        try {
-            // Only wait very briefly, mainly for any in-flight payout network calls
-            await Promise.race([
-                payoutProcessorQueue.onIdle(),
-                new Promise(resolve => setTimeout(resolve, drainTimeout))
-            ]);
-            console.log(`   - Minimal queue drain finished or timed out.`);
-        } catch (e) { console.warn(`   - Error during minimal queue drain: ${e.message}`); }
-        console.log("--> Rotation preparation complete. Letting Railway manage termination.");
-        // Don't reset isShuttingDown here for rotation, as the process will likely terminate soon anyway.
-        // Exit explicitly after rotation prep? Railway might handle it, but safer to exit.
-        // process.exit(0); // Let's omit explicit exit for rotation and rely on Railway's SIGKILL after timeout.
-        return;
-    }
-
-    // --- Full Graceful Shutdown Logic ---
-    console.log("--> Performing full graceful shutdown sequence...");
     isFullyInitialized = false; // Mark as not ready
 
     // 1. Stop Deposit Monitor Interval
@@ -4863,6 +4810,7 @@ const shutdown = async (signal, isRailwayRotation = false) => {
         }
     } catch (e) {
         console.error("⚠️ Error stopping listeners/server:", e.message);
+        await notifyAdmin(`🚨 ERROR stopping listeners/server during shutdown: ${e.message}`);
     }
 
     // 3. Wait for Ongoing Queue Processing
@@ -4877,7 +4825,7 @@ const shutdown = async (signal, isRailwayRotation = false) => {
             telegramSendQueue
         ];
         // Pause queues to prevent new items while draining
-        queuesToWait.forEach(q => q.pause());
+        queuesToWait.forEach(q => { if (!q.isPaused) q.pause(); });
         console.log("   - Queues paused.");
 
         const idlePromises = queuesToWait.map(q => q.onIdle());
@@ -4890,12 +4838,13 @@ const shutdown = async (signal, isRailwayRotation = false) => {
             Promise.all(idlePromises),
             timeoutPromise
         ]);
-        console.log("   - All processing queues are idle.");
+        console.log("   - All processing queues are idle or timeout reached.");
     } catch (queueError) {
         console.warn(`⚠️ ${queueError.message}. Proceeding with shutdown.`);
         // Log queue sizes to understand what might be stuck
         console.warn(`   - Queue sizes: Msg=${messageQueue.size}, Callback=${callbackQueue.size}, Payout=${payoutProcessorQueue.size}, Deposit=${depositProcessorQueue.size}, TGSend=${telegramSendQueue.size}`);
         console.warn(`   - Pending counts: Msg=${messageQueue.pending}, Callback=${callbackQueue.pending}, Payout=${payoutProcessorQueue.pending}, Deposit=${depositProcessorQueue.pending}, TGSend=${telegramSendQueue.pending}`);
+        await notifyAdmin(`⚠️ Queue drain timeout or error during shutdown: ${queueError.message}. Sizes: M=${messageQueue.size},C=${callbackQueue.size},P=${payoutProcessorQueue.size},D=${depositProcessorQueue.size},T=${telegramSendQueue.size}`);
     }
 
     // 4. Close Database Pool
@@ -4905,6 +4854,7 @@ const shutdown = async (signal, isRailwayRotation = false) => {
         console.log("   - Database pool closed.");
     } catch (dbErr) {
         console.error("❌ Error closing database pool:", dbErr);
+        await notifyAdmin(`🚨 ERROR closing database pool during shutdown: ${dbErr.message}`);
     }
 
     // 5. Exit Process
@@ -4916,36 +4866,38 @@ const shutdown = async (signal, isRailwayRotation = false) => {
 
 // --- Process Signal Handlers ---
 process.on('SIGTERM', () => {
-    const isRailway = !!process.env.RAILWAY_ENVIRONMENT;
-    console.info(`Received SIGTERM. Railway Environment: ${isRailway}`);
-    // If Railway, the specific rotation logic might have been triggered via /prestop -> SIGTERM.
-    // Re-evaluating if we need the explicit isRailwayRotation flag, maybe just handle SIGTERM quickly?
-    // Let's assume standard SIGTERM handling is desired unless specific rotation prep is needed.
-    // The current logic calls shutdown('SIGTERM', false) if not railway, or shutdown('SIGTERM', true) if railway.
-    // Let's simplify and just call shutdown, letting Railway manage rotation timing.
-    shutdown('SIGTERM', false).catch((err) => { // Treat SIGTERM as standard shutdown request
+    // const isRailway = !!process.env.RAILWAY_ENVIRONMENT; // No longer needed for special handling
+    console.info(`Received SIGTERM.`);
+    shutdown('SIGTERM').catch((err) => { // Treat SIGTERM as standard shutdown request
         console.error("SIGTERM shutdown handler error:", err);
+        notifyAdmin(`🚨 CRITICAL ERROR in SIGTERM shutdown handler: ${err.message}`);
         process.exit(1); // Force exit if shutdown handler fails critically
     });
 });
 process.on('SIGINT', () => { // CTRL+C
     console.info(`Received SIGINT.`);
-    shutdown('SIGINT', false).catch((err) => {
+    shutdown('SIGINT').catch((err) => {
         console.error("SIGINT shutdown handler error:", err);
+        notifyAdmin(`🚨 CRITICAL ERROR in SIGINT shutdown handler: ${err.message}`);
         process.exit(1);
     });
 });
 
 
 // --- Global Exception Handlers ---
-process.on('uncaughtException', (err, origin) => {
+process.on('uncaughtException', async (err, origin) => { // Make async to allow await notifyAdmin
     console.error(`🔥🔥🔥 Uncaught Exception at: ${origin}`);
     console.error(err); // Log the full error object
+     // Notify Admin immediately
+     await notifyAdmin(`🔥🔥🔥 Uncaught Exception at: ${origin}\nError: ${err.message}\nStack: ${err.stack?.substring(0, 500)}`);
+
     // Attempt emergency shutdown ONLY IF NOT ALREADY SHUTTING DOWN
     if (!isShuttingDown) {
         console.log("--> Attempting emergency shutdown due to uncaught exception...");
-        shutdown('UNCAUGHT_EXCEPTION', false).catch((shutdownErr) => {
+        shutdown('UNCAUGHT_EXCEPTION').catch((shutdownErr) => {
             console.error("--> Error during emergency shutdown:", shutdownErr);
+             // Try notifying admin again about shutdown failure
+             notifyAdmin(`🚨 CRITICAL: Error during emergency shutdown after uncaughtException: ${shutdownErr.message}`);
         }); // Ignore errors during emergency shutdown try
     } else {
          console.log("--> Uncaught exception during shutdown sequence. Forcing exit.");
@@ -4960,18 +4912,20 @@ process.on('uncaughtException', (err, origin) => {
     if (t.unref) t.unref();
 });
 
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', async (reason, promise) => { // Make async to allow await notifyAdmin
     console.error('🔥🔥🔥 Unhandled Rejection at:', promise, '\nReason:', reason);
+     // Notify Admin about unhandled rejections too, as they can indicate issues
+     let reasonMsg = reason instanceof Error ? `${reason.message}\nStack: ${reason.stack?.substring(0,500)}` : String(reason);
+     await notifyAdmin(`🔥🔥🔥 Unhandled Rejection:\nReason: ${reasonMsg}`);
     // Depending on the reason, might consider this fatal or just log it.
     // If reason suggests a critical failure, could trigger shutdown similar to uncaughtException.
-    // For now, just log. If it becomes problematic, add shutdown logic here too.
-    // Example check: if (reason instanceof Error && reason.message.includes('CRITICAL')) { ... shutdown ... }
+    // For now, just log and notify admin.
 });
 
 
 // --- Application Start ---
 async function startApp() {
-    console.log(`\n🚀 Starting Solana Gambles Bot v3.1.1...`); // Updated version
+    console.log(`\n🚀 Starting Solana Gambles Bot v3.1.5...`); // Updated version
     const PORT = process.env.PORT || 3000;
 
     // Setup routes and listeners before starting server
@@ -5006,13 +4960,17 @@ async function startApp() {
 
                 isFullyInitialized = true; // Mark as ready *after* all core init steps
                 console.log("\n✅ Background Initialization Complete.");
-                console.log(`🚀🚀🚀 Solana Gambles Bot (v3.1.1 - Custodial) is fully operational! 🚀🚀🚀`);
+                console.log(`🚀🚀🚀 Solana Gambles Bot (v3.1.5) is fully operational! 🚀🚀🚀`);
+                 // Notify admin on successful startup
+                 await notifyAdmin(`✅ Bot v3.1.5 started successfully and is fully operational.`);
 
             } catch (initError) {
                 console.error("\n🔥🔥🔥 Delayed Background Initialization Failed:", initError);
                 console.error("❌ Exiting due to critical initialization failure.");
+                 // Notify Admin about initialization failure
+                 await notifyAdmin(`🔥🔥🔥 Bot v3.1.5 FAILED background initialization: ${initError.message}. Exiting.`);
                 // Attempt graceful shutdown, then force exit
-                if (!isShuttingDown) await shutdown('INITIALIZATION_FAILURE', false).catch(() => {});
+                if (!isShuttingDown) await shutdown('INITIALIZATION_FAILURE').catch(() => {});
                 const failTimeout = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
                 const t = setTimeout(() => { console.error(`--> Forcing exit (${failTimeout}ms) after init failure.`); process.exit(1); }, failTimeout);
                 if (t.unref) t.unref();
@@ -5020,8 +4978,9 @@ async function startApp() {
         }, initDelay);
     });
 
-    server.on('error', (err) => {
+    server.on('error', async (err) => { // Make async to allow notifyAdmin
         console.error('❌ Server startup error:', err);
+         await notifyAdmin(`🚨 FATAL: Server startup error: ${err.message}. Exiting.`);
         if (err.code === 'EADDRINUSE') {
             console.error(`❌ Port ${PORT} is already in use. Is another instance running? Exiting.`);
         } else {
@@ -5032,8 +4991,9 @@ async function startApp() {
 }
 
 // --- Run the application ---
-startApp().catch(err => {
+startApp().catch(async err => { // Make async to allow notifyAdmin
      console.error("❌ Unhandled error during application startup sequence:", err);
+     await notifyAdmin(`🚨 FATAL: Unhandled error during application startup sequence: ${err.message}. Exiting.`);
      process.exit(1);
 });
 
