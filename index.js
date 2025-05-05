@@ -403,7 +403,12 @@ console.log("✅ Game Config Loaded and Validated.");
 
 // --- End of Part 1 ---
 // index.js - Part 2: Database Operations
-// --- VERSION: 3.1.5 --- (Fixed BigInt logging in queryDatabase)
+// --- VERSION: 3.1.5 --- (Fixed BigInt logging in queryDatabase, ADDED DEBUG LOGGING)
+
+// --- Assuming 'pool' is imported or available from Part 1 ---
+// import { pool } from './db';
+// import { PublicKey } from '@solana/web3.js'; // Needed for linkUserWallet validation
+// import { generateReferralCode, updateWalletCache, getWalletCache, addActiveDepositAddressCache, getActiveDepositAddressCache, removeActiveDepositAddressCache } from './utils'; // Assuming utils are available
 
 // --- Helper Function for DB Operations ---
 /**
@@ -414,12 +419,27 @@ console.log("✅ Game Config Loaded and Validated.");
  * @returns {Promise<pg.QueryResult<any>>} The query result.
  */
 async function queryDatabase(sql, params = [], dbClient = pool) {
+    // <<< DEBUG LOG #1: Log entry and SQL type/value >>>
+    console.log(`[DEBUG] queryDatabase called. typeof sql: ${typeof sql}. SQL (first 100 chars): ${String(sql).substring(0, 100)}`);
+
     try {
+        // Optional: Log execution attempt
+        // console.log(`[DB EXEC] SQL: ${String(sql).substring(0,100)}... Params: ${JSON.stringify(params)}`);
         return await dbClient.query(sql, params);
     } catch (error) {
         // Log enhanced error information
         console.error(`❌ DB Query Error:`);
-        console.error(`   SQL: ${sql.substring(0, 500)}${sql.length > 500 ? '...' : ''}`); // Log truncated SQL
+
+        // <<< DEBUG LOG #2: Log SQL type/value INSIDE CATCH block >>>
+        console.log(`[DEBUG] queryDatabase CATCH block. typeof sql: ${typeof sql}. SQL value:`, sql);
+
+        // <<< MODIFIED: Safely handle potentially undefined 'sql' before logging >>>
+        if (typeof sql === 'string') {
+             console.error(`   SQL: ${sql.substring(0, 500)}${sql.length > 500 ? '...' : ''}`);
+        } else {
+             console.error(`   SQL: [DEBUG ERROR: 'sql' variable is NOT a string, type was ${typeof sql}]`);
+        }
+        // <<< END MODIFICATION >>>
 
         // *** FIXED BigInt Logging Issue START ***
         // Safely stringify parameters, converting BigInts to strings for logging
@@ -509,7 +529,7 @@ async function linkUserWallet(userId, externalAddress) {
     let client;
     try {
         // Validate address format before hitting DB
-        new PublicKey(externalAddress);
+        new PublicKey(externalAddress); // Assumes PublicKey is imported/available
 
         client = await pool.connect();
         await client.query('BEGIN');
@@ -926,13 +946,11 @@ async function createDepositAddressRecord(userId, depositAddress, derivationPath
  */
 async function findDepositAddressInfo(depositAddress) {
     const logPrefix = `[DB FindDepositAddr Addr ${depositAddress.slice(0, 6)}..]`; // [LOGGING ADDED] Prefix
-    // console.log(`${logPrefix} Finding info...`); // [LOGGING ADDED] Optional entry log (can be verbose)
     const cached = getActiveDepositAddressCache(depositAddress); // Cache helpers defined in Part 3
     const now = Date.now();
 
-    // If cached and not expired, we still need the latest *status* from DB
     if (cached && now < cached.expiresAt) {
-        console.log(`${logPrefix} Cache hit. Verifying DB status...`); // [LOGGING ADDED] Cache hit log
+        // console.log(`${logPrefix} Cache hit. Verifying DB status...`); // [LOGGING ADDED] Cache hit log (Optional: Verbose)
         try {
             const statusRes = await queryDatabase(
                 'SELECT status, id, expires_at FROM deposit_addresses WHERE deposit_address = $1',
@@ -940,16 +958,14 @@ async function findDepositAddressInfo(depositAddress) {
             );
             if (statusRes.rowCount > 0) {
                 const dbInfo = statusRes.rows[0];
-                // Ensure cache expiry matches DB expiry if needed
                 const dbExpiresAt = new Date(dbInfo.expires_at).getTime();
                 if (cached.expiresAt !== dbExpiresAt) {
                     console.warn(`${logPrefix} Cache expiry mismatch for ${depositAddress}. Updating cache.`);
                     addActiveDepositAddressCache(depositAddress, cached.userId, dbExpiresAt); // Cache helpers defined in Part 3
                 }
-                console.log(`${logPrefix} Cache valid, DB status: ${dbInfo.status}.`); // [LOGGING ADDED] Cache valid log
+                // console.log(`${logPrefix} Cache valid, DB status: ${dbInfo.status}.`); // [LOGGING ADDED] Cache valid log (Optional: Verbose)
                 return { userId: cached.userId, status: dbInfo.status, id: dbInfo.id, expiresAt: new Date(dbInfo.expires_at) };
             } else {
-                // Not found in DB, remove from cache
                 removeActiveDepositAddressCache(depositAddress); // Cache helpers defined in Part 3
                 console.warn(`${logPrefix} Address was cached but not found in DB. Cache removed.`); // [LOGGING ADDED] Mismatch log
                 return null;
@@ -963,8 +979,7 @@ async function findDepositAddressInfo(depositAddress) {
         removeActiveDepositAddressCache(depositAddress); // Expired cache entry
     }
 
-    // Not in valid cache, query DB
-    console.log(`${logPrefix} Cache miss or expired. Querying DB...`); // [LOGGING ADDED] Cache miss log
+    // console.log(`${logPrefix} Cache miss or expired. Querying DB...`); // [LOGGING ADDED] Cache miss log (Optional: Verbose)
     try {
         const res = await queryDatabase(
             'SELECT user_id, status, id, expires_at FROM deposit_addresses WHERE deposit_address = $1',
@@ -973,15 +988,14 @@ async function findDepositAddressInfo(depositAddress) {
         if (res.rowCount > 0) {
             const data = res.rows[0];
             const expiresAtDate = new Date(data.expires_at);
-            console.log(`${logPrefix} Found in DB. User: ${data.user_id}, Status: ${data.status}.`); // [LOGGING ADDED] DB found log
-            // Add to cache only if status is pending and not expired
+            // console.log(`${logPrefix} Found in DB. User: ${data.user_id}, Status: ${data.status}.`); // [LOGGING ADDED] DB found log (Optional: Verbose)
             if (data.status === 'pending' && now < expiresAtDate.getTime()) {
-                console.log(`${logPrefix} Adding to active cache.`); // [LOGGING ADDED] Cache add log
+                // console.log(`${logPrefix} Adding to active cache.`); // [LOGGING ADDED] Cache add log (Optional: Verbose)
                 addActiveDepositAddressCache(depositAddress, data.user_id, expiresAtDate.getTime());
             }
             return { userId: data.user_id, status: data.status, id: data.id, expiresAt: expiresAtDate };
         }
-        console.log(`${logPrefix} Not found in DB.`); // [LOGGING ADDED] DB not found log
+        // console.log(`${logPrefix} Not found in DB.`); // [LOGGING ADDED] DB not found log (Optional: Verbose)
         return null; // Not found in DB
     } catch (err) {
         console.error(`${logPrefix} Error finding info in DB:`, err.message); // [LOGGING ADDED] DB Error log
@@ -997,7 +1011,7 @@ async function findDepositAddressInfo(depositAddress) {
  */
 async function markDepositAddressUsed(client, depositAddressId) {
     const logPrefix = `[DB MarkDepositUsed ID ${depositAddressId}]`; // [LOGGING ADDED] Prefix
-    console.log(`${logPrefix} Attempting to mark as 'used'.`); // [LOGGING ADDED] Entry log
+    // console.log(`${logPrefix} Attempting to mark as 'used'.`); // [LOGGING ADDED] Entry log (Optional: Verbose)
     try {
         const res = await queryDatabase(
             `UPDATE deposit_addresses SET status = 'used' WHERE id = $1 AND status = 'pending'`,
@@ -1005,13 +1019,12 @@ async function markDepositAddressUsed(client, depositAddressId) {
             client
         );
         if (res.rowCount > 0) {
-             console.log(`${logPrefix} Successfully marked as 'used'. Invalidating cache entry.`); // [LOGGING ADDED] Success log
-             // Invalidate cache entry for this address
-              const addressRes = await queryDatabase('SELECT deposit_address FROM deposit_addresses WHERE id = $1', [depositAddressId], client);
-              if (addressRes.rowCount > 0) {
-                  removeActiveDepositAddressCache(addressRes.rows[0].deposit_address); // Cache helpers defined in Part 3
-                  console.log(`${logPrefix} Removed address ${addressRes.rows[0].deposit_address.slice(0,6)}.. from active cache.`); // [LOGGING ADDED] Cache remove log
-              }
+             // console.log(`${logPrefix} Successfully marked as 'used'. Invalidating cache entry.`); // [LOGGING ADDED] Success log (Optional: Verbose)
+             const addressRes = await queryDatabase('SELECT deposit_address FROM deposit_addresses WHERE id = $1', [depositAddressId], client);
+             if (addressRes.rowCount > 0) {
+                 removeActiveDepositAddressCache(addressRes.rows[0].deposit_address); // Cache helpers defined in Part 3
+                 // console.log(`${logPrefix} Removed address ${addressRes.rows[0].deposit_address.slice(0,6)}.. from active cache.`); // [LOGGING ADDED] Cache remove log (Optional: Verbose)
+             }
             return true;
         } else {
             console.warn(`${logPrefix} Failed to mark as 'used' (status might not be 'pending' or ID not found).`); // [LOGGING ADDED] Failure log
@@ -1034,62 +1047,52 @@ async function markDepositAddressUsed(client, depositAddressId) {
  */
 async function recordConfirmedDeposit(client, userId, depositAddressId, txSignature, amountLamports) {
     const logPrefix = `[DB RecordDeposit User ${userId} TX ${txSignature.slice(0, 6)}..]`; // [LOGGING ADDED] Prefix
-    console.log(`${logPrefix} Recording confirmed deposit. AddrID: ${depositAddressId}, Amount: ${amountLamports}`); // [LOGGING ADDED] Entry log
+    // console.log(`${logPrefix} Recording confirmed deposit. AddrID: ${depositAddressId}, Amount: ${amountLamports}`); // [LOGGING ADDED] Entry log (Optional: Verbose)
     const query = `
         INSERT INTO deposits (user_id, deposit_address_id, tx_signature, amount_lamports, status, created_at, processed_at)
         VALUES ($1, $2, $3, $4, 'confirmed', NOW(), NOW())
         ON CONFLICT (tx_signature) DO NOTHING -- Prevent duplicate inserts silently
         RETURNING id;
     `;
-    // Note: Added ON CONFLICT DO NOTHING for better idempotency handling upstream
     try {
         const res = await queryDatabase(query, [String(userId), depositAddressId, txSignature, BigInt(amountLamports)], client);
         if (res.rowCount > 0) {
             const depositId = res.rows[0].id;
-            console.log(`${logPrefix} Successfully recorded deposit with ID: ${depositId}`); // [LOGGING ADDED] Success log
+            // console.log(`${logPrefix} Successfully recorded deposit with ID: ${depositId}`); // [LOGGING ADDED] Success log (Optional: Verbose)
             return { success: true, depositId: depositId };
         } else {
-            // If rowCount is 0, it means ON CONFLICT DO NOTHING was triggered
             console.warn(`${logPrefix} Deposit TX ${txSignature} already processed (ON CONFLICT triggered).`);
-             // Treat as failure for this specific attempt to prevent double crediting upstream
             return { success: false, error: 'Deposit transaction already processed.' };
         }
     } catch (err) {
-        // Catch errors other than the ON CONFLICT case
         console.error(`${logPrefix} Error inserting deposit record:`, err.message, err.code); // [LOGGING ADDED] Error log
-        // If somehow a unique constraint error happens despite ON CONFLICT (shouldn't), log it
         if (err.code === '23505' && err.constraint === 'deposits_tx_signature_key') {
             console.error(`${logPrefix} Deposit TX ${txSignature} already processed (Unique constraint violation despite ON CONFLICT?).`);
             return { success: false, error: 'Deposit transaction already processed.' };
         }
-        // Let calling transaction handle rollback
         return { success: false, error: `Database error recording deposit (${err.code || 'N/A'})` };
     }
 }
 
-// ** MOVED FROM PART 5 ** (Original code comment - this function is correctly placed here in Part 2)
 /**
  * Gets the next available index for deriving a deposit address for a user.
- * Counts existing addresses for the user.
  * @param {string} userId
  * @returns {Promise<number>} The next index (e.g., 0 for the first address).
  * @throws {Error} If the database query fails.
  */
 async function getNextDepositAddressIndex(userId) {
     const logPrefix = `[DB GetNextDepositIndex User ${userId}]`; // [LOGGING ADDED] Prefix
-    console.log(`${logPrefix} Fetching address count...`); // [LOGGING ADDED] Entry log
+    // console.log(`${logPrefix} Fetching address count...`); // [LOGGING ADDED] Entry log (Optional: Verbose)
     try {
         const res = await queryDatabase(
             'SELECT COUNT(*) as count FROM deposit_addresses WHERE user_id = $1',
             [String(userId)]
         );
-        // Use count as the next zero-based index
         const nextIndex = parseInt(res.rows[0]?.count || '0', 10);
-        console.log(`${logPrefix} Found count: ${nextIndex}. Next index will be ${nextIndex}.`); // [LOGGING ADDED] Success log
+        // console.log(`${logPrefix} Found count: ${nextIndex}. Next index will be ${nextIndex}.`); // [LOGGING ADDED] Success log (Optional: Verbose)
         return nextIndex;
     } catch (err) {
         console.error(`${logPrefix} Error fetching count:`, err); // [LOGGING ADDED] Error log
-        // Throwing is safer than returning a potentially incorrect index like 0
         throw new Error(`Failed to determine next deposit address index: ${err.message}`);
     }
 }
@@ -1108,7 +1111,6 @@ async function getNextDepositAddressIndex(userId) {
 async function createWithdrawalRequest(userId, requestedAmountLamports, feeLamports, recipientAddress) {
     const requestedAmount = BigInt(requestedAmountLamports);
     const fee = BigInt(feeLamports);
-    // The amount actually sent is the requested amount. The fee is deducted from the user's balance separately.
     const finalSendAmount = requestedAmount;
 
     const query = `
@@ -1131,7 +1133,6 @@ async function createWithdrawalRequest(userId, requestedAmountLamports, feeLampo
 
 /**
  * Updates withdrawal status, signature, error message, timestamps.
- * Can be called within a transaction by passing a client, or standalone using the pool.
  * @param {number} withdrawalId The ID of the withdrawal record.
  * @param {'processing' | 'completed' | 'failed'} status The new status.
  * @param {pg.PoolClient | null} client Optional DB client if within a transaction.
@@ -1140,7 +1141,7 @@ async function createWithdrawalRequest(userId, requestedAmountLamports, feeLampo
  * @returns {Promise<boolean>} True on successful update, false otherwise.
  */
 async function updateWithdrawalStatus(withdrawalId, status, client = null, signature = null, errorMessage = null) {
-    const db = client || pool; // Use client if provided, else pool directly
+    const db = client || pool;
     const logPrefix = `[UpdateWithdrawal ID:${withdrawalId}]`;
 
     let query = `UPDATE withdrawals SET status = $1`;
@@ -1160,7 +1161,6 @@ async function updateWithdrawalStatus(withdrawalId, status, client = null, signa
             values.push(signature);
             break;
         case 'failed':
-             // Ensure errorMessage is not overly long for DB column
              const safeErrorMessage = (errorMessage || 'Unknown error').substring(0, 500);
             query += `, error_message = $${valueCounter++}, completed_at = NULL, payout_tx_signature = NULL, processed_at = COALESCE(processed_at, NOW())`;
             values.push(safeErrorMessage);
@@ -1177,13 +1177,13 @@ async function updateWithdrawalStatus(withdrawalId, status, client = null, signa
         const res = await queryDatabase(query, values, db);
         if (res.rowCount === 0) {
              console.warn(`${logPrefix} Failed to update status to ${status}. Record not found or already in target state?`);
-             return false; // Indicate no row was updated
+             return false;
         }
         return true; // Success
     } catch (err) {
         console.error(`${logPrefix} Error updating status to ${status}:`, err.message, err.code);
         if (err.code === '23505' && err.constraint === 'withdrawals_payout_tx_signature_key') {
-            console.error(`${logPrefix} CRITICAL - Withdrawal TX Signature ${signature?.slice(0, 10)}... unique constraint violation.`);
+             console.error(`${logPrefix} CRITICAL - Withdrawal TX Signature ${signature?.slice(0, 10)}... unique constraint violation.`);
         }
         return false; // Error occurred
     }
@@ -1195,7 +1195,6 @@ async function getWithdrawalDetails(withdrawalId) {
         const res = await queryDatabase('SELECT * FROM withdrawals WHERE id = $1', [withdrawalId]);
         if (res.rowCount === 0) return null;
         const details = res.rows[0];
-        // Ensure numeric types are correct
         details.requested_amount_lamports = BigInt(details.requested_amount_lamports || '0');
         details.fee_lamports = BigInt(details.fee_lamports || '0');
         details.final_send_amount_lamports = BigInt(details.final_send_amount_lamports || '0');
@@ -1211,7 +1210,6 @@ async function getWithdrawalDetails(withdrawalId) {
 
 /**
  * Creates a record for a bet placed using internal balance.
- * MUST be called within a DB transaction that also deducts the balance.
  * @param {pg.PoolClient} client The active database client.
  * @param {string} userId
  * @param {string} chatId
@@ -1222,7 +1220,6 @@ async function getWithdrawalDetails(withdrawalId) {
  * @returns {Promise<{success: boolean, betId?: number, error?: string}>}
  */
 async function createBetRecord(client, userId, chatId, gameType, betDetails, wagerAmountLamports, priority = 0) {
-    // Basic validation
     if (BigInt(wagerAmountLamports) <= 0n) {
         return { success: false, error: 'Wager amount must be positive.' };
     }
@@ -1233,7 +1230,6 @@ async function createBetRecord(client, userId, chatId, gameType, betDetails, wag
         RETURNING id;
     `;
     try {
-        // Ensure betDetails is valid JSON before inserting
         const validBetDetails = betDetails && typeof betDetails === 'object' ? betDetails : {};
         const res = await queryDatabase(query, [String(userId), String(chatId), gameType, validBetDetails, BigInt(wagerAmountLamports), priority], client);
         if (res.rowCount > 0) {
@@ -1243,8 +1239,7 @@ async function createBetRecord(client, userId, chatId, gameType, betDetails, wag
         }
     } catch (err) {
         console.error(`[DB CreateBet] Error for user ${userId}, game ${gameType}:`, err.message, err.code);
-        // Check constraint violation?
-        if (err.constraint === 'bets_wager_positive') { // Assuming constraint name is 'bets_wager_positive' based on previous schema attempt
+        if (err.constraint === 'bets_wager_positive') {
              return { success: false, error: 'Wager amount must be positive (DB check).' };
         }
         return { success: false, error: `Database error creating bet (${err.code || 'N/A'})` };
@@ -1253,51 +1248,44 @@ async function createBetRecord(client, userId, chatId, gameType, betDetails, wag
 
 /**
  * Updates a bet record upon completion of game logic.
- * Sets the bet status and the payout amount (amount credited back to internal balance).
- * MUST be called within a DB transaction that potentially credits the balance.
  * @param {pg.PoolClient} client The active database client.
  * @param {number} betId The ID of the bet to update.
  * @param {'processing_game' | 'completed_win' | 'completed_loss' | 'completed_push' | 'error_game_logic'} status The new status.
- * @param {bigint | null} [payoutAmountLamports=null] Amount credited back (Wager + Win, or Wager for push, 0 for loss/error). Required for completed statuses.
+ * @param {bigint | null} [payoutAmountLamports=null] Amount credited back. Required for completed statuses.
  * @returns {Promise<boolean>} True on successful update, false otherwise.
  */
 async function updateBetStatus(client, betId, status, payoutAmountLamports = null) {
     const logPrefix = `[UpdateBetStatus ID:${betId}]`;
 
-    // Validate input based on status
     if (['completed_win', 'completed_push'].includes(status) && (payoutAmountLamports === null || BigInt(payoutAmountLamports) <= 0n)) {
-        // Allow payout == wager for push
         if (status !== 'completed_push' || payoutAmountLamports === null) {
            console.error(`${logPrefix} Invalid payout amount ${payoutAmountLamports} for status ${status}.`);
            return false;
         }
     }
     if (['completed_loss', 'error_game_logic'].includes(status)) {
-        payoutAmountLamports = 0n; // Ensure payout is zero for loss/error
+        payoutAmountLamports = 0n;
     }
     if (status === 'processing_game') {
-         payoutAmountLamports = null; // Payout not determined yet
+         payoutAmountLamports = null;
     }
 
-    // Allow transitions from 'active' or 'processing_game' (or potentially 'error')
     const query = `
         UPDATE bets
         SET status = $1,
             payout_amount_lamports = $2,
             processed_at = CASE WHEN $1 LIKE 'completed_%' OR $1 = 'error_game_logic' THEN NOW() ELSE processed_at END
         WHERE id = $3 AND status IN ('active', 'processing_game', 'error_game_logic')
-        RETURNING id, status; -- Return old status for logging if needed
+        RETURNING id, status;
     `;
     try {
         const res = await queryDatabase(query, [status, payoutAmountLamports !== null ? BigInt(payoutAmountLamports) : null, betId], client);
         if (res.rowCount === 0) {
-            // Fetch current status to understand why update failed
             const currentStatusRes = await queryDatabase('SELECT status FROM bets WHERE id = $1', [betId], client);
             const currentStatus = currentStatusRes.rows[0]?.status || 'NOT_FOUND';
             console.warn(`${logPrefix} Failed to update status to ${status}. Current status: ${currentStatus}.`);
             return false;
         }
-        // console.log(`${logPrefix} Status updated to ${status}.`); // Debug log
         return true;
     } catch (err) {
         console.error(`${logPrefix} Error updating status to ${status}:`, err.message);
@@ -1307,14 +1295,12 @@ async function updateBetStatus(client, betId, status, payoutAmountLamports = nul
 
 /**
  * Checks if a specific completed bet ID is the user's first *ever* completed bet.
- * Does NOT require an external transaction.
  * @param {string} userId
  * @param {number} betId The ID of the bet to check.
  * @returns {Promise<boolean>} True if it's the first completed bet, false otherwise.
  */
 async function isFirstCompletedBet(userId, betId) {
     userId = String(userId);
-    // Find the earliest created bet_id among all completed bets for the user
     const query = `
         SELECT id
         FROM bets
@@ -1324,7 +1310,6 @@ async function isFirstCompletedBet(userId, betId) {
     `;
     try {
         const res = await queryDatabase(query, [userId]);
-        // Return true only if a first bet exists AND its ID matches the provided betId
         return res.rows.length > 0 && res.rows[0].id === betId;
     } catch (err) {
         console.error(`[DB isFirstCompletedBet] Error checking for user ${userId}, bet ${betId}:`, err.message);
@@ -1338,7 +1323,6 @@ async function getBetDetails(betId) {
         const res = await queryDatabase('SELECT * FROM bets WHERE id = $1', [betId]);
          if (res.rowCount === 0) return null;
          const details = res.rows[0];
-         // Ensure numeric types
          details.wager_amount_lamports = BigInt(details.wager_amount_lamports || '0');
          details.payout_amount_lamports = details.payout_amount_lamports !== null ? BigInt(details.payout_amount_lamports) : null;
          details.priority = parseInt(details.priority || '0', 10);
@@ -1364,41 +1348,36 @@ async function getBetDetails(betId) {
  * @returns {Promise<{success: boolean, payoutId?: number, error?: string}>}
  */
 async function recordPendingReferralPayout(referrerUserId, refereeUserId, payoutType, payoutAmountLamports, triggeringBetId = null, milestoneReachedLamports = null, client = null) {
-    const db = client || pool; // Use client if provided, else pool
+    const db = client || pool;
     const query = `
         INSERT INTO referral_payouts (
             referrer_user_id, referee_user_id, payout_type, payout_amount_lamports,
             triggering_bet_id, milestone_reached_lamports, status, created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())
-        ON CONFLICT ON CONSTRAINT idx_refpayout_unique_milestone DO NOTHING -- Ignore duplicate milestone attempts based on index
+        ON CONFLICT ON CONSTRAINT idx_refpayout_unique_milestone DO NOTHING
         RETURNING id;
-    `; // Assuming the unique index name is idx_refpayout_unique_milestone
+    `;
     const values = [
-        String(referrerUserId),
-        String(refereeUserId),
-        payoutType,
-        BigInt(payoutAmountLamports),
+        String(referrerUserId), String(refereeUserId), payoutType, BigInt(payoutAmountLamports),
         Number.isInteger(triggeringBetId) ? triggeringBetId : null,
         milestoneReachedLamports !== null ? BigInt(milestoneReachedLamports) : null
     ];
     try {
-        const res = await queryDatabase(query, values, db); // Use the correct db client/pool
-        if (res.rows.length > 0) { // Row returned, insert was successful
+        const res = await queryDatabase(query, values, db);
+        if (res.rows.length > 0) {
             const payoutId = res.rows[0].id;
             console.log(`[DB Referral] Recorded pending ${payoutType} payout ID ${payoutId} for referrer ${referrerUserId} (triggered by ${refereeUserId}).`);
             return { success: true, payoutId: payoutId };
-        } else { // No row returned, likely due to ON CONFLICT DO NOTHING
+        } else {
              if (payoutType === 'milestone') {
                  console.warn(`[DB Referral] Duplicate milestone payout attempt for referrer ${referrerUserId}, referee ${refereeUserId}, milestone ${milestoneReachedLamports}. Ignoring.`);
                  return { success: false, error: 'Duplicate milestone payout attempt.' };
              } else {
-                  // This case (initial bet conflict) shouldn't happen unless logic allows multiple first bets?
                   console.error("[DB Referral] Failed to insert pending referral payout, RETURNING clause gave no ID (and not a milestone conflict).");
                   return { success: false, error: "Failed to insert pending referral payout." };
              }
         }
     } catch (err) {
-        // Catch other errors besides the handled conflict
         console.error(`[DB Referral] Error recording pending ${payoutType} payout for referrer ${referrerUserId} (triggered by ${refereeUserId}):`, err.message);
         return { success: false, error: `Database error recording referral payout (${err.code || 'N/A'})` };
     }
@@ -1406,7 +1385,6 @@ async function recordPendingReferralPayout(referrerUserId, refereeUserId, payout
 
 /**
  * Updates referral payout status, signature, error message, timestamps.
- * Can be called within a transaction by passing a client, or standalone using the pool.
  * @param {number} payoutId The ID of the referral_payouts record.
  * @param {'processing' | 'paid' | 'failed'} status The new status.
  * @param {pg.PoolClient | null} client Optional DB client if within a transaction.
@@ -1415,7 +1393,7 @@ async function recordPendingReferralPayout(referrerUserId, refereeUserId, payout
  * @returns {Promise<boolean>} True on successful update, false otherwise.
  */
 async function updateReferralPayoutStatus(payoutId, status, client = null, signature = null, errorMessage = null) {
-    const db = client || pool; // Use client if provided, else pool directly
+    const db = client || pool;
     const logPrefix = `[UpdateRefPayout ID:${payoutId}]`;
 
     let query = `UPDATE referral_payouts SET status = $1`;
@@ -1451,7 +1429,7 @@ async function updateReferralPayoutStatus(payoutId, status, client = null, signa
         const res = await queryDatabase(query, values, db);
         if (res.rowCount === 0) {
             console.warn(`${logPrefix} Failed to update status to ${status}. Record not found or already in target state?`);
-            return false; // Indicate no row was updated
+            return false;
         }
         return true; // Success
     } catch (err) {
@@ -1469,7 +1447,6 @@ async function getReferralPayoutDetails(payoutId) {
         const res = await queryDatabase('SELECT * FROM referral_payouts WHERE id = $1', [payoutId]);
         if (res.rowCount === 0) return null;
         const details = res.rows[0];
-        // Ensure numeric types
         details.payout_amount_lamports = BigInt(details.payout_amount_lamports || '0');
         details.milestone_reached_lamports = details.milestone_reached_lamports !== null ? BigInt(details.milestone_reached_lamports) : null;
         details.triggering_bet_id = details.triggering_bet_id !== null ? parseInt(details.triggering_bet_id, 10) : null;
@@ -1502,6 +1479,36 @@ async function getTotalReferralEarnings(userId) {
 }
 
 // --- End of Part 2 ---
+
+// Export functions if needed by other potential modules (adjust as needed)
+export {
+    queryDatabase,
+    ensureUserExists,
+    linkUserWallet,
+    getUserWalletDetails,
+    getLinkedWallet,
+    getUserByReferralCode,
+    linkReferral,
+    updateUserWagerStats,
+    getUserBalance,
+    updateUserBalanceAndLedger,
+    createDepositAddressRecord,
+    findDepositAddressInfo,
+    markDepositAddressUsed,
+    recordConfirmedDeposit,
+    getNextDepositAddressIndex,
+    createWithdrawalRequest,
+    updateWithdrawalStatus,
+    getWithdrawalDetails,
+    createBetRecord,
+    updateBetStatus,
+    isFirstCompletedBet,
+    getBetDetails,
+    recordPendingReferralPayout,
+    updateReferralPayoutStatus,
+    getReferralPayoutDetails,
+    getTotalReferralEarnings
+};
 // index.js - Part 3: Solana Utilities & Telegram Helpers
 // --- VERSION: 3.1.5 --- (Implemented safeIndex workaround, added notifyAdmin helper, ADDED getKeypairFromPath for sweeping)
 
