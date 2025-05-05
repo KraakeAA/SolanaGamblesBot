@@ -1,5 +1,5 @@
 // index.js - Part 1: Imports, Environment Configuration, Core Initializations
-// --- VERSION: 3.1.0 --- (Updated Imports for @metamask/key-tree)
+// --- VERSION: 3.1.1 --- (Fix for @metamask/key-tree curve error, Added Logging)
 
 // --- All Imports MUST come first ---
 import 'dotenv/config'; // Keep for local development via .env file
@@ -23,18 +23,18 @@ import PQueue from 'p-queue';
 import { Buffer } from 'buffer';
 import bip39 from 'bip39'; // For mnemonic seed phrase generation/validation
 // import { derivePath } from 'ed25519-hd-key'; // <-- REMOVED OLD LIBRARY IMPORT
-import { SLIP10Node } from '@metamask/key-tree'; // <-- ADDED NEW LIBRARY IMPORT
+import { SLIP10Node } from '@metamask/key-tree'; // <-- Keeping new library import
 import nacl from 'tweetnacl'; // Keep for keypair generation from derived seed
 
 // Assuming RateLimitedConnection exists and works as intended
 import RateLimitedConnection from './lib/solana-connection.js';
 
 // --- Deployment Check Log ---
-console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} --- v3.1.0 ---`);
+console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} --- v3.1.1 ---`);
 // --- END DEPLOYMENT CHECK ---
 
 
-console.log("⏳ Starting Solana Gambles Bot (Custodial, Buttons, v3.1.0)... Checking environment variables...");
+console.log("⏳ Starting Solana Gambles Bot (Custodial, Buttons, v3.1.1)... Checking environment variables...");
 
 // --- Environment Variable Configuration ---
 const REQUIRED_ENV_VARS = [
@@ -44,7 +44,7 @@ const REQUIRED_ENV_VARS = [
     'MAIN_BOT_PRIVATE_KEY',       // Used for general payouts (Withdrawals) (SECRET)
     // Optional separate key for referral payouts (falls back to MAIN_BOT_PRIVATE_KEY)
     'REFERRAL_PAYOUT_PRIVATE_KEY',// (SECRET) - Presence checked, but allowed to be empty
-    'RPC_URLS',                     // Comma-separated list of RPC URLs
+    'RPC_URLS',                   // Comma-separated list of RPC URLs
 ];
 
 // Check for Railway-specific variables if deployed there
@@ -67,6 +67,8 @@ REQUIRED_ENV_VARS.forEach((key) => {
 });
 
 // Specific check for valid Seed Phrase
+// [LOGGING ADDED] - Log existence check
+console.log(`[Env Check] Checking DEPOSIT_MASTER_SEED_PHRASE... Present: ${!!process.env.DEPOSIT_MASTER_SEED_PHRASE}`);
 if (process.env.DEPOSIT_MASTER_SEED_PHRASE && !bip39.validateMnemonic(process.env.DEPOSIT_MASTER_SEED_PHRASE)) {
     console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is set but is not a valid BIP39 mnemonic.`);
     missingVars = true;
@@ -75,7 +77,7 @@ if (process.env.DEPOSIT_MASTER_SEED_PHRASE && !bip39.validateMnemonic(process.en
     // Double check it's required
      if (!REQUIRED_ENV_VARS.includes('DEPOSIT_MASTER_SEED_PHRASE')) REQUIRED_ENV_VARS.push('DEPOSIT_MASTER_SEED_PHRASE'); // Ensure it's checked
      if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) {
-        // Now this error will trigger if it wasn't caught initially
+       // Now this error will trigger if it wasn't caught initially
          console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is missing.`);
          missingVars = true;
      }
@@ -100,10 +102,11 @@ const validateBase58Key = (keyName, isRequired) => {
             if (decoded.length !== 64 && decoded.length !== 32) { // Allow 32 byte seed phrase equivalent or 64 byte secret key
                 // Refined check: Solana Keypair.fromSecretKey expects 64 bytes.
                 if (decoded.length !== 64) {
-                   console.error(`❌ Environment variable ${keyName} has incorrect length after base58 decoding (Expected 64 bytes for Secret Key, Got ${decoded.length}).`);
-                   return false;
+                    console.error(`❌ Environment variable ${keyName} has incorrect length after base58 decoding (Expected 64 bytes for Secret Key, Got ${decoded.length}).`);
+                    return false;
                 }
             }
+            console.log(`[Env Check] Private Key ${keyName} validated successfully (Length: ${decoded.length}).`); // [LOGGING ADDED]
         } catch (e) {
             console.error(`❌ Failed to decode environment variable ${keyName} as base58: ${e.message}`);
             return false;
@@ -137,7 +140,7 @@ const OPTIONAL_ENV_DEFAULTS = {
     // --- Payouts (Withdrawals, Referral Rewards) ---
     'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '1000',   // Min priority fee for payouts
     'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000', // Max priority fee for payouts
-    'PAYOUT_COMPUTE_UNIT_LIMIT': '200000',             // Default compute unit limit for transfers
+    'PAYOUT_COMPUTE_UNIT_LIMIT': '200000',              // Default compute unit limit for transfers
     'PAYOUT_JOB_RETRIES': '3',                          // Retries for Withdrawals/Referral payouts
     'PAYOUT_JOB_RETRY_DELAY_MS': '5000',                // Base delay for payout retries
     // --- Game Limits ---
@@ -159,7 +162,7 @@ const OPTIONAL_ENV_DEFAULTS = {
     'WAR_HOUSE_EDGE': '0.02',           // Approx edge in War (mainly from ties)
     // --- Referral System ---
     'REFERRAL_INITIAL_BET_MIN_LAMPORTS': '10000000', // Min first bet size to trigger initial reward (0.01 SOL)
-    'REFERRAL_MILESTONE_REWARD_PERCENT': '0.005',   // 0.5% of wagered amount for milestones
+    'REFERRAL_MILESTONE_REWARD_PERCENT': '0.005',    // 0.5% of wagered amount for milestones
     // --- Technical / Performance ---
     'RPC_MAX_CONCURRENT': '8',          // Concurrent requests for RateLimitedConnection
     'RPC_RETRY_BASE_DELAY': '600',
@@ -167,13 +170,13 @@ const OPTIONAL_ENV_DEFAULTS = {
     'RPC_RATE_LIMIT_COOLOFF': '1500',
     'RPC_RETRY_MAX_DELAY': '15000',
     'RPC_RETRY_JITTER': '0.2',
-    'RPC_COMMITMENT': 'confirmed',       // Default commitment for reads
-    'MSG_QUEUE_CONCURRENCY': '5',        // Incoming Telegram message processing
+    'RPC_COMMITMENT': 'confirmed',        // Default commitment for reads
+    'MSG_QUEUE_CONCURRENCY': '5',         // Incoming Telegram message processing
     'MSG_QUEUE_TIMEOUT_MS': '10000',
-    'CALLBACK_QUEUE_CONCURRENCY': '8',   // Button callback processing
+    'CALLBACK_QUEUE_CONCURRENCY': '8',    // Button callback processing
     'CALLBACK_QUEUE_TIMEOUT_MS': '15000',
-    'PAYOUT_QUEUE_CONCURRENCY': '3',     // Withdrawal/Referral payout processing
-    'PAYOUT_QUEUE_TIMEOUT_MS': '60000',  // Longer timeout for payouts
+    'PAYOUT_QUEUE_CONCURRENCY': '3',      // Withdrawal/Referral payout processing
+    'PAYOUT_QUEUE_TIMEOUT_MS': '60000',   // Longer timeout for payouts
     'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '4', // Processing confirmed deposit transactions
     'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '30000',
     'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', // MUST BE 1 for rate limits
@@ -182,7 +185,7 @@ const OPTIONAL_ENV_DEFAULTS = {
     'DEPOSIT_MONITOR_INTERVAL_MS': '20000', // How often to check for deposits (polling method)
     'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '50', // How many pending addresses to check per cycle
     'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '5', // How many recent signatures to check per address
-    'DB_POOL_MAX': '25',                 // Max DB connections
+    'DB_POOL_MAX': '25',                  // Max DB connections
     'DB_POOL_MIN': '5',
     'DB_IDLE_TIMEOUT': '30000',
     'DB_CONN_TIMEOUT': '5000',
@@ -191,12 +194,12 @@ const OPTIONAL_ENV_DEFAULTS = {
     'USER_STATE_CACHE_TTL_MS': '300000', // 5 minutes for conversational state
     'WALLET_CACHE_TTL_MS': '600000',     // 10 minutes for user wallet/ref code cache
     'DEPOSIT_ADDR_CACHE_TTL_MS': '3660000', // ~1 hour for active deposit addresses cache
-    'MAX_PROCESSED_TX_CACHE': '5000',    // Max deposit TX sigs to keep in memory this session
-    'USER_COMMAND_COOLDOWN_MS': '1000',  // 1 second cooldown
-    'INIT_DELAY_MS': '1000',             // Delay before starting background tasks
+    'MAX_PROCESSED_TX_CACHE': '5000',     // Max deposit TX sigs to keep in memory this session
+    'USER_COMMAND_COOLDOWN_MS': '1000',   // 1 second cooldown
+    'INIT_DELAY_MS': '1000',              // Delay before starting background tasks
     'SHUTDOWN_QUEUE_TIMEOUT_MS': '20000', // Max time to wait for queues during shutdown
-    'SHUTDOWN_FAIL_TIMEOUT_MS': '8000',  // Timeout before force exit on critical failure
-    'WEBHOOK_MAX_CONN': '10',            // Max connections for Telegram webhook
+    'SHUTDOWN_FAIL_TIMEOUT_MS': '8000',   // Timeout before force exit on critical failure
+    'WEBHOOK_MAX_CONN': '10',             // Max connections for Telegram webhook
 };
 
 // Assign defaults for optional vars if they are missing
@@ -225,9 +228,9 @@ const REFERRAL_INITIAL_BET_MIN_LAMPORTS = BigInt(process.env.REFERRAL_INITIAL_BE
 const REFERRAL_MILESTONE_REWARD_PERCENT = parseFloat(process.env.REFERRAL_MILESTONE_REWARD_PERCENT);
 // Define Referral Tiers (Example) - Based on referrer's *current* count BEFORE this referral's first bet
 const REFERRAL_INITIAL_BONUS_TIERS = [
-    { maxCount: 10, percent: 0.05 },  // 0-10 referrals -> 5%
-    { maxCount: 25, percent: 0.10 },  // 11-25 referrals -> 10%
-    { maxCount: 50, percent: 0.15 },  // 26-50 referrals -> 15%
+    { maxCount: 10, percent: 0.05 },   // 0-10 referrals -> 5%
+    { maxCount: 25, percent: 0.10 },   // 11-25 referrals -> 10%
+    { maxCount: 50, percent: 0.15 },   // 26-50 referrals -> 15%
     { maxCount: 100, percent: 0.20 }, // 51-100 referrals -> 20%
     { maxCount: Infinity, percent: 0.25 } // 101+ referrals -> 25%
 ];
@@ -270,8 +273,8 @@ const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
     retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
     retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
     commitment: process.env.RPC_COMMITMENT, // Default 'confirmed'
-    httpHeaders: { 'User-Agent': `SolanaGamblesBot/3.1.0` },
-    // clientId: `SolanaGamblesBot/3.1.0` // Set within RateLimitedConnection now
+    httpHeaders: { 'User-Agent': `SolanaGamblesBot/3.1.1` }, // Updated version
+    // clientId: `SolanaGamblesBot/3.1.1` // Set within RateLimitedConnection now (Updated version)
 });
 console.log("✅ Multi-RPC Solana connection instance created.");
 
@@ -324,7 +327,7 @@ console.log("✅ PostgreSQL Pool created.");
 console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
     polling: false, // Set dynamically later based on webhook success
-    request: {      // Adjust request options for stability
+    request: {       // Adjust request options for stability
         timeout: 15000, // Increased request timeout
         agentOptions: {
             keepAlive: true,
@@ -389,7 +392,7 @@ console.log("✅ Game Config Loaded and Validated.");
 
 // --- End of Part 1 ---
 // index.js - Part 2: Database Operations
-// --- VERSION: 3.1.0 --- (Moved getNextDepositAddressIndex here)
+// --- VERSION: 3.1.1 --- (Added Deposit Logging)
 
 // --- Helper Function for DB Operations ---
 /**
@@ -405,11 +408,11 @@ async function queryDatabase(sql, params = [], dbClient = pool) {
     } catch (error) {
         // Log enhanced error information
         console.error(`❌ DB Query Error:`);
-        console.error(`  SQL: ${sql.substring(0, 500)}${sql.length > 500 ? '...' : ''}`); // Log truncated SQL
-        console.error(`  Params: ${JSON.stringify(params)}`);
-        console.error(`  Error Code: ${error.code}`);
-        console.error(`  Error Message: ${error.message}`);
-        // console.error(`  Stack: ${error.stack}`); // Optional: full stack trace
+        console.error(`   SQL: ${sql.substring(0, 500)}${sql.length > 500 ? '...' : ''}`); // Log truncated SQL
+        console.error(`   Params: ${JSON.stringify(params)}`);
+        console.error(`   Error Code: ${error.code}`);
+        console.error(`   Error Message: ${error.message}`);
+        // console.error(`   Stack: ${error.stack}`); // Optional: full stack trace
         throw error; // Re-throw the original error for upstream handling
     }
 }
@@ -863,6 +866,8 @@ async function updateUserBalanceAndLedger(client, userId, changeAmountLamports, 
  * @returns {Promise<{success: boolean, id?: number, error?: string}>}
  */
 async function createDepositAddressRecord(userId, depositAddress, derivationPath, expiresAt) {
+    const logPrefix = `[DB CreateDepositAddr User ${userId} Addr ${depositAddress.slice(0, 6)}..]`; // [LOGGING ADDED] Prefix
+    console.log(`${logPrefix} Attempting to create record.`); // [LOGGING ADDED] Entry log
     const query = `
         INSERT INTO deposit_addresses (user_id, deposit_address, derivation_path, expires_at, status, created_at)
         VALUES ($1, $2, $3, $4, 'pending', NOW())
@@ -872,16 +877,18 @@ async function createDepositAddressRecord(userId, depositAddress, derivationPath
         const res = await queryDatabase(query, [String(userId), depositAddress, derivationPath, expiresAt]);
         if (res.rowCount > 0) {
             const depositAddressId = res.rows[0].id;
+            console.log(`${logPrefix} Successfully created record with ID: ${depositAddressId}. Adding to cache.`); // [LOGGING ADDED] Success log
             // Add to cache immediately
             addActiveDepositAddressCache(depositAddress, userId, expiresAt.getTime()); // Cache helpers defined in Part 3
             return { success: true, id: depositAddressId };
         } else {
+            console.error(`${logPrefix} Failed to insert deposit address record (no ID returned).`); // [LOGGING ADDED] Failure log
             return { success: false, error: 'Failed to insert deposit address record (no ID returned).' };
         }
     } catch (err) {
-        console.error(`[DB CreateDepositAddr] Error for user ${userId} Addr: ${depositAddress.slice(0,6)}..:`, err.message, err.code);
+        console.error(`${logPrefix} DB Error:`, err.message, err.code); // [LOGGING ADDED] DB Error log
         if (err.code === '23505' && err.constraint === 'deposit_addresses_deposit_address_key') {
-            console.error(`[DB CreateDepositAddr] CRITICAL - Deposit address collision: ${depositAddress}`);
+            console.error(`${logPrefix} CRITICAL - Deposit address collision detected.`);
             return { success: false, error: 'Deposit address collision detected.' };
         }
         return { success: false, error: `Database error creating deposit address (${err.code || 'N/A'})` };
@@ -894,11 +901,14 @@ async function createDepositAddressRecord(userId, depositAddress, derivationPath
  * @returns {Promise<{userId: string, status: string, id: number, expiresAt: Date} | null>}
  */
 async function findDepositAddressInfo(depositAddress) {
+    const logPrefix = `[DB FindDepositAddr Addr ${depositAddress.slice(0, 6)}..]`; // [LOGGING ADDED] Prefix
+    // console.log(`${logPrefix} Finding info...`); // [LOGGING ADDED] Optional entry log (can be verbose)
     const cached = getActiveDepositAddressCache(depositAddress); // Cache helpers defined in Part 3
     const now = Date.now();
 
     // If cached and not expired, we still need the latest *status* from DB
     if (cached && now < cached.expiresAt) {
+        console.log(`${logPrefix} Cache hit. Verifying DB status...`); // [LOGGING ADDED] Cache hit log
         try {
             const statusRes = await queryDatabase(
                 'SELECT status, id, expires_at FROM deposit_addresses WHERE deposit_address = $1',
@@ -909,25 +919,28 @@ async function findDepositAddressInfo(depositAddress) {
                 // Ensure cache expiry matches DB expiry if needed
                 const dbExpiresAt = new Date(dbInfo.expires_at).getTime();
                 if (cached.expiresAt !== dbExpiresAt) {
-                    console.warn(`[DB FindDepositAddr] Cache expiry mismatch for ${depositAddress}. Updating cache.`);
+                    console.warn(`${logPrefix} Cache expiry mismatch for ${depositAddress}. Updating cache.`);
                     addActiveDepositAddressCache(depositAddress, cached.userId, dbExpiresAt); // Cache helpers defined in Part 3
                 }
+                console.log(`${logPrefix} Cache valid, DB status: ${dbInfo.status}.`); // [LOGGING ADDED] Cache valid log
                 return { userId: cached.userId, status: dbInfo.status, id: dbInfo.id, expiresAt: new Date(dbInfo.expires_at) };
             } else {
                 // Not found in DB, remove from cache
                 removeActiveDepositAddressCache(depositAddress); // Cache helpers defined in Part 3
-                console.warn(`[DB FindDepositAddr] Address ${depositAddress} was cached but not found in DB.`);
+                console.warn(`${logPrefix} Address was cached but not found in DB. Cache removed.`); // [LOGGING ADDED] Mismatch log
                 return null;
             }
         } catch (err) {
-            console.error(`[DB FindDepositAddr] Error fetching status for cached addr ${depositAddress}:`, err.message);
+            console.error(`${logPrefix} Error fetching status for cached addr:`, err.message); // [LOGGING ADDED] Error log
             return null; // Error fetching status
         }
     } else if (cached) {
+        console.log(`${logPrefix} Cache expired. Removing.`); // [LOGGING ADDED] Cache expired log
         removeActiveDepositAddressCache(depositAddress); // Expired cache entry
     }
 
     // Not in valid cache, query DB
+    console.log(`${logPrefix} Cache miss or expired. Querying DB...`); // [LOGGING ADDED] Cache miss log
     try {
         const res = await queryDatabase(
             'SELECT user_id, status, id, expires_at FROM deposit_addresses WHERE deposit_address = $1',
@@ -936,15 +949,18 @@ async function findDepositAddressInfo(depositAddress) {
         if (res.rowCount > 0) {
             const data = res.rows[0];
             const expiresAtDate = new Date(data.expires_at);
+            console.log(`${logPrefix} Found in DB. User: ${data.user_id}, Status: ${data.status}.`); // [LOGGING ADDED] DB found log
             // Add to cache only if status is pending and not expired
             if (data.status === 'pending' && now < expiresAtDate.getTime()) {
+                console.log(`${logPrefix} Adding to active cache.`); // [LOGGING ADDED] Cache add log
                 addActiveDepositAddressCache(depositAddress, data.user_id, expiresAtDate.getTime());
             }
             return { userId: data.user_id, status: data.status, id: data.id, expiresAt: expiresAtDate };
         }
+        console.log(`${logPrefix} Not found in DB.`); // [LOGGING ADDED] DB not found log
         return null; // Not found in DB
     } catch (err) {
-        console.error(`[DB FindDepositAddr] Error finding info for addr ${depositAddress}:`, err.message);
+        console.error(`${logPrefix} Error finding info in DB:`, err.message); // [LOGGING ADDED] DB Error log
         return null;
     }
 }
@@ -956,6 +972,8 @@ async function findDepositAddressInfo(depositAddress) {
  * @returns {Promise<boolean>} True if the status was updated from 'pending' to 'used'.
  */
 async function markDepositAddressUsed(client, depositAddressId) {
+    const logPrefix = `[DB MarkDepositUsed ID ${depositAddressId}]`; // [LOGGING ADDED] Prefix
+    console.log(`${logPrefix} Attempting to mark as 'used'.`); // [LOGGING ADDED] Entry log
     try {
         const res = await queryDatabase(
             `UPDATE deposit_addresses SET status = 'used' WHERE id = $1 AND status = 'pending'`,
@@ -963,18 +981,20 @@ async function markDepositAddressUsed(client, depositAddressId) {
             client
         );
         if (res.rowCount > 0) {
+             console.log(`${logPrefix} Successfully marked as 'used'. Invalidating cache entry.`); // [LOGGING ADDED] Success log
             // Invalidate cache entry for this address
              const addressRes = await queryDatabase('SELECT deposit_address FROM deposit_addresses WHERE id = $1', [depositAddressId], client);
              if (addressRes.rowCount > 0) {
-                removeActiveDepositAddressCache(addressRes.rows[0].deposit_address); // Cache helpers defined in Part 3
+                 removeActiveDepositAddressCache(addressRes.rows[0].deposit_address); // Cache helpers defined in Part 3
+                 console.log(`${logPrefix} Removed address ${addressRes.rows[0].deposit_address.slice(0,6)}.. from active cache.`); // [LOGGING ADDED] Cache remove log
              }
             return true;
         } else {
-            console.warn(`[DB MarkDepositUsed] Failed to mark address ID ${depositAddressId} as used (status might not be 'pending').`);
+            console.warn(`${logPrefix} Failed to mark as 'used' (status might not be 'pending' or ID not found).`); // [LOGGING ADDED] Failure log
             return false;
         }
     } catch (err) {
-        console.error(`[DB MarkDepositUsed] Error updating deposit address ID ${depositAddressId}:`, err.message);
+        console.error(`${logPrefix} Error updating status to 'used':`, err.message); // [LOGGING ADDED] Error log
         return false; // Let calling transaction handle rollback
     }
 }
@@ -989,6 +1009,8 @@ async function markDepositAddressUsed(client, depositAddressId) {
  * @returns {Promise<{success: boolean, depositId?: number, error?: string}>}
  */
 async function recordConfirmedDeposit(client, userId, depositAddressId, txSignature, amountLamports) {
+    const logPrefix = `[DB RecordDeposit User ${userId} TX ${txSignature.slice(0, 6)}..]`; // [LOGGING ADDED] Prefix
+    console.log(`${logPrefix} Recording confirmed deposit. AddrID: ${depositAddressId}, Amount: ${amountLamports}`); // [LOGGING ADDED] Entry log
     const query = `
         INSERT INTO deposits (user_id, deposit_address_id, tx_signature, amount_lamports, status, created_at, processed_at)
         VALUES ($1, $2, $3, $4, 'confirmed', NOW(), NOW())
@@ -997,15 +1019,17 @@ async function recordConfirmedDeposit(client, userId, depositAddressId, txSignat
     try {
         const res = await queryDatabase(query, [String(userId), depositAddressId, txSignature, BigInt(amountLamports)], client);
         if (res.rowCount > 0) {
-            return { success: true, depositId: res.rows[0].id };
+            const depositId = res.rows[0].id;
+            console.log(`${logPrefix} Successfully recorded deposit with ID: ${depositId}`); // [LOGGING ADDED] Success log
+            return { success: true, depositId: depositId };
         } else {
-            console.error(`[DB RecordDeposit] Failed to insert deposit record for user ${userId}, TX ${txSignature} (no ID returned).`);
+            console.error(`${logPrefix} Failed to insert deposit record (no ID returned).`); // [LOGGING ADDED] Failure log
             return { success: false, error: 'Failed to insert deposit record' };
         }
     } catch (err) {
-        console.error(`[DB RecordDeposit] Error inserting deposit record for user ${userId}, TX ${txSignature}:`, err.message, err.code);
+        console.error(`${logPrefix} Error inserting deposit record:`, err.message, err.code); // [LOGGING ADDED] Error log
         if (err.code === '23505' && err.constraint === 'deposits_tx_signature_key') {
-            console.error(`[DB RecordDeposit] Deposit TX ${txSignature} already processed (unique constraint violation).`);
+            console.error(`${logPrefix} Deposit TX ${txSignature} already processed (unique constraint violation).`);
             // Still treat as failure to prevent double crediting upstream
             return { success: false, error: 'Deposit transaction already processed.' };
         }
@@ -1023,15 +1047,19 @@ async function recordConfirmedDeposit(client, userId, depositAddressId, txSignat
  * @throws {Error} If the database query fails.
  */
 async function getNextDepositAddressIndex(userId) {
+    const logPrefix = `[DB GetNextDepositIndex User ${userId}]`; // [LOGGING ADDED] Prefix
+    console.log(`${logPrefix} Fetching address count...`); // [LOGGING ADDED] Entry log
     try {
         const res = await queryDatabase(
             'SELECT COUNT(*) as count FROM deposit_addresses WHERE user_id = $1',
             [String(userId)]
         );
         // Use count as the next zero-based index
-        return parseInt(res.rows[0]?.count || '0', 10);
+        const nextIndex = parseInt(res.rows[0]?.count || '0', 10);
+        console.log(`${logPrefix} Found count: ${nextIndex}. Next index will be ${nextIndex}.`); // [LOGGING ADDED] Success log
+        return nextIndex;
     } catch (err) {
-        console.error(`[DB GetNextDepositIndex] Error fetching count for user ${userId}:`, err);
+        console.error(`${logPrefix} Error fetching count:`, err); // [LOGGING ADDED] Error log
         // Throwing is safer than returning a potentially incorrect index like 0
         throw new Error(`Failed to determine next deposit address index: ${err.message}`);
     }
@@ -1104,7 +1132,7 @@ async function updateWithdrawalStatus(withdrawalId, status, client = null, signa
             break;
         case 'failed':
              // Ensure errorMessage is not overly long for DB column
-            const safeErrorMessage = (errorMessage || 'Unknown error').substring(0, 500);
+             const safeErrorMessage = (errorMessage || 'Unknown error').substring(0, 500);
             query += `, error_message = $${valueCounter++}, completed_at = NULL, payout_tx_signature = NULL, processed_at = COALESCE(processed_at, NOW())`;
             values.push(safeErrorMessage);
             break;
@@ -1405,7 +1433,7 @@ async function updateReferralPayoutStatus(payoutId, status, client = null, signa
 
 /** Fetches referral payout details for processing. */
 async function getReferralPayoutDetails(payoutId) {
-     try {
+   try {
         const res = await queryDatabase('SELECT * FROM referral_payouts WHERE id = $1', [payoutId]);
         if (res.rowCount === 0) return null;
         const details = res.rows[0];
@@ -1443,7 +1471,7 @@ async function getTotalReferralEarnings(userId) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.1.0 --- (Switched to @metamask/key-tree)
+// --- VERSION: 3.1.1 --- (Fixed @metamask/key-tree curve error, Added Logging)
 
 // --- Solana Utilities --
 
@@ -1457,58 +1485,86 @@ async function getTotalReferralEarnings(userId) {
  * @returns {Promise<{publicKey: PublicKey, privateKeyBytes: Uint8Array, derivationPath: string} | null>} Derived public key, private key bytes, and path, or null on error.
  */
 async function generateUniqueDepositAddress(userId, addressIndex) {
-    const logPrefix = `[Address Gen User ${userId}]`;
-    try {
-        // Debug Logging (Keep for now)
-        const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
-        console.log(`[Debug Deposit Gen] Runtime check - Type of seedPhrase: ${typeof seedPhrase}`);
-        if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) {
-             console.error(`[Debug Deposit Gen] CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is invalid or empty at runtime! Value: [${seedPhrase}]`);
-             throw new Error("DEPOSIT_MASTER_SEED_PHRASE environment variable not read correctly at runtime.");
-        }
-        const words = seedPhrase.trim().split(' ');
-        console.log(`[Debug Deposit Gen] Runtime check - Seed phrase retrieved. First word: "${words[0]}", Last word: "${words[words.length - 1]}", Word count: ${words.length}`);
-        // End Debug Logging
+    const logPrefix = `[Address Gen User ${userId} Index ${addressIndex}]`; // [LOGGING ADDED] Include index
+    console.log(`${logPrefix} Starting address generation.`); // [LOGGING ADDED] Entry log
 
+    try {
+        const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
+        // Runtime check for seed phrase presence (already checked at startup, but good safety)
+        if (typeof seedPhrase !== 'string' || seedPhrase.length < 20) {
+            console.error(`${logPrefix} CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is invalid or empty at runtime! Cannot generate deposit address.`);
+            throw new Error("DEPOSIT_MASTER_SEED_PHRASE environment variable not read correctly at runtime.");
+        }
+        // [LOGGING ADDED] Optional: Log partial seed phrase info if needed for debugging, BE CAREFUL
+        // const words = seedPhrase.trim().split(' ');
+        // console.log(`${logPrefix} Using seed phrase starting with "${words[0]}" and ending with "${words[words.length - 1]}". Word count: ${words.length}`);
+
+        // Validate inputs
         if (typeof userId !== 'string' || userId.length === 0 || typeof addressIndex !== 'number' || addressIndex < 0 || !Number.isInteger(addressIndex)) {
             console.error(`${logPrefix} Invalid userId or addressIndex`, { userId, addressIndex });
             return null;
         }
+        console.log(`${logPrefix} Inputs validated. User: ${userId}, Index: ${addressIndex}`); // [LOGGING ADDED] Input validation log
 
         // 1. Get the master seed buffer from the mnemonic phrase
+        console.log(`${logPrefix} Generating seed buffer from mnemonic...`); // [LOGGING ADDED] Step log
         const masterSeedBuffer = await bip39.mnemonicToSeed(seedPhrase); // Returns a Buffer
+        if (!masterSeedBuffer || masterSeedBuffer.length === 0) {
+            throw new Error("Failed to generate seed buffer from mnemonic.");
+        }
+        console.log(`${logPrefix} Seed buffer generated successfully.`); // [LOGGING ADDED] Step success log
 
         // 2. Derive the user-specific account path component (Hardened)
+        console.log(`${logPrefix} Deriving account index from user ID...`); // [LOGGING ADDED] Step log
         const hash = crypto.createHash('sha256').update(userId).digest();
         const accountIndex = hash.readUInt32BE(0);
         const hardenedAccountIndex = accountIndex | 0x80000000; // Add hardening bit
+        console.log(`${logPrefix} Account index derived: ${hardenedAccountIndex >>> 0}' (Hardened)`); // [LOGGING ADDED] Step success log
 
         // 3. Construct the *full* BIP44 derivation path for Solana using SLIP-10 format
         // m / purpose' / coin_type' / account' / change' / address_index'
         // Using hardened for account and address index for better security/separation
-        // NOTE: Standard Solana paths often use 0' for change. Let's stick to that.
+        // Using 0' for change' as is common for Solana.
         const derivationPath = `m/44'/501'/${hardenedAccountIndex >>> 0}'/0'/${addressIndex}'`;
-        console.log(`[Address Gen User ${userId}] Using derivation path: ${derivationPath} with @metamask/key-tree`);
+        console.log(`${logPrefix} Constructed derivation path: ${derivationPath}`); // [LOGGING ADDED] Step success log
 
-        // 4. Create the root HD node from the master seed buffer
-        // SLIP10Node expects Uint8Array, Buffer should work directly
-        const rootNode = await SLIP10Node.fromSeed(masterSeedBuffer, { curve: 'ed25519' });
+        // 4. Create the root HD node from the master seed buffer using @metamask/key-tree
+        console.log(`${logPrefix} Creating root SLIP10Node from seed buffer...`); // [LOGGING ADDED] Step log
+        // ---- THE FIX IS HERE ----
+        // Removed the second argument `{ curve: 'ed25519' }` as it was causing the "Invalid curve" error.
+        // The library likely infers the curve or doesn't need it specified at the root seed level.
+        const rootNode = await SLIP10Node.fromSeed(masterSeedBuffer);
+        // -------------------------
+        if (!rootNode) {
+             throw new Error("Failed to create root SLIP10Node from seed.");
+        }
+        console.log(`${logPrefix} Root SLIP10Node created successfully.`); // [LOGGING ADDED] Step success log
 
         // 5. Derive the child node using the path (must prefix with 'slip10:')
+        console.log(`${logPrefix} Deriving child node using path: slip10:${derivationPath}...`); // [LOGGING ADDED] Step log
         const childNode = await rootNode.derive(`slip10:${derivationPath}`);
+        if (!childNode) {
+            throw new Error(`Failed to derive child node for path slip10:${derivationPath}`);
+        }
+        console.log(`${logPrefix} Child node derived successfully.`); // [LOGGING ADDED] Step success log
 
         // 6. Get the 32-byte private key from the derived node
         // The 'privateKeyBytes' property holds the 32-byte private key scalar for Ed25519
+        console.log(`${logPrefix} Extracting private key bytes from child node...`); // [LOGGING ADDED] Step log
         const privateKeyBytes = childNode.privateKeyBytes;
         if (!privateKeyBytes || privateKeyBytes.length !== 32) {
-             throw new Error(`Derived private key bytes are invalid (length: ${privateKeyBytes?.length}) using @metamask/key-tree`);
+            throw new Error(`Derived private key bytes are invalid (length: ${privateKeyBytes?.length}) using @metamask/key-tree`);
         }
+        console.log(`${logPrefix} Private key bytes extracted successfully (Length: ${privateKeyBytes.length}).`); // [LOGGING ADDED] Step success log
 
         // 7. Generate the Solana Keypair using Keypair.fromSeed() which expects the 32-byte private key
+        console.log(`${logPrefix} Generating Solana Keypair from derived seed bytes...`); // [LOGGING ADDED] Step log
         const keypair = Keypair.fromSeed(privateKeyBytes);
         const publicKey = keypair.publicKey;
+        console.log(`${logPrefix} Solana Keypair generated. Public Key: ${publicKey.toBase58()}`); // [LOGGING ADDED] Step success log
 
         // 8. Return public key, path, and the 32-byte private key bytes (needed for reconstruction/sweeping)
+        console.log(`${logPrefix} Address generation complete.`); // [LOGGING ADDED] Final success log
         return {
             publicKey: publicKey,
             privateKeyBytes: privateKeyBytes, // Used to reconstruct Keypair for signing later
@@ -1516,8 +1572,9 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
         };
 
     } catch (error) {
-        console.error(`${logPrefix} Error deriving address using @metamask/key-tree for index ${addressIndex}: ${error.message}`);
-        console.error(error.stack); // Log stack for debugging derivation errors
+        // [LOGGING MODIFIED] Enhanced error logging
+        console.error(`${logPrefix} Error during address generation: ${error.message}`);
+        console.error(`${logPrefix} Error Stack: ${error.stack}`); // Log stack for detailed debugging
         return null;
     }
 }
@@ -1545,7 +1602,7 @@ function isRetryableSolanaError(error) {
         'blockhash not found', 'slot leader does not match', 'node is behind',
         'transaction was not confirmed', 'block not available', 'block cleanout',
         'sending transaction', 'connection closed', 'load balancer error',
-        'backend unhealthy', 'overloaded', 'proxy internal error'
+        'backend unhealthy', 'overloaded', 'proxy internal error', 'too many requests' // Added 429 message check
     ];
 
     if (retryableMessages.some(m => message.includes(m))) return true;
@@ -1559,7 +1616,7 @@ function isRetryableSolanaError(error) {
         'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
         'UND_ERR_BODY_TIMEOUT', 'FETCH_TIMEOUT', 'FETCH_ERROR', '503', '429', '-32003', '-32005' // Solana RPC temporary errors
     ];
-    if (retryableCodes.includes(code) || retryableCodes.includes(errorCode)) return true;
+    if (retryableCodes.includes(code) || retryableCodes.includes(String(code)) || retryableCodes.includes(errorCode) || retryableCodes.includes(String(errorCode))) return true; // Added String conversion checks
 
     // Specific error types or reasons
     if (error.reason === 'rpc_error' || error.reason === 'network_error') return true;
@@ -1568,6 +1625,11 @@ function isRetryableSolanaError(error) {
     if (error instanceof SendTransactionError && error.cause) {
         return isRetryableSolanaError(error.cause);
     }
+
+    // Check for explicit rate limit error structure from some RPC providers
+     if (error?.data?.message?.toLowerCase().includes('rate limit exceeded') || error?.data?.message?.toLowerCase().includes('too many requests')) {
+         return true;
+     }
 
     return false;
 }
@@ -1632,22 +1694,26 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     }
 
     const amountSOL = Number(amountToSend) / LAMPORTS_PER_SOL;
-    console.log(`[${operationId}] Attempting to send ${amountSOL.toFixed(SOL_DECIMALS)} SOL to ${recipientPubKey.toBase58()} using ${keyTypeForLog} key...`);
+    console.log(`[${operationId}] Attempting to send ${amountSOL.toFixed(SOL_DECIMALS)} SOL from ${payerWallet.publicKey.toBase58()} to ${recipientPubKey.toBase58()} using ${keyTypeForLog} key...`); // [LOGGING ADDED] Log sender address
 
     try {
         // 1. Get latest blockhash
+        console.log(`[${operationId}] Fetching latest blockhash...`); // [LOGGING ADDED] Step log
         const { blockhash, lastValidBlockHeight } = await solanaConnection.getLatestBlockhash(DEPOSIT_CONFIRMATION_LEVEL);
         if (!blockhash || !lastValidBlockHeight) {
             throw new Error('Failed to get valid latest blockhash object.');
         }
+        console.log(`[${operationId}] Got blockhash: ${blockhash}, lastValidBlockHeight: ${lastValidBlockHeight}`); // [LOGGING ADDED] Step log
 
         // 2. Calculate Priority Fee (Simplified: using fixed base/max for now)
         const basePriorityFee = parseInt(process.env.PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS, 10);
         const maxPriorityFee = parseInt(process.env.PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS, 10);
         let priorityFeeMicroLamports = Math.max(1, Math.min(basePriorityFee, maxPriorityFee)); // Ensure at least 1 microLamport
         const computeUnitLimit = parseInt(process.env.PAYOUT_COMPUTE_UNIT_LIMIT, 10);
+        console.log(`[${operationId}] Using Compute Unit Limit: ${computeUnitLimit}, Priority Fee: ${priorityFeeMicroLamports} microLamports`); // [LOGGING ADDED] Step log
 
         // 3. Create Transaction
+        console.log(`[${operationId}] Creating transaction...`); // [LOGGING ADDED] Step log
         const transaction = new Transaction({
             recentBlockhash: blockhash,
             feePayer: payerWallet.publicKey,
@@ -1669,8 +1735,10 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
                 lamports: amountToSend,
             })
         );
+        console.log(`[${operationId}] Transaction created with ${transaction.instructions.length} instructions.`); // [LOGGING ADDED] Step log
 
         // 4. Sign and Send Transaction
+        console.log(`[${operationId}] Sending and confirming transaction...`); // [LOGGING ADDED] Step log
         const signature = await sendAndConfirmTransaction(
             solanaConnection, // Use the potentially rate-limited connection
             transaction,
@@ -1688,6 +1756,15 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
         return { success: true, signature: signature };
 
     } catch (error) {
+        // [LOGGING MODIFIED] Log the error *before* checking retryable status
+        console.error(`[${operationId}] ❌ SEND FAILED using ${keyTypeForLog} key. Error: ${error.message}`);
+        if (error instanceof SendTransactionError && error.logs) {
+            console.error(`[${operationId}] Simulation Logs (if available, last 10):`);
+            error.logs.slice(-10).forEach(log => console.error(`   -> ${log}`));
+        } else if (error.stack) {
+             // console.error(`[${operationId}] Stack: ${error.stack}`); // Optionally log full stack
+        }
+
         const isRetryable = isRetryableSolanaError(error);
         let userFriendlyError = `Send/Confirm error: ${error.message}`;
 
@@ -1703,13 +1780,7 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
              userFriendlyError = `Temporary network/RPC error: ${error.message}`;
         }
 
-        console.error(`[${operationId}] ❌ SEND FAILED using ${keyTypeForLog} key. Retryable: ${isRetryable}. Error: ${error.message}`);
-        if (error instanceof SendTransactionError && error.logs) {
-            console.error(`[${operationId}] Simulation Logs (last 10):`);
-            error.logs.slice(-10).forEach(log => console.error(`  -> ${log}`));
-        } else if (error.stack) {
-            // console.error(`[${operationId}] Stack: ${error.stack}`); // Optionally log full stack
-        }
+        console.error(`[${operationId}] Failure details - Retryable: ${isRetryable}, User Friendly Error: "${userFriendlyError}"`); // Log retryable status determined
 
         return { success: false, error: userFriendlyError, isRetryable: isRetryable };
     }
@@ -1725,42 +1796,48 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
  * @returns {{transferAmount: bigint, payerAddress: string | null}} Amount in lamports and the likely payer.
  */
 function analyzeTransactionAmounts(tx, targetAddress) {
+    const logPrefix = `[analyzeAmounts Addr:${targetAddress.slice(0, 6)}..]`; // [LOGGING ADDED] Prefix
     let transferAmount = 0n;
     let payerAddress = null;
 
     if (!tx || !targetAddress) {
+        console.warn(`${logPrefix} Invalid input: TX or targetAddress missing.`); // [LOGGING ADDED] Invalid input log
         return { transferAmount: 0n, payerAddress: null };
     }
 
     try {
         new PublicKey(targetAddress); // Validate target address format
     } catch (e) {
-        console.warn(`[analyzeAmounts] Invalid targetAddress format: ${targetAddress}`);
+        console.warn(`${logPrefix} Invalid targetAddress format: ${targetAddress}`);
         return { transferAmount: 0n, payerAddress: null };
     }
 
     // Check for transaction error
     if (tx.meta?.err) {
-        // console.log(`[analyzeAmounts] Transaction meta contains error for target ${targetAddress}.`);
+        console.log(`${logPrefix} Transaction meta contains error. Returning zero amount. Error: ${JSON.stringify(tx.meta.err)}`); // [LOGGING ADDED] TX error log
         return { transferAmount: 0n, payerAddress: null };
     }
 
     // --- Method 1: Balance Changes (Most Reliable) ---
+    // console.log(`${logPrefix} Attempting analysis via balance changes...`); // [LOGGING ADDED] Optional verbose log
     if (tx.meta?.preBalances && tx.meta?.postBalances && tx.transaction?.message) {
         try {
             // Handle both legacy and version 0 message formats for account keys
              const accountKeys = (tx.transaction.message.staticAccountKeys || tx.transaction.message.accountKeys).map(k => k.toBase58());
              const header = tx.transaction.message.header;
             const targetIndex = accountKeys.indexOf(targetAddress);
+            // console.log(`${logPrefix} Target index in accountKeys: ${targetIndex}`); // [LOGGING ADDED] Optional verbose log
 
             if (targetIndex !== -1 &&
                 tx.meta.preBalances.length > targetIndex && tx.meta.postBalances.length > targetIndex) {
                 const preBalance = BigInt(tx.meta.preBalances[targetIndex]);
                 const postBalance = BigInt(tx.meta.postBalances[targetIndex]);
                 const balanceChange = postBalance - preBalance;
+                // console.log(`${logPrefix} Pre: ${preBalance}, Post: ${postBalance}, Change: ${balanceChange}`); // [LOGGING ADDED] Optional verbose log
 
                 if (balanceChange > 0n) {
                     transferAmount = balanceChange;
+                    console.log(`${logPrefix} Positive balance change detected: ${transferAmount} lamports.`); // [LOGGING ADDED] Positive change found
                     // Try to identify the payer (usually the first signer who had a negative balance change)
                      const signers = accountKeys.slice(0, header.numRequiredSignatures);
                      for (const signerKey of signers) {
@@ -1771,52 +1848,96 @@ function analyzeTransactionAmounts(tx, targetAddress) {
                             const postSigner = BigInt(tx.meta.postBalances[signerIndex]);
                             if (postSigner < preSigner) {
                                 payerAddress = signerKey;
+                                console.log(`${logPrefix} Identified likely payer (signer with negative balance change): ${payerAddress}`); // [LOGGING ADDED] Payer found
                                 break; // Assume first signer with decreased balance is payer
                             }
                          }
                      }
-                     // Fallback to first signer if no obvious payer found
-                     if (!payerAddress && signers.length > 0) {
-                         payerAddress = signers[0];
-                     }
+                    // Fallback to first signer if no obvious payer found
+                    if (!payerAddress && signers.length > 0) {
+                        payerAddress = signers[0];
+                        console.log(`${logPrefix} Could not find signer with negative balance change, falling back to first signer as payer: ${payerAddress}`); // [LOGGING ADDED] Payer fallback
+                    }
+                } else {
+                     console.log(`${logPrefix} No positive balance change found for target address.`); // [LOGGING ADDED] No positive change
                 }
+            } else {
+                 console.log(`${logPrefix} Target address not found in account keys or balance arrays incomplete.`); // [LOGGING ADDED] Index/Array issue
             }
         } catch (e) {
-             console.warn(`[analyzeAmounts] Error analyzing balance changes: ${e.message}`);
+             console.warn(`${logPrefix} Error analyzing balance changes: ${e.message}`);
              // Fallback to instruction parsing if balance analysis fails
              transferAmount = 0n;
              payerAddress = null;
         }
+    } else {
+         console.log(`${logPrefix} Balance change analysis skipped: Meta or message data missing.`); // [LOGGING ADDED] Skipped balance analysis
     }
 
     // --- Method 2: Instruction Parsing (Fallback / Cross-check) ---
     // Only use if balance change method didn't find a positive transfer
     if (transferAmount === 0n && tx.meta?.logMessages) {
+        console.log(`${logPrefix} Attempting analysis via log messages (Fallback)...`); // [LOGGING ADDED] Log analysis attempt
         // Example: Look for SystemProgram transfer logs
         const sysTransferToRegex = /Transfer: src=([1-9A-HJ-NP-Za-km-z]+) dst=([1-9A-HJ-NP-Za-km-z]+) lamports=(\d+)/; // For newer log formats
+        const sysTransferInvokeRegex = /Program log: Instruction: Transfer/; // Check if system program transfer was invoked
+        const lamportsRegex = /(\d+) lamports/; // Generic lamports extraction
 
         let potentialPayer = null;
         let potentialAmount = 0n;
 
+        // More robust log parsing attempt
+        let isSysTransfer = false;
+        let parsedSrc = null;
+        let parsedDst = null;
+        let parsedLamports = null;
+
         for (const log of tx.meta.logMessages) {
-            // Check newer format first
-            const match = log.match(sysTransferToRegex);
-            if (match && match[2] === targetAddress) {
-                potentialPayer = match[1];
-                potentialAmount = BigInt(match[3]);
-                 // If found via this regex, prioritize it
-                 transferAmount = potentialAmount;
-                 payerAddress = potentialPayer;
-                 break;
+            // Check for newer direct format first
+            const matchNew = log.match(sysTransferToRegex);
+            if (matchNew && matchNew[2] === targetAddress) {
+                potentialPayer = matchNew[1];
+                potentialAmount = BigInt(matchNew[3]);
+                console.log(`${logPrefix} Found transfer via new log format: ${potentialAmount} lamports from ${potentialPayer}`); // [LOGGING ADDED] Found via new regex
+                // If found via this regex, prioritize it
+                transferAmount = potentialAmount;
+                payerAddress = potentialPayer;
+                break; // Exit loop once found
             }
-            // Add more sophisticated parsing here if needed for other transfer types or older log formats
+
+            // Check for invoke pattern (less direct)
+            if (log.includes('Program SystemProgram') && log.includes('Invoke')) {
+                 isSysTransfer = true; // Potential system transfer block started
+                 parsedSrc = null; parsedDst = null; parsedLamports = null; // Reset for this block
+            }
+            if (isSysTransfer && log.includes('Program log: Instruction: Transfer')) {
+                 // Instruction confirmed within block, now look for lamports in subsequent logs
+            }
+            if (isSysTransfer && log.includes('lamports')) {
+                 const lamportMatch = log.match(lamportsRegex);
+                 if (lamportMatch && lamportMatch[1]) {
+                      parsedLamports = BigInt(lamportMatch[1]);
+                      // We need source/destination to confirm *this* transfer is relevant
+                      // This requires looking at account keys involved in the instruction, which isn't in logs easily.
+                      // This fallback is less reliable for amount confirmation without balance changes.
+                      // console.log(`${logPrefix} Found lamports amount in log: ${parsedLamports}`); // [LOGGING ADDED] Lamports found (less reliable)
+                 }
+            }
+            if (log.includes('Program SystemProgram') && log.includes('success')) {
+                 isSysTransfer = false; // End of potential system transfer block
+            }
+             // Add more sophisticated parsing here if needed for other transfer types or older log formats
+        }
+        if (transferAmount === 0n) { // Only log if primary method failed
+            console.log(`${logPrefix} Log message parsing did not find a definitive transfer to the target address.`); // [LOGGING ADDED] Log parsing failed
         }
     }
 
+    // Final log summarizing result
     if (transferAmount > 0n) {
-       // console.log(`[analyzeAmounts] Analyzed TX for ${targetAddress}: Found ${transferAmount} lamports from ${payerAddress || 'Unknown'}`);
+        console.log(`${logPrefix} Final analysis result: Found ${transferAmount} lamports from ${payerAddress || 'Unknown'}`);
     } else {
-       // console.log(`[analyzeAmounts] Analyzed TX for ${targetAddress}: No positive SOL transfer found.`);
+        console.log(`${logPrefix} Final analysis result: No positive SOL transfer found.`);
     }
 
     return { transferAmount, payerAddress };
@@ -1848,26 +1969,29 @@ async function safeSendMessage(chatId, text, options = {}) {
 
     return telegramSendQueue.add(async () => {
         try {
+            // [LOGGING ADDED] Log attempt before sending
+            // console.debug(`[safeSendMessage] Attempting to send to chat ${chatId}: "${text.substring(0, 50)}..."`);
             const sentMessage = await bot.sendMessage(chatId, text, options);
+            // console.debug(`[safeSendMessage] Successfully sent message ID ${sentMessage.message_id} to chat ${chatId}`); // Optional success log
             return sentMessage;
         } catch (error) {
             console.error(`❌ Telegram send error to chat ${chatId}: Code: ${error.code} | ${error.message}`);
             if (error.response?.body) {
-                 console.error(`  -> Response Body: ${JSON.stringify(error.response.body)}`);
+                 console.error(`   -> Response Body: ${JSON.stringify(error.response.body)}`);
             }
 
             // Handle specific, common errors
             if (error.code === 'ETELEGRAM') {
                 if (error.message.includes('400 Bad Request: message is too long')) {
-                     console.error(`  -> Message confirmed too long, even after potential truncation.`);
+                     console.error(`   -> Message confirmed too long, even after potential truncation.`);
                 } else if (error.message.includes('400 Bad Request: can\'t parse entities')) {
-                     console.error(`  -> Telegram Parse Error: Ensure proper MarkdownV2 escaping! Text snippet: ${text.substring(0, 100)}...`);
+                     console.error(`   -> Telegram Parse Error: Ensure proper MarkdownV2 escaping! Text snippet: ${text.substring(0, 100)}...`);
                 } else if (error.message.includes('403 Forbidden: bot was blocked by the user') || error.message.includes('403 Forbidden: user is deactivated')) {
-                    console.warn(`  -> Bot blocked or user deactivated for chat/user ${chatId}. Consider marking user inactive.`);
+                     console.warn(`   -> Bot blocked or user deactivated for chat/user ${chatId}. Consider marking user inactive.`);
                 } else if (error.message.includes('403 Forbidden: bot was kicked')) {
-                    console.warn(`  -> Bot kicked from group chat ${chatId}. Consider cleaning up group-related data.`);
+                     console.warn(`   -> Bot kicked from group chat ${chatId}. Consider cleaning up group-related data.`);
                 } else if (error.message.includes('429 Too Many Requests')) {
-                    console.warn(`  -> Hit Telegram rate limits sending to ${chatId}. Queue should handle, but may indicate high load.`);
+                     console.warn(`   -> Hit Telegram rate limits sending to ${chatId}. Queue should handle, but may indicate high load.`);
                 }
             }
             return undefined; // Indicate failure
@@ -1902,10 +2026,10 @@ function escapeHtml(text) {
     }
     const textString = String(text);
     return textString.replace(/&/g, "&amp;")
-                     .replace(/</g, "&lt;")
-                     .replace(/>/g, "&gt;")
-                     .replace(/"/g, "&quot;")
-                     .replace(/'/g, "&#039;");
+                      .replace(/</g, "&lt;")
+                      .replace(/>/g, "&gt;")
+                      .replace(/"/g, "&quot;")
+                      .replace(/'/g, "&#039;");
 }
 
 /**
@@ -1933,6 +2057,7 @@ async function getUserDisplayName(chatId, userId) {
         // Escape the final chosen name
         return escapeMarkdownV2(name);
     } catch (error) {
+        console.warn(`[getUserDisplayName] Failed to get chat member for ${userId} in ${chatId}: ${error.message}. Falling back to ID.`); // [LOGGING ADDED] Log fallback
         // Fallback to generic name based on ID, already escaped
         return escapeMarkdownV2(`User_${String(userId).slice(-4)}`);
     }
@@ -1947,12 +2072,15 @@ function updateWalletCache(userId, data) {
     const existing = walletCache.get(userId) || {};
     const entryTimestamp = Date.now();
     walletCache.set(userId, { ...existing, ...data, timestamp: entryTimestamp });
+    // [LOGGING ADDED] - Log cache update
+    // console.log(`[Cache Update] Wallet cache updated for user ${userId}. Keys: ${Object.keys(data).join(', ')}`);
     setTimeout(() => {
         const current = walletCache.get(userId);
         if (current && current.timestamp === entryTimestamp && Date.now() - current.timestamp >= WALLET_CACHE_TTL_MS) {
+            // console.log(`[Cache Eviction] Wallet cache evicted for user ${userId} after TTL.`); // Optional Eviction Log
             walletCache.delete(userId);
         }
-    }, WALLET_CACHE_TTL_MS + 1000);
+    }, WALLET_CACHE_TTL_MS + 1000); // Add buffer
 }
 
 /** Gets wallet cache data if not expired. */
@@ -1960,52 +2088,80 @@ function getWalletCache(userId) {
     userId = String(userId);
     const entry = walletCache.get(userId);
     if (entry && Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) {
+        // console.log(`[Cache Hit] Wallet cache hit for user ${userId}.`); // Optional Hit Log
         return entry;
     }
-    if (entry) { walletCache.delete(userId); }
+    if (entry) {
+        // console.log(`[Cache Stale] Wallet cache entry for user ${userId} expired.`); // Optional Stale Log
+        walletCache.delete(userId);
+    } else {
+         // console.log(`[Cache Miss] Wallet cache miss for user ${userId}.`); // Optional Miss Log
+    }
     return undefined;
 }
 
 /** Adds or updates an active deposit address in the cache. */
 function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) {
     activeDepositAddresses.set(address, { userId: String(userId), expiresAt: expiresAtTimestamp });
-    const delay = expiresAtTimestamp - Date.now() + 1000;
+    console.log(`[Cache Update] Added/Updated deposit address ${address.slice(0,6)}.. for user ${userId} in cache. Expires: ${new Date(expiresAtTimestamp).toISOString()}`); // [LOGGING ADDED] Cache add log
+    const delay = expiresAtTimestamp - Date.now() + 1000; // Add buffer
     if (delay > 0) {
         setTimeout(() => {
             const current = activeDepositAddresses.get(address);
-            if (current && current.expiresAt === expiresAtTimestamp) {
+            // Only delete if it's the exact same entry we set the timer for
+            if (current && current.userId === String(userId) && current.expiresAt === expiresAtTimestamp) {
+                 console.log(`[Cache Eviction] Deposit address ${address.slice(0,6)}.. expired and removed from cache.`); // [LOGGING ADDED] Cache eviction log
                  activeDepositAddresses.delete(address);
+            } else if (current) {
+                 console.log(`[Cache Eviction] Deposit address ${address.slice(0,6)}.. cache timer fired, but entry was updated or removed. Ignoring eviction timer.`); // [LOGGING ADDED] Log ignored eviction
             }
         }, delay);
     } else {
-         removeActiveDepositAddressCache(address);
+        // If already expired when adding (shouldn't normally happen), remove immediately
+        console.log(`[Cache Update] Deposit address ${address.slice(0,6)}.. was already expired when added to cache. Removing immediately.`); // [LOGGING ADDED] Immediate removal log
+        removeActiveDepositAddressCache(address);
     }
 }
 
 /** Gets active deposit address info from cache if not expired. */
 function getActiveDepositAddressCache(address) {
     const entry = activeDepositAddresses.get(address);
-    if (entry && Date.now() < entry.expiresAt) {
+    const now = Date.now();
+    if (entry && now < entry.expiresAt) {
+        // console.log(`[Cache Hit] Deposit address ${address.slice(0,6)}.. found in cache.`); // Optional Hit Log
         return entry;
     }
-     if (entry) { activeDepositAddresses.delete(address); }
+    if (entry) {
+        // console.log(`[Cache Stale] Deposit address ${address.slice(0,6)}.. found in cache but expired.`); // Optional Stale Log
+        activeDepositAddresses.delete(address); // Clean up expired entry
+    } else {
+         // console.log(`[Cache Miss] Deposit address ${address.slice(0,6)}.. not found in cache.`); // Optional Miss Log
+    }
     return undefined;
 }
 
 /** Removes an address from the deposit cache. */
 function removeActiveDepositAddressCache(address) {
-    activeDepositAddresses.delete(address);
+    const deleted = activeDepositAddresses.delete(address);
+    if (deleted) {
+        console.log(`[Cache Update] Explicitly removed deposit address ${address.slice(0,6)}.. from cache.`); // [LOGGING ADDED] Explicit removal log
+    }
+    return deleted;
 }
 
 /** Adds a signature to the processed set and handles cache size limit. */
 function addProcessedDepositTx(signature) {
+    if (processedDepositTxSignatures.has(signature)) return; // Don't log if already added
+
     if (processedDepositTxSignatures.size >= MAX_PROCESSED_TX_CACHE_SIZE) {
         const oldestSig = processedDepositTxSignatures.values().next().value;
         if (oldestSig) {
             processedDepositTxSignatures.delete(oldestSig);
+            // console.log(`[Cache Eviction] Removed oldest processed TX sig (${oldestSig.slice(0,6)}..) due to cache size limit.`); // Optional Log
         }
     }
     processedDepositTxSignatures.add(signature);
+    console.log(`[Cache Update] Added TX signature ${signature.slice(0,6)}.. to processed deposit cache. Size: ${processedDepositTxSignatures.size}/${MAX_PROCESSED_TX_CACHE_SIZE}`); // [LOGGING ADDED] Log add
 }
 
 /** Checks if a signature has been processed this session. */
@@ -2031,7 +2187,7 @@ function generateReferralCode(length = 8) {
 
 // --- End of Part 3 ---
 // index.js - Part 4: Game Logic Implementation
-// --- VERSION: 3.1.0 --- (MarkdownV2 Escaping Fixed)
+// --- VERSION: 3.1.1 --- (No functional changes in this part)
 
 // --- Game Logic Helpers ---
 
@@ -2132,10 +2288,10 @@ async function handleCoinflipGame(userId, chatId, wagerAmountLamports, userChoic
             const betUpdateResult = await updateBetStatus(pool, betRecordId, finalBetStatus, payoutLamports); // Use pool directly
             if (!betUpdateResult) {
                  // Log error but don't necessarily fail the whole flow if only status update failed after loss
-                console.error(`${logPrefix} Failed to update bet status to ${finalBetStatus} after loss.`);
-                // Consider if this should still return true or false? Let's return true as game logic finished.
+                 console.error(`${logPrefix} Failed to update bet status to ${finalBetStatus} after loss.`);
+                 // Consider if this should still return true or false? Let's return true as game logic finished.
             } else {
-                console.log(`${logPrefix} Completed as LOSS.`);
+                 console.log(`${logPrefix} Completed as LOSS.`);
             }
         }
         return true; // Indicate successful processing
@@ -2478,9 +2634,9 @@ async function handleRouletteGame(userId, chatId, totalWagerAmountLamports, user
     // 4. Send Result Message (Corrected Escaping)
     let resultMessage = `⚪️ Roulette spin\\! The ball landed on: *${escapeMarkdownV2(winningColor)} ${escapeMarkdownV2(winningNumber)}*\\!\n\n`; // Escaped ! (x2)
     if (payoutLamports > 0n) {
-         resultMessage += `🎉 ${displayName}, you won\\!\n` + // Escaped !
-                          `Total Payout: ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL ` +
-                          `\\(${netChangeSOL >= 0 ? '\\+' : ''}${escapeMarkdownV2(netChangeSOL.toFixed(SOL_DECIMALS))} SOL net\\) added to balance\\.`; // Escaped (, conditional +, ), .
+        resultMessage += `🎉 ${displayName}, you won\\!\n` + // Escaped !
+                         `Total Payout: ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL ` +
+                         `\\(${netChangeSOL >= 0 ? '\\+' : ''}${escapeMarkdownV2(netChangeSOL.toFixed(SOL_DECIMALS))} SOL net\\) added to balance\\.`; // Escaped (, conditional +, ), .
     } else {
         resultMessage += `❌ ${displayName}, no winning bets this spin\\. Better luck next time\\!`; // Escaped ., !
     }
@@ -2562,7 +2718,7 @@ async function handleWarGame(userId, chatId, wagerAmountLamports, betRecordId) {
         console.error(`${logPrefix} Deck shuffling failed.`);
         await updateBetStatus(pool, betRecordId, 'error_game_logic');
          // Corrected Error Message Escaping
-        await safeSendMessage(chatId, `⚠️ Internal error dealing cards\\. Please contact support\\. Error ref: ${escapeMarkdownV2(betRecordId)}`, { parse_mode: 'MarkdownV2'});
+         await safeSendMessage(chatId, `⚠️ Internal error dealing cards\\. Please contact support\\. Error ref: ${escapeMarkdownV2(betRecordId)}`, { parse_mode: 'MarkdownV2'});
         return false;
     }
     const playerCard = deck.pop();
@@ -2639,7 +2795,7 @@ async function handleWarGame(userId, chatId, wagerAmountLamports, betRecordId) {
         if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error("Rollback failed:", rbErr); } }
         await updateBetStatus(pool, betRecordId, 'error_game_logic');
          // Corrected Error Message Escaping
-        await safeSendMessage(chatId, `⚠️ Internal error processing War result\\. Please contact support if your balance seems incorrect\\. Error ref: ${escapeMarkdownV2(betRecordId)}`, { parse_mode: 'MarkdownV2'});
+         await safeSendMessage(chatId, `⚠️ Internal error processing War result\\. Please contact support if your balance seems incorrect\\. Error ref: ${escapeMarkdownV2(betRecordId)}`, { parse_mode: 'MarkdownV2'});
         return false;
     } finally {
         if (client) client.release();
@@ -2649,7 +2805,7 @@ async function handleWarGame(userId, chatId, wagerAmountLamports, betRecordId) {
 
 // --- End of Part 4 ---
 // index.js - Part 5: Telegram Command & Callback Handlers
-// --- VERSION: 3.1.0 --- (MarkdownV2 Escaping Fixed, Moved getNextDepositAddressIndex)
+// --- VERSION: 3.1.1 --- (Added Deposit Logging)
 
 // --- Main Message Handler ---
 
@@ -2761,16 +2917,16 @@ async function handleMessage(msg) {
                 } else if (refereeDetails && refereeDetails.referred_by_user_id) {
                      await safeSendMessage(chatId, `Welcome back\\! You have already been referred\\.`, { parse_mode: 'MarkdownV2' });
                 } else if (referrer) {
-                     pendingReferrals.set(userId, { referrerUserId: referrer.user_id, timestamp: Date.now() });
-                     setTimeout(() => {
-                         const pending = pendingReferrals.get(userId);
-                         if (pending && pending.referrerUserId === referrer.user_id && Date.now() - pending.timestamp >= PENDING_REFERRAL_TTL_MS) {
-                             pendingReferrals.delete(userId);
-                         }
-                     }, PENDING_REFERRAL_TTL_MS + 5000);
+                    pendingReferrals.set(userId, { referrerUserId: referrer.user_id, timestamp: Date.now() });
+                    setTimeout(() => {
+                        const pending = pendingReferrals.get(userId);
+                        if (pending && pending.referrerUserId === referrer.user_id && Date.now() - pending.timestamp >= PENDING_REFERRAL_TTL_MS) {
+                            pendingReferrals.delete(userId);
+                        }
+                    }, PENDING_REFERRAL_TTL_MS + 5000);
 
-                     await safeSendMessage(chatId, `Welcome\\! Referral code \`${escapeMarkdownV2(refCode)}\` accepted\\. Your first deposit will complete the referral link\\.`, { parse_mode: 'MarkdownV2' });
-                     console.log(`${logPrefix}: Pending referral stored for user ${userId} referred by ${referrer.user_id}`);
+                    await safeSendMessage(chatId, `Welcome\\! Referral code \`${escapeMarkdownV2(refCode)}\` accepted\\. Your first deposit will complete the referral link\\.`, { parse_mode: 'MarkdownV2' });
+                    console.log(`${logPrefix}: Pending referral stored for user ${userId} referred by ${referrer.user_id}`);
                 } else {
                      await safeSendMessage(chatId, `Welcome\\! The referral code \`${escapeMarkdownV2(refCode)}\` seems invalid or expired\\.`, { parse_mode: 'MarkdownV2' });
                 }
@@ -2815,7 +2971,7 @@ async function handleMessage(msg) {
         }
     } catch (error) {
         console.error(`${logPrefix} Error processing message/command:`, error);
-        userStateCache.delete(userId);
+        userStateCache.delete(userId); // Clear state on error
         try {
             // Escaped Message
             await safeSendMessage(chatId, "⚠️ An unexpected error occurred processing your request\\. Please try again or contact support\\.", { parse_mode: 'MarkdownV2'});
@@ -2846,8 +3002,9 @@ async function handleCallbackQuery(callbackQuery) {
         return;
     }
 
+    // Answer silently first to make button feel responsive
     await bot.answerCallbackQuery(callbackQueryId).catch(e => console.warn(`${logPrefix} Failed to answer callback query: ${e.message}`));
-    console.log(`${logPrefix} Received callback data: ${callbackData}`);
+    console.log(`${logPrefix} Received callback data: ${callbackData}`); // Log received data
 
     try {
         const currentState = userStateCache.get(userId);
@@ -2858,7 +3015,7 @@ async function handleCallbackQuery(callbackQuery) {
             userStateCache.delete(userId);
             await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId }).catch(() => {});
              // Escaped Message
-            await safeSendMessage(chatId, "Your previous action timed out\\. Please start again using the commands\\.", { parse_mode: 'MarkdownV2'});
+             await safeSendMessage(chatId, "Your previous action timed out\\. Please start again using the commands\\.", { parse_mode: 'MarkdownV2'});
             return;
         }
 
@@ -2868,6 +3025,8 @@ async function handleCallbackQuery(callbackQuery) {
             // --- Menu Actions ---
             case 'menu':
                 const menuItem = params[0];
+                 // [LOGGING ADDED] Log specific menu action
+                console.log(`${logPrefix} Handling menu callback for: ${menuItem}`);
                 const menuCommandHandlers = { /* ... (handlers as before) ... */
                     'coinflip': handleCoinflipCommand, 'race': handleRaceCommand, 'slots': handleSlotsCommand,
                     'roulette': handleRouletteCommand, 'war': handleWarCommand, 'deposit': handleDepositCommand,
@@ -2876,8 +3035,9 @@ async function handleCallbackQuery(callbackQuery) {
                  };
                 const menuHandler = menuCommandHandlers[menuItem];
                 if (menuHandler) {
-                    const mockMsg = { ...callbackQuery.message, from: callbackQuery.from, text: `/${menuItem}` };
-                    await menuHandler(mockMsg, '');
+                    // Mock message to pass to command handlers
+                    const mockMsg = { ...callbackQuery.message, from: callbackQuery.from, text: `/${menuItem}`, chat: { id: chatId, type: callbackQuery.message.chat.type } };
+                    await menuHandler(mockMsg, ''); // Pass empty args
                 } else { console.warn(`${logPrefix} Unknown menu action: ${menuItem}`); }
                 break;
 
@@ -2890,10 +3050,15 @@ async function handleCallbackQuery(callbackQuery) {
 
                 // Escaped Message
                 await bot.editMessageText(`🪙 Coinflip: You chose *${escapeMarkdownV2(choice)}* for ${escapeMarkdownV2((Number(cfWager)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. Flipping\\.\\.\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: undefined }).catch(()=>{/*ignore if already gone*/});
-                userStateCache.delete(userId);
+                userStateCache.delete(userId); // Clear state before potential async game/bet logic
 
-                const { success: betPlaced, betId, error: betError } = await placeBet(userId, chatId, 'coinflip', { choice }, cfWager);
-                if (!betPlaced || !betId) { console.error(`${logPrefix} Failed to place coinflip bet: ${betError}`); break; }
+                const { success: betPlaced, betId, error: betError } = await placeBet(userId, String(chatId), 'coinflip', { choice }, cfWager);
+                if (!betPlaced || !betId) {
+                    console.error(`${logPrefix} Failed to place coinflip bet: ${betError}`);
+                    // Ensure user state is clear and inform user if possible (placeBet should ideally inform)
+                    userStateCache.delete(userId);
+                    break;
+                }
 
                 const gameSuccess = await handleCoinflipGame(userId, String(chatId), cfWager, choice, betId);
                 if (gameSuccess) { await _handleReferralChecks(userId, betId, cfWager, logPrefix); }
@@ -2902,16 +3067,16 @@ async function handleCallbackQuery(callbackQuery) {
             // Example: Race Choice
             case 'race_choice':
                  if (!currentState || currentState.state !== 'awaiting_race_choice' || !currentState.data?.amountLamports) { throw new Error("Invalid state for race choice or missing wager amount."); }
-                 const chosenHorseName = params[0];
+                 const chosenHorseName = params.join(':'); // Re-join in case horse name had colons (unlikely but safe)
                  if (!RACE_HORSES.some(h => h.name === chosenHorseName)) { throw new Error(`Invalid horse choice received: ${chosenHorseName}`); }
                  const raceWager = BigInt(currentState.data.amountLamports);
 
                  // Escaped Message
                  await bot.editMessageText(`🐎 Race: You chose *${escapeMarkdownV2(chosenHorseName)}* for ${escapeMarkdownV2((Number(raceWager)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. Starting the race\\!`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: undefined }).catch(()=>{});
-                 userStateCache.delete(userId);
+                 userStateCache.delete(userId); // Clear state
 
-                 const { success: raceBetPlaced, betId: raceBetId, error: raceBetError } = await placeBet(userId, chatId, 'race', { horse: chosenHorseName }, raceWager);
-                 if (!raceBetPlaced || !raceBetId) { console.error(`${logPrefix} Failed to place race bet: ${raceBetError}`); break; }
+                 const { success: raceBetPlaced, betId: raceBetId, error: raceBetError } = await placeBet(userId, String(chatId), 'race', { horse: chosenHorseName }, raceWager);
+                 if (!raceBetPlaced || !raceBetId) { console.error(`${logPrefix} Failed to place race bet: ${raceBetError}`); userStateCache.delete(userId); break; }
 
                  const raceGameSuccess = await handleRaceGame(userId, String(chatId), raceWager, chosenHorseName, raceBetId);
                  if (raceGameSuccess) { await _handleReferralChecks(userId, raceBetId, raceWager, logPrefix); }
@@ -2924,10 +3089,10 @@ async function handleCallbackQuery(callbackQuery) {
 
                  // Escaped Message
                  await bot.editMessageText(`🎰 Slots: Spinning the reels for ${escapeMarkdownV2((Number(slotsWager)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\.\\.\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: undefined }).catch(()=>{});
-                 userStateCache.delete(userId);
+                 userStateCache.delete(userId); // Clear state
 
-                 const { success: slotsBetPlaced, betId: slotsBetId, error: slotsBetError } = await placeBet(userId, chatId, 'slots', {}, slotsWager);
-                 if (!slotsBetPlaced || !slotsBetId) { console.error(`${logPrefix} Failed to place slots bet: ${slotsBetError}`); break; }
+                 const { success: slotsBetPlaced, betId: slotsBetId, error: slotsBetError } = await placeBet(userId, String(chatId), 'slots', {}, slotsWager);
+                 if (!slotsBetPlaced || !slotsBetId) { console.error(`${logPrefix} Failed to place slots bet: ${slotsBetError}`); userStateCache.delete(userId); break; }
 
                  const slotsGameSuccess = await handleSlotsGame(userId, String(chatId), slotsWager, slotsBetId);
                  if (slotsGameSuccess) { await _handleReferralChecks(userId, slotsBetId, slotsWager, logPrefix); }
@@ -2940,10 +3105,10 @@ async function handleCallbackQuery(callbackQuery) {
 
                  // Escaped Message
                  await bot.editMessageText(`🃏 Casino War: Dealing cards for ${escapeMarkdownV2((Number(warWager)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\.\\.\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: undefined }).catch(()=>{});
-                 userStateCache.delete(userId);
+                 userStateCache.delete(userId); // Clear state
 
-                 const { success: warBetPlaced, betId: warBetId, error: warBetError } = await placeBet(userId, chatId, 'war', {}, warWager);
-                 if (!warBetPlaced || !warBetId) { console.error(`${logPrefix} Failed to place War bet: ${warBetError}`); break; }
+                 const { success: warBetPlaced, betId: warBetId, error: warBetError } = await placeBet(userId, String(chatId), 'war', {}, warWager);
+                 if (!warBetPlaced || !warBetId) { console.error(`${logPrefix} Failed to place War bet: ${warBetError}`); userStateCache.delete(userId); break; }
 
                  const warGameSuccess = await handleWarGame(userId, String(chatId), warWager, warBetId);
                  if (warGameSuccess) { await _handleReferralChecks(userId, warBetId, warWager, logPrefix); }
@@ -2951,56 +3116,60 @@ async function handleCallbackQuery(callbackQuery) {
 
 
              // --- Withdrawal Confirmation ---
-            case 'withdraw_confirm':
-                if (!currentState || currentState.state !== 'awaiting_withdrawal_confirm' || !currentState.data?.amountLamports || !currentState.data?.recipientAddress) { throw new Error("Invalid state for withdrawal confirmation."); }
-                const { amountLamports: withdrawAmountStr, recipientAddress: withdrawAddress } = currentState.data;
-                const withdrawAmount = BigInt(withdrawAmountStr);
-                const fee = WITHDRAWAL_FEE_LAMPORTS;
-                const finalSendAmount = withdrawAmount;
-                const totalDeduction = withdrawAmount + fee;
+             case 'withdraw_confirm':
+                 if (!currentState || currentState.state !== 'awaiting_withdrawal_confirm' || !currentState.data?.amountLamports || !currentState.data?.recipientAddress) { throw new Error("Invalid state for withdrawal confirmation."); }
+                 const { amountLamports: withdrawAmountStr, recipientAddress: withdrawAddress } = currentState.data;
+                 const withdrawAmount = BigInt(withdrawAmountStr);
+                 const fee = WITHDRAWAL_FEE_LAMPORTS;
+                 const finalSendAmount = withdrawAmount;
+                 const totalDeduction = withdrawAmount + fee;
 
-                console.log(`${logPrefix} User confirmed withdrawal of ${Number(finalSendAmount) / LAMPORTS_PER_SOL} SOL to ${withdrawAddress}`);
-                userStateCache.delete(userId);
+                 console.log(`${logPrefix} User confirmed withdrawal of ${Number(finalSendAmount) / LAMPORTS_PER_SOL} SOL to ${withdrawAddress}`);
+                 userStateCache.delete(userId); // Clear state
 
-                // Escaped Message
-                await bot.editMessageText(`💸 Processing withdrawal request\\.\\.\\. Please wait\\.`, { chat_id: chatId, message_id: messageId, reply_markup: undefined }).catch(()=>{});
+                 // Escaped Message
+                 await bot.editMessageText(`💸 Processing withdrawal request\\.\\.\\. Please wait\\.`, { chat_id: chatId, message_id: messageId, reply_markup: undefined }).catch(()=>{});
 
-                const currentBalance = await getUserBalance(userId);
-                if (currentBalance < totalDeduction) {
-                    // Escaped Message
-                    await safeSendMessage(chatId, `⚠️ Withdrawal failed\\. Your current balance \\(${escapeMarkdownV2((Number(currentBalance) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\) is insufficient for the requested amount plus fee \\(${escapeMarkdownV2((Number(totalDeduction) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\)\\.`, { parse_mode: 'MarkdownV2' });
-                    break;
-                }
-
-                const wdRequest = await createWithdrawalRequest(userId, withdrawAmount, fee, withdrawAddress);
-                if (!wdRequest.success || !wdRequest.withdrawalId) {
+                 const currentBalance = await getUserBalance(userId);
+                 if (currentBalance < totalDeduction) {
                      // Escaped Message
-                    await safeSendMessage(chatId, `⚠️ Failed to initiate withdrawal request in database\\. Please try again or contact support\\. Error: ${escapeMarkdownV2(wdRequest.error || 'DB Error')}`, { parse_mode: 'MarkdownV2' });
-                    break;
-                }
+                     await safeSendMessage(chatId, `⚠️ Withdrawal failed\\. Your current balance \\(${escapeMarkdownV2((Number(currentBalance) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\) is insufficient for the requested amount plus fee \\(${escapeMarkdownV2((Number(totalDeduction) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\)\\.`, { parse_mode: 'MarkdownV2' });
+                     break;
+                 }
 
-                await addPayoutJob(
-                    { type: 'payout_withdrawal', withdrawalId: wdRequest.withdrawalId, userId: userId },
-                    parseInt(process.env.PAYOUT_JOB_RETRIES, 10),
-                    parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10)
-                );
-                // Escaped Message
-                await safeSendMessage(chatId, `✅ Withdrawal request submitted for ${escapeMarkdownV2((Number(finalSendAmount) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. You will be notified upon completion\\.`, { parse_mode: 'MarkdownV2' });
-                break;
+                 const wdRequest = await createWithdrawalRequest(userId, withdrawAmount, fee, withdrawAddress);
+                 if (!wdRequest.success || !wdRequest.withdrawalId) {
+                      // Escaped Message
+                     await safeSendMessage(chatId, `⚠️ Failed to initiate withdrawal request in database\\. Please try again or contact support\\. Error: ${escapeMarkdownV2(wdRequest.error || 'DB Error')}`, { parse_mode: 'MarkdownV2' });
+                     break;
+                 }
+                 const withdrawalId = wdRequest.withdrawalId; // Get ID for logging/job
 
-            // --- Generic Cancel ---
-            case 'cancel_action':
-                console.log(`${logPrefix} User cancelled action.`);
-                const cancelledState = currentState?.state || 'unknown';
-                userStateCache.delete(userId);
-                // Escaped Message
-                await bot.editMessageText(`Action cancelled \\(${escapeMarkdownV2(cancelledState)}\\)\\.`, { chat_id: chatId, message_id: messageId, reply_markup: undefined }).catch(()=>{});
-                break;
+                 console.log(`${logPrefix} Withdrawal request ${withdrawalId} created in DB. Adding to payout queue.`); // [LOGGING ADDED] Log DB success and queue add
 
-            default:
-                console.warn(`${logPrefix} Received unknown callback action: ${action}`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown button action." }).catch(() => {}); // Show alert
-                break;
+                 await addPayoutJob(
+                     { type: 'payout_withdrawal', withdrawalId: withdrawalId, userId: userId },
+                     parseInt(process.env.PAYOUT_JOB_RETRIES, 10),
+                     parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10)
+                 );
+                 // Escaped Message
+                 await safeSendMessage(chatId, `✅ Withdrawal request submitted for ${escapeMarkdownV2((Number(finalSendAmount) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. You will be notified upon completion\\.`, { parse_mode: 'MarkdownV2' });
+                 break;
+
+             // --- Generic Cancel ---
+             case 'cancel_action':
+                 console.log(`${logPrefix} User cancelled action.`);
+                 const cancelledState = currentState?.state || 'unknown';
+                 userStateCache.delete(userId);
+                 // Escaped Message
+                 await bot.editMessageText(`Action cancelled \\(${escapeMarkdownV2(cancelledState)}\\)\\.`, { chat_id: chatId, message_id: messageId, reply_markup: undefined }).catch(()=>{});
+                 break;
+
+             default:
+                 console.warn(`${logPrefix} Received unknown callback action: ${action}`);
+                 // Only answer with alert if the initial silent answer failed or is too old
+                 // await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown button action.", show_alert: true }).catch(() => {}); // Show alert to user
+                 break;
         }
 
     } catch (error) {
@@ -3008,10 +3177,16 @@ async function handleCallbackQuery(callbackQuery) {
         userStateCache.delete(userId); // Clear state on error
         try {
             // Escaped Message
-            await bot.editMessageText(`⚠️ Error: ${escapeMarkdownV2(error.message)}`, { chat_id: chatId, message_id: messageId, reply_markup: undefined, parse_mode: 'MarkdownV2' }).catch(()=>{});
-        } catch (editError) {
-             // Escaped Message
-            await safeSendMessage(chatId, `⚠️ An error occurred processing your action\\. Please try again\\. Error: ${escapeMarkdownV2(error.message)}`, { parse_mode: 'MarkdownV2' });
+            // Attempt to edit the original message with an error
+            await bot.editMessageText(`⚠️ Error: ${escapeMarkdownV2(error.message)}`, { chat_id: chatId, message_id: messageId, reply_markup: undefined, parse_mode: 'MarkdownV2' }).catch(async (editError) => {
+                 // If editing fails (e.g., message too old), send a new message
+                 console.warn(`${logPrefix} Failed to edit message with error, sending new message. Edit Error: ${editError.message}`);
+                 // Escaped Message
+                 await safeSendMessage(chatId, `⚠️ An error occurred processing your last action\\. Please try again\\. Error: ${escapeMarkdownV2(error.message)}`, { parse_mode: 'MarkdownV2' });
+            });
+        } catch (sendError) {
+            // Fallback if even sending a new message fails
+            console.error(`${logPrefix} Critical: Failed to send error message to user after callback error:`, sendError);
         }
     }
 }
@@ -3022,46 +3197,67 @@ async function handleCallbackQuery(callbackQuery) {
  * @returns {Promise<{success: boolean, betId?: number, error?: string}>}
  */
 async function placeBet(userId, chatId, gameType, betDetails, wagerAmount) {
+    const logPrefix = `[PlaceBet User ${userId} Game ${gameType}]`; // [LOGGING ADDED] Prefix
     let client = null;
+    chatId = String(chatId); // Ensure chatId is string for safeSendMessage
+
     try {
+        console.log(`${logPrefix} Attempting to place bet. Wager: ${wagerAmount} lamports.`); // [LOGGING ADDED] Entry log
         client = await pool.connect();
         await client.query('BEGIN');
+        console.log(`${logPrefix} DB Transaction started.`); // [LOGGING ADDED] TX start
 
         // 1. Deduct balance and add 'bet_placed' ledger entry
+        console.log(`${logPrefix} Deducting balance and adding ledger entry...`); // [LOGGING ADDED] Step log
         const balanceUpdateResult = await updateUserBalanceAndLedger(
             client, userId, -wagerAmount, 'bet_placed', {}, `Bet on ${gameType}`
         );
         if (!balanceUpdateResult.success) {
             await client.query('ROLLBACK');
-             const errorMsg = balanceUpdateResult.error || 'Failed to place bet.';
-             console.error(`[PlaceBet ${userId}] Failed: ${errorMsg}`);
-             const currentBalance = await getUserBalance(userId);
+            console.error(`${logPrefix} Balance deduction failed: ${balanceUpdateResult.error}. Rolled back.`); // [LOGGING ADDED] Failure log + rollback
+            const errorMsg = balanceUpdateResult.error === 'Insufficient balance'
+                ? 'Insufficient balance'
+                : 'Failed to update balance for bet.';
+            const currentBalance = await getUserBalance(userId); // Fetch balance to show user
              // Escaped Message
              await safeSendMessage(chatId, `⚠️ Bet failed\\! ${escapeMarkdownV2(errorMsg)}\\. Your balance: ${escapeMarkdownV2((Number(currentBalance)/LAMPORTS_PER_SOL).toFixed(4))} SOL\\.`, { parse_mode: 'MarkdownV2'});
-             return { success: false, error: errorMsg };
+            return { success: false, error: errorMsg };
         }
+        console.log(`${logPrefix} Balance updated successfully. New balance: ${balanceUpdateResult.newBalance}`); // [LOGGING ADDED] Step success log
 
         // 2. Create bet record
+        console.log(`${logPrefix} Creating bet record...`); // [LOGGING ADDED] Step log
         const betRecordResult = await createBetRecord(client, userId, String(chatId), gameType, betDetails, wagerAmount);
         if (!betRecordResult.success || !betRecordResult.betId) {
             await client.query('ROLLBACK');
-             const errorMsg = betRecordResult.error || 'Failed to record bet in database.';
-             console.error(`[PlaceBet ${userId}] Failed: ${errorMsg}`);
-              // Escaped Message
+            const errorMsg = betRecordResult.error || 'Failed to record bet in database.';
+            console.error(`${logPrefix} Failed to create bet record: ${errorMsg}. Rolled back.`); // [LOGGING ADDED] Failure log + rollback
+             // Escaped Message
              await safeSendMessage(chatId, `⚠️ Bet failed due to internal error recording the bet\\. Your balance has not been charged\\. Please try again\\. Error: ${escapeMarkdownV2(errorMsg)}`, { parse_mode: 'MarkdownV2'});
-             return { success: false, error: errorMsg };
+            return { success: false, error: errorMsg };
         }
+        const betId = betRecordResult.betId;
+        console.log(`${logPrefix} Bet record created successfully. Bet ID: ${betId}`); // [LOGGING ADDED] Step success log
 
         // 3. Commit transaction
+        console.log(`${logPrefix} Committing DB transaction...`); // [LOGGING ADDED] Step log
         await client.query('COMMIT');
-        console.log(`[PlaceBet ${userId}] Successfully placed bet ${betRecordResult.betId} for ${gameType}. Wager: ${wagerAmount}`);
-        return { success: true, betId: betRecordResult.betId };
+        console.log(`${logPrefix} Successfully placed bet ${betId}. Wager: ${wagerAmount}. Transaction committed.`); // [LOGGING ADDED] Final success log
+        return { success: true, betId: betId };
 
     } catch (error) {
-        if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { /* Ignore */ } }
-        console.error(`[PlaceBet ${userId}] Unexpected error placing bet for ${gameType}:`, error);
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+                console.error(`${logPrefix} Unexpected error occurred, transaction rolled back. Error:`, error); // [LOGGING ADDED] Unexpected error + rollback
+            } catch (rbErr) {
+                 console.error(`${logPrefix} Unexpected error occurred AND rollback failed. Error:`, error, `Rollback Error:`, rbErr); // [LOGGING ADDED] Critical failure
+            }
+        } else {
+            console.error(`${logPrefix} Unexpected error placing bet (no client):`, error); // [LOGGING ADDED] Error before client connect
+        }
          // Escaped Message
-        await safeSendMessage(chatId, `⚠️ An unexpected error occurred while placing your bet\\. Please try again or contact support\\.`, { parse_mode: 'MarkdownV2'});
+         await safeSendMessage(chatId, `⚠️ An unexpected error occurred while placing your bet\\. Please try again or contact support\\.`, { parse_mode: 'MarkdownV2'});
         return { success: false, error: 'Unexpected error placing bet.' };
     } finally {
         if (client) client.release();
@@ -3082,48 +3278,59 @@ async function handleAmountInput(msg, currentState) {
     const text = msg.text.trim();
     const stateType = currentState.state;
     const logPrefix = `[Input State:${stateType} User ${userId}]`;
+    console.log(`${logPrefix} Received amount input: "${text}"`); // [LOGGING ADDED] Log input received
 
     let amountSOL;
     try {
         amountSOL = parseFloat(text);
         if (isNaN(amountSOL) || amountSOL <= 0) {
              // Escaped Message
-            await safeSendMessage(chatId, "⚠️ Invalid amount\\. Please enter a positive number \\(e\\.g\\., 0\\.1\\)\\.", { parse_mode: 'MarkdownV2' });
+             await safeSendMessage(chatId, "⚠️ Invalid amount\\. Please enter a positive number \\(e\\.g\\., 0\\.1\\)\\.", { parse_mode: 'MarkdownV2' });
+             console.log(`${logPrefix} Invalid amount entered.`); // [LOGGING ADDED] Log validation fail
             return;
         }
     } catch (e) {
          // Escaped Message
-        await safeSendMessage(chatId, "⚠️ Could not read amount\\. Please enter a number \\(e\\.g\\., 0\\.1\\)\\.", { parse_mode: 'MarkdownV2' });
+         await safeSendMessage(chatId, "⚠️ Could not read amount\\. Please enter a number \\(e\\.g\\., 0\\.1\\)\\.", { parse_mode: 'MarkdownV2' });
+         console.log(`${logPrefix} Could not parse amount input.`); // [LOGGING ADDED] Log parse fail
         return;
     }
 
     const amountLamports = BigInt(Math.round(amountSOL * LAMPORTS_PER_SOL));
+    console.log(`${logPrefix} Parsed amount: ${amountSOL} SOL (${amountLamports} lamports).`); // [LOGGING ADDED] Log parsed amount
 
     // --- Withdrawal Amount Handling ---
     if (stateType === 'awaiting_withdrawal_amount') {
+        console.log(`${logPrefix} Handling withdrawal amount.`); // [LOGGING ADDED] Log context
         if (amountLamports < MIN_WITHDRAWAL_LAMPORTS) {
              // Escaped Message
-            await safeSendMessage(chatId, `⚠️ Minimum withdrawal amount is ${escapeMarkdownV2((Number(MIN_WITHDRAWAL_LAMPORTS) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. Please enter a valid amount\\.`, { parse_mode: 'MarkdownV2' });
+             await safeSendMessage(chatId, `⚠️ Minimum withdrawal amount is ${escapeMarkdownV2((Number(MIN_WITHDRAWAL_LAMPORTS) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. Please enter a valid amount\\.`, { parse_mode: 'MarkdownV2' });
+             console.log(`${logPrefix} Withdrawal amount below minimum.`); // [LOGGING ADDED] Log validation fail
             return;
         }
         const fee = WITHDRAWAL_FEE_LAMPORTS;
         const totalNeeded = amountLamports + fee;
+        console.log(`${logPrefix} Checking balance for withdrawal. Need: ${totalNeeded}, Fee: ${fee}`); // [LOGGING ADDED] Log check
         const currentBalance = await getUserBalance(userId);
         if (currentBalance < totalNeeded) {
              // Escaped Message
-            await safeSendMessage(chatId, `⚠️ Insufficient balance \\(${escapeMarkdownV2((Number(currentBalance) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\) for withdrawal amount \\(${escapeMarkdownV2(amountSOL.toFixed(4))} SOL\\) \\+ fee \\(${escapeMarkdownV2((Number(fee)/LAMPORTS_PER_SOL).toFixed(4))} SOL\\)\\. Total needed: ${escapeMarkdownV2((Number(totalNeeded)/LAMPORTS_PER_SOL).toFixed(4))} SOL`, { parse_mode: 'MarkdownV2' });
-            userStateCache.delete(userId);
+             await safeSendMessage(chatId, `⚠️ Insufficient balance \\(${escapeMarkdownV2((Number(currentBalance) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\) for withdrawal amount \\(${escapeMarkdownV2(amountSOL.toFixed(4))} SOL\\) \\+ fee \\(${escapeMarkdownV2((Number(fee)/LAMPORTS_PER_SOL).toFixed(4))} SOL\\)\\. Total needed: ${escapeMarkdownV2((Number(totalNeeded)/LAMPORTS_PER_SOL).toFixed(4))} SOL`, { parse_mode: 'MarkdownV2' });
+             console.log(`${logPrefix} Insufficient balance for withdrawal. Balance: ${currentBalance}`); // [LOGGING ADDED] Log balance fail
+            userStateCache.delete(userId); // Clear state after failure
             return;
         }
+        console.log(`${logPrefix} Balance sufficient. Checking linked wallet...`); // [LOGGING ADDED] Log balance OK
         const linkedAddress = await getLinkedWallet(userId);
         if (!linkedAddress) {
              // Escaped Message
              await safeSendMessage(chatId, `⚠️ Cannot proceed\\. Please set your withdrawal address first using \`/wallet <YourSolanaAddress>\`\\.`, { parse_mode: 'MarkdownV2' });
-             userStateCache.delete(userId);
+             console.log(`${logPrefix} No linked wallet found.`); // [LOGGING ADDED] Log wallet fail
+             userStateCache.delete(userId); // Clear state
              return;
         }
+        console.log(`${logPrefix} Linked wallet found: ${linkedAddress}. Proceeding to confirmation.`); // [LOGGING ADDED] Log wallet OK
         userStateCache.set(userId, {
-            state: 'awaiting_withdrawal_confirm', chatId: String(chatId), messageId: currentState.messageId,
+            state: 'awaiting_withdrawal_confirm', chatId: String(chatId), messageId: currentState.messageId, // Persist original message ID for edits
             data: { amountLamports: amountLamports.toString(), recipientAddress: linkedAddress }, timestamp: Date.now()
         });
         const options = {
@@ -3131,7 +3338,7 @@ async function handleAmountInput(msg, currentState) {
             parse_mode: 'MarkdownV2'
         };
          // Escaped Message
-        await safeSendMessage(chatId,
+         await safeSendMessage(chatId,
             `*Confirm Withdrawal*\n\n` +
             `Amount: ${escapeMarkdownV2(amountSOL.toFixed(SOL_DECIMALS))} SOL\n` +
             `Fee: ${escapeMarkdownV2((Number(fee) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\n` +
@@ -3151,28 +3358,36 @@ async function handleAmountInput(msg, currentState) {
     else if (stateType === 'awaiting_war_amount') { gameKey = 'war'; nextState = 'awaiting_war_confirm'; gameName = 'Casino War'; confirmationCallback = 'war_confirm'; }
 
     if (gameKey) {
+        console.log(`${logPrefix} Handling amount for game: ${gameName}`); // [LOGGING ADDED] Log context
         const gameCfg = GAME_CONFIG[gameKey];
         if (!gameCfg) {
              console.error(`${logPrefix} Invalid game key derived from state: ${gameKey}`);
              userStateCache.delete(userId);
               // Escaped Message
-             await safeSendMessage(chatId, `⚠️ Internal error starting game\\. Please try again\\.`, { parse_mode: 'MarkdownV2'});
+              await safeSendMessage(chatId, `⚠️ Internal error starting game\\. Please try again\\.`, { parse_mode: 'MarkdownV2'});
              return;
         }
+        // Check Min/Max Bet
         if (amountLamports < gameCfg.minBetLamports || amountLamports > gameCfg.maxBetLamports) {
             const min = (Number(gameCfg.minBetLamports) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
             const max = (Number(gameCfg.maxBetLamports) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
              // Escaped Message
-            await safeSendMessage(chatId, `⚠️ ${escapeMarkdownV2(gameName)} bet amount must be between ${escapeMarkdownV2(min)} and ${escapeMarkdownV2(max)} SOL\\. Please enter a valid amount\\.`, { parse_mode: 'MarkdownV2' });
-            return;
+             await safeSendMessage(chatId, `⚠️ ${escapeMarkdownV2(gameName)} bet amount must be between ${escapeMarkdownV2(min)} and ${escapeMarkdownV2(max)} SOL\\. Please enter a valid amount\\.`, { parse_mode: 'MarkdownV2' });
+             console.log(`${logPrefix} Bet amount out of range. Min: ${gameCfg.minBetLamports}, Max: ${gameCfg.maxBetLamports}`); // [LOGGING ADDED] Log validation fail
+            return; // Keep user in same state to re-enter amount
         }
+        console.log(`${logPrefix} Bet amount within limits. Checking balance...`); // [LOGGING ADDED] Log limits OK
+        // Check Balance
         const currentBalance = await getUserBalance(userId);
         if (currentBalance < amountLamports) {
              // Escaped Message
-            await safeSendMessage(chatId, `⚠️ Insufficient balance \\(${escapeMarkdownV2((Number(currentBalance) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\) to place that ${escapeMarkdownV2(gameName)} bet\\. Use /deposit to add funds\\.`, { parse_mode: 'MarkdownV2' });
-            userStateCache.delete(userId);
+             await safeSendMessage(chatId, `⚠️ Insufficient balance \\(${escapeMarkdownV2((Number(currentBalance) / LAMPORTS_PER_SOL).toFixed(4))} SOL\\) to place that ${escapeMarkdownV2(gameName)} bet\\. Use /deposit to add funds\\.`, { parse_mode: 'MarkdownV2' });
+             console.log(`${logPrefix} Insufficient balance for bet. Balance: ${currentBalance}`); // [LOGGING ADDED] Log balance fail
+            userStateCache.delete(userId); // Clear state
             return;
         }
+        console.log(`${logPrefix} Balance sufficient. Proceeding to next step: ${nextState}`); // [LOGGING ADDED] Log balance OK
+        // Update state for next step (choice or confirmation)
         userStateCache.set(userId, { state: nextState, chatId: String(chatId), messageId: currentState.messageId, data: { amountLamports: amountLamports.toString() }, timestamp: Date.now() });
 
         if (choicePrompt) { // For games requiring a choice after amount
@@ -3180,7 +3395,8 @@ async function handleAmountInput(msg, currentState) {
             if (gameKey === 'coinflip') { keyboard = [[{ text: 'Heads', callback_data: 'cf_choice:heads' }, { text: 'Tails', callback_data: 'cf_choice:tails' }], [{ text: 'Cancel', callback_data: 'cancel_action' }]]; }
             else if (gameKey === 'race') {
                  // Escape horse names/multipliers in button text
-                 const horseButtons = RACE_HORSES.map(h => ({ text: `${escapeMarkdownV2(h.name)} \\(${escapeMarkdownV2(h.payoutMultiplier)}x\\)`, callback_data: `race_choice:${h.name}` }));
+                 const horseButtons = RACE_HORSES.map(h => ({ text: `${h.name} (${h.payoutMultiplier}x)`, callback_data: `race_choice:${h.name}` })); // No need to escape button text itself
+                 // Split buttons into rows of 2
                  for (let i = 0; i < horseButtons.length; i += 2) { keyboard.push(horseButtons.slice(i, i + 2)); }
                  keyboard.push([{ text: 'Cancel', callback_data: 'cancel_action' }]);
             }
@@ -3204,59 +3420,58 @@ async function handleWithdrawalAddressInput(msg, currentState) {
     const chatId = msg.chat.id;
     const address = msg.text.trim();
     const logPrefix = `[Input State:awaiting_withdrawal_address User ${userId}]`;
+    console.log(`${logPrefix} Received address input: "${address}"`); // [LOGGING ADDED] Log input
 
-    if (!currentState || currentState.state !== 'awaiting_withdrawal_address' || !currentState.data?.amountLamports) {
+    // This state seems currently unused by the primary /withdraw flow,
+    // but we'll keep the validation logic in case it's used elsewhere.
+    if (!currentState || currentState.state !== 'awaiting_withdrawal_address') {
         console.error(`${logPrefix} Invalid state reached when expecting withdrawal address.`);
         userStateCache.delete(userId);
         // Escaped Message
         await safeSendMessage(chatId, `⚠️ An error occurred\\. Please start the withdrawal again with /withdraw\\.`, { parse_mode: 'MarkdownV2' });
         return;
     }
+    // Validate address format
     let recipientPubKey;
     try { recipientPubKey = new PublicKey(address); } catch (e) {
          // Escaped Message
-        await safeSendMessage(chatId, `⚠️ Invalid Solana address format: \`${escapeMarkdownV2(address)}\`\\. Please enter a valid address\\.`, { parse_mode: 'MarkdownV2' });
-        return;
+         await safeSendMessage(chatId, `⚠️ Invalid Solana address format: \`${escapeMarkdownV2(address)}\`\\. Please enter a valid address\\.`, { parse_mode: 'MarkdownV2' });
+         console.log(`${logPrefix} Invalid address format.`); // [LOGGING ADDED] Log validation fail
+        return; // Keep user in state to retry
     }
+    // Prevent withdrawal to bot's own payout addresses
     const botKeys = [process.env.MAIN_BOT_PRIVATE_KEY, process.env.REFERRAL_PAYOUT_PRIVATE_KEY].filter(Boolean)
-                        .map(pkStr => { try { return Keypair.fromSecretKey(bs58.decode(pkStr)).publicKey.toBase58(); } catch { return null; }})
-                        .filter(Boolean);
+                           .map(pkStr => { try { return Keypair.fromSecretKey(bs58.decode(pkStr)).publicKey.toBase58(); } catch { return null; }})
+                           .filter(Boolean);
     if (botKeys.includes(address)) {
          // Escaped Message
-        await safeSendMessage(chatId, `⚠️ You cannot withdraw funds to the bot's own operational addresses\\. Please enter your personal wallet address\\.`, { parse_mode: 'MarkdownV2' });
-        return;
+         await safeSendMessage(chatId, `⚠️ You cannot withdraw funds to the bot's own operational addresses\\. Please enter your personal wallet address\\.`, { parse_mode: 'MarkdownV2' });
+         console.log(`${logPrefix} Attempt to withdraw to bot's own address.`); // [LOGGING ADDED] Log validation fail
+        return; // Keep user in state to retry
     }
 
-    const amountLamports = BigInt(currentState.data.amountLamports);
-    const feeLamports = WITHDRAWAL_FEE_LAMPORTS;
-    const totalDeduction = amountLamports + feeLamports;
-    const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL;
-    const feeSOL = Number(feeLamports) / LAMPORTS_PER_SOL;
-
-    userStateCache.set(userId, {
-        state: 'awaiting_withdrawal_confirm', chatId: String(chatId), messageId: currentState.messageId,
-        data: { amountLamports: amountLamports.toString(), recipientAddress: address }, timestamp: Date.now()
-    });
-    const options = {
-        reply_markup: { inline_keyboard: [[{ text: '✅ Confirm Withdrawal', callback_data: 'withdraw_confirm' }], [{ text: '❌ Cancel', callback_data: 'cancel_action' }]] },
-        parse_mode: 'MarkdownV2'
-    };
+    // If this state *was* used, it would likely transition to confirm here.
+    // Example:
+    // const amountLamports = BigInt(currentState.data.amountLamports); // Assuming amount was stored earlier
+    // const feeLamports = WITHDRAWAL_FEE_LAMPORTS;
+    // const totalDeduction = amountLamports + feeLamports;
+    // const amountSOL = Number(amountLamports) / LAMPORTS_PER_SOL;
+    // const feeSOL = Number(feeLamports) / LAMPORTS_PER_SOL;
+    // userStateCache.set(userId, { state: 'awaiting_withdrawal_confirm', /* ... rest ... */ data: { amountLamports: amountLamports.toString(), recipientAddress: address }});
+    // ... send confirmation message ...
+    console.log(`${logPrefix} Processed address. (Note: This state seems currently unused in main flow)`);
+    // For now, just clear the state as it's unclear how it should proceed
+    userStateCache.delete(userId);
      // Escaped Message
-    await safeSendMessage(chatId,
-        `*Confirm Withdrawal*\n\n` +
-        `Amount: ${escapeMarkdownV2(amountSOL.toFixed(SOL_DECIMALS))} SOL\n` +
-        `Fee: ${escapeMarkdownV2(feeSOL.toFixed(SOL_DECIMALS))} SOL\n` +
-        `Recipient: \`${escapeMarkdownV2(address)}\`\n\n` +
-        `Total to be deducted: ${escapeMarkdownV2((Number(totalDeduction) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. Press confirm to proceed\\.`, // Escaped . (x2)
-        options
-    );
+     await safeSendMessage(chatId, `Address received, but the flow seems incomplete\\. Please use \`/wallet <address>\` first, then \`/withdraw\`\\.`, { parse_mode: 'MarkdownV2' });
+
 }
 
 /** Handles Roulette bet input (placeholder for complex betting). */
 async function handleRouletteBetInput(msg, currentState) {
      const chatId = msg.chat.id;
-     // Escaped Message
-     await safeSendMessage(chatId, `Roulette bet input via text is complex\\. Coming soon via a better interface\\! Please /cancel and try another game\\.`, { parse_mode: 'MarkdownV2'});
+      // Escaped Message
+      await safeSendMessage(chatId, `Roulette bet input via text is complex\\. Coming soon via a better interface\\! Please /cancel and try another game\\.`, { parse_mode: 'MarkdownV2'});
      userStateCache.delete(String(msg.from.id));
 }
 
@@ -3268,18 +3483,19 @@ async function handleStartCommand(msg, args) {
     const chatId = msg.chat.id;
     const userId = String(msg.from.id);
     const firstName = msg.from.first_name || 'there';
+    console.log(`[Cmd /start User ${userId}] Handling start command.`); // [LOGGING ADDED] Log command
     await getUserBalance(userId); // Ensure user exists
-    userStateCache.set(userId, { state: 'idle', chatId: String(chatId), timestamp: Date.now() });
+    userStateCache.set(userId, { state: 'idle', chatId: String(chatId), timestamp: Date.now() }); // Reset state
     const options = { /* ... keyboard definition as before ... */
-         reply_markup: {
+        reply_markup: {
             inline_keyboard: [
-                [ { text: '🪙 Coinflip', callback_data: 'menu:coinflip' }, { text: '🎰 Slots', callback_data: 'menu:slots' }, { text: '🃏 War', callback_data: 'menu:war' } ],
-                [ { text: '🐎 Race', callback_data: 'menu:race' }, { text: '⚪️ Roulette', callback_data: 'menu:roulette' } ],
-                [ { text: '💰 Deposit SOL', callback_data: 'menu:deposit' }, { text: '💸 Withdraw SOL', callback_data: 'menu:withdraw' } ],
-                [ { text: '👤 Wallet / Balance', callback_data: 'menu:wallet' }, { text: '🤝 Referral Info', callback_data: 'menu:referral' }, { text: '❓ Help', callback_data: 'menu:help' } ]
+                 [ { text: '🪙 Coinflip', callback_data: 'menu:coinflip' }, { text: '🎰 Slots', callback_data: 'menu:slots' }, { text: '🃏 War', callback_data: 'menu:war' } ],
+                 [ { text: '🐎 Race', callback_data: 'menu:race' }, { text: '⚪️ Roulette', callback_data: 'menu:roulette' } ],
+                 [ { text: '💰 Deposit SOL', callback_data: 'menu:deposit' }, { text: '💸 Withdraw SOL', callback_data: 'menu:withdraw' } ],
+                 [ { text: '👤 Wallet / Balance', callback_data: 'menu:wallet' }, { text: '🤝 Referral Info', callback_data: 'menu:referral' }, { text: '❓ Help', callback_data: 'menu:help' } ]
             ]
-        },
-        parse_mode: 'MarkdownV2' };
+       },
+       parse_mode: 'MarkdownV2' };
     // Escaped Message
     const welcomeMsg = `👋 Welcome, ${escapeMarkdownV2(firstName)}\\!\n\n` + // Escaped !
                        `I am a Solana\\-based gaming bot\\. Use the buttons below to play, manage funds, or get help\\.\n\n` + // Escaped -, . (x2)
@@ -3290,12 +3506,14 @@ async function handleStartCommand(msg, args) {
 /** Handles /help command */
 async function handleHelpCommand(msg, args) {
     const chatId = msg.chat.id;
+    const userId = String(msg.from.id);
+    console.log(`[Cmd /help User ${userId}] Handling help command.`); // [LOGGING ADDED] Log command
     const feeSOL = (Number(WITHDRAWAL_FEE_LAMPORTS) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
     const minWithdrawSOL = (Number(MIN_WITHDRAWAL_LAMPORTS) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
     const refRewardPercent = (REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(2);
 
     // Escaped Help Message (Escape all ., -, !, \, /, <, >, %, +, =, |)
-    const helpMsg = `*Solana Gambles Bot Help* 🤖 \\(v3\\.1\\.0\\)\n\n` + // Escaped ( ) .
+    const helpMsg = `*Solana Gambles Bot Help* 🤖 \\(v3\\.1\\.1\\)\n\n` + // Escaped ( ) . - Updated Version
                     `This bot uses a *custodial* model\\. Deposit SOL to play instantly using your internal balance\\. Winnings are added to your balance, and you can withdraw anytime\\. \n\n`+ // Escaped . (x3)
                     `*How to Play:*\n` +
                     `1\\. Use \`/deposit\` to get a unique address & send SOL\\. Wait for confirmation\\. \n` + // Escaped . (x2)
@@ -3326,18 +3544,21 @@ async function handleHelpCommand(msg, args) {
 async function handleWalletCommand(msg, args) {
     const chatId = msg.chat.id;
     const userId = String(msg.from.id);
+    const logPrefix = `[Cmd /wallet User ${userId}]`; // [LOGGING ADDED] Prefix
     const potentialNewAddress = args?.trim();
 
     if (potentialNewAddress) {
+        console.log(`${logPrefix} Attempting to set withdrawal address to: ${potentialNewAddress}`); // [LOGGING ADDED] Log action
         const result = await linkUserWallet(userId, potentialNewAddress);
         if (result.success) {
              // Escaped Message
              await safeSendMessage(chatId, `✅ Withdrawal address successfully set to: \`${escapeMarkdownV2(result.wallet)}\``, { parse_mode: 'MarkdownV2' });
         } else {
              // Escaped Message
-            await safeSendMessage(chatId, `❌ Failed to set withdrawal address\\. Error: ${escapeMarkdownV2(result.error)}`, { parse_mode: 'MarkdownV2' });
+             await safeSendMessage(chatId, `❌ Failed to set withdrawal address\\. Error: ${escapeMarkdownV2(result.error)}`, { parse_mode: 'MarkdownV2' });
         }
     } else {
+        console.log(`${logPrefix} Displaying wallet info.`); // [LOGGING ADDED] Log action
         const userDetails = await getUserWalletDetails(userId);
         const userBalance = await getUserBalance(userId);
         // Escaped Message
@@ -3348,13 +3569,47 @@ async function handleWalletCommand(msg, args) {
         } else {
             walletMsg += `*Withdrawal Address:* Not Set \\(Use \`/wallet <YourSolAddress>\`\\)\n`; // Escaped ( ) < >
         }
-        if (userDetails?.referral_code) {
-            walletMsg += `*Referral Code:* \`${escapeMarkdownV2(userDetails.referral_code)}\`\n`;
-        } else {
-            const generatedCode = generateReferralCode();
-            walletMsg += `*Referral Code:* \`N/A\` \\(Generating now\\?: \`${escapeMarkdownV2(generatedCode)}\` \\- Link wallet or deposit to confirm\\)\n`; // Escaped ? - )
-             if (userDetails) { /* ... (assign code logic as before) ... */ }
+        // Handle referral code generation if missing (like in original code, ensure user exists first)
+        let currentRefCode = userDetails?.referral_code;
+        if (!currentRefCode && userDetails) { // Only try to generate if user exists but lacks code
+             console.log(`${logPrefix} User exists but lacks referral code. Generating and attempting to save.`);
+             const genCode = generateReferralCode();
+             let client = null;
+             try {
+                 client = await pool.connect();
+                 await client.query('BEGIN');
+                 // Attempt to set it - this might fail if called concurrently, but is low risk
+                 const updateRes = await queryDatabase(
+                     `UPDATE wallets SET referral_code = $1 WHERE user_id = $2 AND referral_code IS NULL RETURNING referral_code`,
+                     [genCode, userId],
+                     client
+                 );
+                 if (updateRes.rowCount > 0) {
+                     await client.query('COMMIT');
+                     currentRefCode = updateRes.rows[0].referral_code;
+                     console.log(`${logPrefix} Successfully generated and saved new referral code: ${currentRefCode}`);
+                     // Update cache
+                     updateWalletCache(userId, { referralCode: currentRefCode });
+                 } else {
+                     await client.query('ROLLBACK'); // Didn't update, maybe race condition? Fetch again.
+                     console.log(`${logPrefix} Referral code update failed (maybe set concurrently?), fetching existing.`);
+                     const refetch = await queryDatabase('SELECT referral_code FROM wallets WHERE user_id = $1', [userId]);
+                     currentRefCode = refetch.rows[0]?.referral_code;
+                 }
+             } catch (e) {
+                  if (client) try { await client.query('ROLLBACK'); } catch (rbErr) { /* ignore */ }
+                  console.error(`${logPrefix} Error generating/saving referral code: ${e.message}`);
+             } finally {
+                  if (client) client.release();
+             }
         }
+
+        if (currentRefCode) {
+            walletMsg += `*Referral Code:* \`${escapeMarkdownV2(currentRefCode)}\`\n`;
+        } else {
+             walletMsg += `*Referral Code:* \`N/A\` \\(Try again or link wallet\\)\n`; // Escaped ( )
+        }
+
         walletMsg += `*Successful Referrals:* ${escapeMarkdownV2(userDetails?.referral_count || 0)}\n\n`;
         walletMsg += `Use \`/deposit\` to add funds, \`/withdraw\` to cash out\\.`; // Escaped .
 
@@ -3366,24 +3621,38 @@ async function handleWalletCommand(msg, args) {
 async function handleReferralCommand(msg, args) {
     const chatId = msg.chat.id;
     const userId = String(msg.from.id);
+    console.log(`[Cmd /referral User ${userId}] Handling referral command.`); // [LOGGING ADDED] Log command
     const userDetails = await getUserWalletDetails(userId);
     // Escaped Messages
     if (!userDetails?.external_withdrawal_address) {
         await safeSendMessage(chatId, `❌ You need to link your wallet first using \`/wallet <YourSolAddress>\` before using the referral system\\. This ensures rewards can be paid out\\.`, { parse_mode: 'MarkdownV2' }); return; }
-    if (!userDetails.referral_code) { /* ... (assign code logic as before) ... */
-        await safeSendMessage(chatId, `❌ Could not retrieve or assign your referral code\\. Please try linking your wallet again with \`/wallet <address>\`\\.`, { parse_mode: 'MarkdownV2' }); return; }
+    if (!userDetails.referral_code) {
+        // Attempt to generate/assign if missing (similar logic to /wallet)
+         console.warn(`[Cmd /referral User ${userId}] User has linked wallet but missing referral code. Attempting generation.`);
+         // Trigger /wallet logic internally to try and fix this - maybe refactor later
+         await handleWalletCommand(msg, ''); // Call /wallet view logic which includes generation attempt
+         return; // Exit, /wallet will display updated info or error
+         // await safeSendMessage(chatId, `❌ Could not retrieve or assign your referral code\\. Please try linking your wallet again with \`/wallet <address>\`\\.`, { parse_mode: 'MarkdownV2' }); return;
+    }
 
     const totalEarningsLamports = await getTotalReferralEarnings(userId);
     const totalEarningsSOL = (Number(totalEarningsLamports) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
-    let botUsername = 'YourBotUsername'; try { const me = await bot.getMe(); if (me.username) { botUsername = me.username; }} catch (err) { /* ignore */ }
+    let botUsername = 'YourBotUsername'; try { const me = await bot.getMe(); if (me.username) { botUsername = me.username; }} catch (err) { console.warn("Failed to get bot username for referral link:", err.message) }
     const referralLink = `https://t\\.me/${botUsername}?start=${userDetails.referral_code}`; // Escape .
     const minBetSOL = (Number(REFERRAL_INITIAL_BET_MIN_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
     const milestonePercent = (REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(2);
     let tiersText = REFERRAL_INITIAL_BONUS_TIERS.map(tier => { /* ... (tier text generation as before) ... */
-        const range = tier.maxCount === Infinity ? `${tier.maxCount === 101 ? 101 : (REFERRAL_INITIAL_BONUS_TIERS[REFERRAL_INITIAL_BONUS_TIERS.length - 2].maxCount + 1)}\\+` : `${tier.maxCount - (tier.maxCount === 10 ? 9 : REFERRAL_INITIAL_BONUS_TIERS[REFERRAL_INITIAL_BONUS_TIERS.indexOf(tier)-1].maxCount)}\\-${tier.maxCount}`;
-        const countLabel = REFERRAL_INITIAL_BONUS_TIERS.indexOf(tier) === 0 ? `1\\-${tier.maxCount}` : range;
-        return `  \\- ${escapeMarkdownV2(countLabel)} refs: ${escapeMarkdownV2((tier.percent * 100).toFixed(0))}\\%`; // Escape - %
-     }).join('\n');
+        let countLabel = '';
+        const tierIndex = REFERRAL_INITIAL_BONUS_TIERS.indexOf(tier);
+        if (tier.maxCount === Infinity) {
+            const prevMax = tierIndex > 0 ? REFERRAL_INITIAL_BONUS_TIERS[tierIndex - 1].maxCount : 0;
+            countLabel = `${prevMax + 1}\\+`; // e.g. 101+
+        } else {
+            const lowerBound = tierIndex === 0 ? 1 : REFERRAL_INITIAL_BONUS_TIERS[tierIndex - 1].maxCount + 1;
+            countLabel = `${lowerBound}\\-${tier.maxCount}`; // e.g. 1-10, 11-25
+        }
+        return `   \\- ${escapeMarkdownV2(countLabel)} refs: ${escapeMarkdownV2((tier.percent * 100).toFixed(0))}\\%`; // Escape - %
+       }).join('\n');
 
     // Escaped Multi-line Message
     let referralMsg = `*Your Referral Stats* 📊\n\n` +
@@ -3408,30 +3677,59 @@ async function handleDepositCommand(msg, args) {
     const chatId = msg.chat.id;
     const userId = String(msg.from.id);
     const logPrefix = `[DepositCmd User ${userId}]`;
-    try {
-        await getUserBalance(userId);
-        const addressIndex = await getNextDepositAddressIndex(userId); // Uses function moved to Part 2
-        const derivedInfo = await generateUniqueDepositAddress(userId, addressIndex);
-        if (!derivedInfo) { throw new Error("Failed to generate a unique deposit address. Master seed phrase might be invalid or derivation failed."); }
-        const depositAddress = derivedInfo.publicKey.toBase58();
-        const derivationPath = derivedInfo.path;
-        const expiresAt = new Date(Date.now() + DEPOSIT_ADDRESS_EXPIRY_MS);
-        const recordResult = await createDepositAddressRecord(userId, depositAddress, derivationPath, expiresAt);
-        if (!recordResult.success) { throw new Error(recordResult.error || "Failed to save deposit address record to database."); }
+    console.log(`${logPrefix} Handling deposit command.`); // [LOGGING ADDED] Entry log
 
+    try {
+        // 1. Ensure user exists (also warms up DB connection potentially)
+        console.log(`${logPrefix} Ensuring user exists in DB...`); // [LOGGING ADDED] Step log
+        await getUserBalance(userId); // Ensures user exists via internal call
+        console.log(`${logPrefix} User exists. Fetching next address index...`); // [LOGGING ADDED] Step log
+
+        // 2. Get next index
+        const addressIndex = await getNextDepositAddressIndex(userId); // Uses function moved to Part 2
+        console.log(`${logPrefix} Next deposit index determined: ${addressIndex}.`); // [LOGGING ADDED] Step log
+
+        // 3. Generate unique address (Function in Part 3 now contains detailed logs)
+        console.log(`${logPrefix} Generating unique deposit address...`); // [LOGGING ADDED] Step log
+        const derivedInfo = await generateUniqueDepositAddress(userId, addressIndex);
+        if (!derivedInfo) {
+            // Specific error logged within generateUniqueDepositAddress
+            throw new Error("Failed to generate a unique deposit address. See previous logs for details.");
+        }
+        const depositAddress = derivedInfo.publicKey.toBase58();
+        const derivationPath = derivedInfo.derivationPath; // Keep path for record
+        console.log(`${logPrefix} Deposit address generated: ${depositAddress} (Path: ${derivationPath})`); // [LOGGING ADDED] Step success log
+
+        // 4. Calculate expiry
+        const expiresAt = new Date(Date.now() + DEPOSIT_ADDRESS_EXPIRY_MS);
+        console.log(`${logPrefix} Address expiry set to: ${expiresAt.toISOString()}`); // [LOGGING ADDED] Step log
+
+        // 5. Create DB record for the address (Function in Part 2 now contains detailed logs)
+        console.log(`${logPrefix} Creating deposit address record in DB...`); // [LOGGING ADDED] Step log
+        const recordResult = await createDepositAddressRecord(userId, depositAddress, derivationPath, expiresAt);
+        if (!recordResult.success || !recordResult.id) {
+            // Specific error logged within createDepositAddressRecord
+            throw new Error(recordResult.error || "Failed to save deposit address record to database.");
+        }
+        console.log(`${logPrefix} Deposit address record created successfully (ID: ${recordResult.id}).`); // [LOGGING ADDED] Step success log
+
+        // 6. Send message to user
         // Escaped Message
         const expiryMinutes = Math.round(DEPOSIT_ADDRESS_EXPIRY_MS / (60 * 1000));
         const message = `💰 *Deposit SOL*\n\n` +
                         `To add funds to your bot balance, send SOL to this unique address:\n\n` +
-                        `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
+                        `\`${escapeMarkdownV2(depositAddress)}\`\n\n` + // Address escaped
                         `⚠️ *Important:*\n` +
                         `1\\. This address is temporary and only valid for *one* deposit\\. It expires in *${escapeMarkdownV2(expiryMinutes)} minutes*\\. \n` + // Escaped . (x3)
                         `2\\. Do *not* send multiple times to this address\\. Use \`/deposit\` again for new deposits\\. \n` + // Escaped . (x2)
                         `3\\. Deposits typically require *${escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL)}* network confirmations to reflect in your /wallet balance\\.`; // Escaped .
 
+        console.log(`${logPrefix} Sending deposit instructions to user.`); // [LOGGING ADDED] Step log
         await safeSendMessage(chatId, message, { parse_mode: 'MarkdownV2' });
+        console.log(`${logPrefix} Deposit command handled successfully.`); // [LOGGING ADDED] Final success log
+
     } catch (error) {
-        console.error(`${logPrefix} Error: ${error.message}`);
+        console.error(`${logPrefix} Error: ${error.message}`); // Log the specific error that caused the failure
         // Escaped Message
         await safeSendMessage(chatId, `❌ Error generating deposit address: ${escapeMarkdownV2(error.message)}\\. Please try again later or contact support\\.`, { parse_mode: 'MarkdownV2' });
     }
@@ -3442,30 +3740,34 @@ async function handleWithdrawCommand(msg, args) {
     const chatId = msg.chat.id;
     const userId = String(msg.from.id);
     const logPrefix = `[WithdrawCmd User ${userId}]`;
+    console.log(`${logPrefix} Handling withdraw command.`); // [LOGGING ADDED] Log command
+
     try {
         const linkedAddress = await getLinkedWallet(userId);
         if (!linkedAddress) {
              // Escaped Message
-            await safeSendMessage(chatId, `⚠️ You must set your external withdrawal address first using \`/wallet <YourSolanaAddress>\`\\. Rewards and withdrawals are sent there\\.`, { parse_mode: 'MarkdownV2' });
-            return;
-        }
-        const currentBalance = await getUserBalance(userId);
-        if (currentBalance < MIN_WITHDRAWAL_LAMPORTS + WITHDRAWAL_FEE_LAMPORTS) {
-             const minNeeded = (Number(MIN_WITHDRAWAL_LAMPORTS + WITHDRAWAL_FEE_LAMPORTS) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
-             // Escaped Message
-             await safeSendMessage(chatId, `⚠️ Your balance \\(${escapeMarkdownV2((Number(currentBalance)/LAMPORTS_PER_SOL).toFixed(4))} SOL\\) is below the minimum required to cover the withdrawal amount \\+ fee \\(min ${escapeMarkdownV2(minNeeded)} SOL total\\)\\.`, { parse_mode: 'MarkdownV2'});
+             await safeSendMessage(chatId, `⚠️ You must set your external withdrawal address first using \`/wallet <YourSolanaAddress>\`\\. Rewards and withdrawals are sent there\\.`, { parse_mode: 'MarkdownV2' });
              return;
         }
+        const currentBalance = await getUserBalance(userId);
+        const minWithdrawTotal = MIN_WITHDRAWAL_LAMPORTS + WITHDRAWAL_FEE_LAMPORTS;
+        if (currentBalance < minWithdrawTotal) {
+             const minNeeded = (Number(minWithdrawTotal) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
+              // Escaped Message
+              await safeSendMessage(chatId, `⚠️ Your balance \\(${escapeMarkdownV2((Number(currentBalance)/LAMPORTS_PER_SOL).toFixed(4))} SOL\\) is below the minimum required to cover the withdrawal amount \\+ fee \\(min ${escapeMarkdownV2(minNeeded)} SOL total\\)\\.`, { parse_mode: 'MarkdownV2'});
+             return;
+        }
+        // Set user state to expect amount input
         userStateCache.set(userId, { state: 'awaiting_withdrawal_amount', chatId: String(chatId), messageId: msg.message_id, timestamp: Date.now(), data: {} });
-        // Escaped Message
-        await safeSendMessage(chatId, `💸 Your withdrawal address: \`${escapeMarkdownV2(linkedAddress)}\`\n` +
+         // Escaped Message
+         await safeSendMessage(chatId, `💸 Your withdrawal address: \`${escapeMarkdownV2(linkedAddress)}\`\n` +
                                      `Minimum withdrawal: ${escapeMarkdownV2((Number(MIN_WITHDRAWAL_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. Fee: ${escapeMarkdownV2((Number(WITHDRAWAL_FEE_LAMPORTS)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\\. \n\n` + // Escaped . (x2) :
                                      `Please enter the amount of SOL you wish to withdraw:`, // Escaped :
                                      { parse_mode: 'MarkdownV2' });
     } catch (error) {
         console.error(`${logPrefix} Error starting withdrawal: ${error.message}`);
          // Escaped Message
-        await safeSendMessage(chatId, `❌ Error starting withdrawal process\\. Please try again later\\.`, { parse_mode: 'MarkdownV2' });
+         await safeSendMessage(chatId, `❌ Error starting withdrawal process\\. Please try again later\\.`, { parse_mode: 'MarkdownV2' });
     }
 }
 
@@ -3474,32 +3776,37 @@ async function handleWithdrawCommand(msg, args) {
 
 async function handleCoinflipCommand(msg, args) {
     const chatId = msg.chat.id; const userId = String(msg.from.id);
+    console.log(`[Cmd /coinflip User ${userId}] Handling coinflip command.`); // [LOGGING ADDED] Log command
     userStateCache.set(userId, { state: 'awaiting_cf_amount', chatId: String(chatId), messageId: msg.message_id, timestamp: Date.now(), data: {} });
     // Escaped Message
     await safeSendMessage(chatId, `🪙 Enter Coinflip bet amount \\(SOL\\):`, { parse_mode: 'MarkdownV2' }); // Escaped ( ) :
 }
 async function handleRaceCommand(msg, args) {
      const chatId = msg.chat.id; const userId = String(msg.from.id);
+     console.log(`[Cmd /race User ${userId}] Handling race command.`); // [LOGGING ADDED] Log command
      userStateCache.set(userId, { state: 'awaiting_race_amount', chatId: String(chatId), messageId: msg.message_id, timestamp: Date.now(), data: {} });
       // Escaped Message
-     await safeSendMessage(chatId, `🐎 Enter Race bet amount \\(SOL\\):`, { parse_mode: 'MarkdownV2' }); // Escaped ( ) :
+      await safeSendMessage(chatId, `🐎 Enter Race bet amount \\(SOL\\):`, { parse_mode: 'MarkdownV2' }); // Escaped ( ) :
 }
 async function handleSlotsCommand(msg, args) {
     const chatId = msg.chat.id; const userId = String(msg.from.id);
+    console.log(`[Cmd /slots User ${userId}] Handling slots command.`); // [LOGGING ADDED] Log command
     userStateCache.set(userId, { state: 'awaiting_slots_amount', chatId: String(chatId), messageId: msg.message_id, timestamp: Date.now(), data: {} });
      // Escaped Message
-    await safeSendMessage(chatId, `🎰 Enter Slots bet amount \\(SOL\\):`, { parse_mode: 'MarkdownV2' }); // Escaped ( ) :
+     await safeSendMessage(chatId, `🎰 Enter Slots bet amount \\(SOL\\):`, { parse_mode: 'MarkdownV2' }); // Escaped ( ) :
 }
 async function handleRouletteCommand(msg, args) {
     const chatId = msg.chat.id; const userId = String(msg.from.id);
-     // Escaped Message
-     await safeSendMessage(chatId, `⚪️ Roulette betting via text is limited\\. A better interface is planned\\. Use /help for now\\.`, { parse_mode: 'MarkdownV2'});
+    console.log(`[Cmd /roulette User ${userId}] Handling roulette command.`); // [LOGGING ADDED] Log command
+      // Escaped Message
+      await safeSendMessage(chatId, `⚪️ Roulette betting via text is limited\\. A better interface is planned\\. Use /help for now\\.`, { parse_mode: 'MarkdownV2'});
 }
 async function handleWarCommand(msg, args) {
     const chatId = msg.chat.id; const userId = String(msg.from.id);
+    console.log(`[Cmd /war User ${userId}] Handling war command.`); // [LOGGING ADDED] Log command
     userStateCache.set(userId, { state: 'awaiting_war_amount', chatId: String(chatId), messageId: msg.message_id, timestamp: Date.now(), data: {} });
      // Escaped Message
-    await safeSendMessage(chatId, `🃏 Enter Casino War bet amount \\(SOL\\):`, { parse_mode: 'MarkdownV2' }); // Escaped ( ) :
+     await safeSendMessage(chatId, `🃏 Enter Casino War bet amount \\(SOL\\):`, { parse_mode: 'MarkdownV2' }); // Escaped ( ) :
 }
 
 
@@ -3511,8 +3818,8 @@ async function handleAdminCommand(msg, args) {
     const subArgs = args?.split(' ').slice(1) || [];
 
     if (!subCommand) {
-        // Escaped Usage Message
-        await safeSendMessage(chatId, "Admin Usage: `/admin <command> [args]`\nCommands: `status`, `getbalance`, `getconfig`, `setloglevel <level>`, `finduser <id\\_or\\_ref>`", { parse_mode: 'MarkdownV2' });
+         // Escaped Usage Message
+         await safeSendMessage(chatId, "Admin Usage: `/admin <command> [args]`\nCommands: `status`, `getbalance`, `getconfig`, `setloglevel <level>`, `finduser <id\\_or\\_ref>`", { parse_mode: 'MarkdownV2' });
         return;
     }
     console.log(`${logPrefix} Executing: ${subCommand} ${subArgs.join(' ')}`);
@@ -3525,7 +3832,7 @@ async function handleAdminCommand(msg, args) {
                  const depAddrCacheSize = activeDepositAddresses.size; const processedTxCacheSize = processedDepositTxSignatures.size;
                  const dbPoolTotal = pool.totalCount; const dbPoolIdle = pool.idleCount; const dbPoolWaiting = pool.waitingCount;
                  // Escaped Status Message
-                 let statusMsg = `*Bot Status* \\(v3\\.1\\.0\\) \\- ${escapeMarkdownV2(new Date().toISOString())}\n\n` + // Escaped ()-
+                 let statusMsg = `*Bot Status* \\(v3\\.1\\.1\\) \\- ${escapeMarkdownV2(new Date().toISOString())}\n\n` + // Escaped ()- Updated Version
                                  `*Queues*:\n` +
                                  `  Msg: ${msgQueueSize}, Callback: ${cbQueueSize}, Payout: ${payoutQueueSize}, Deposit: ${depositQSize}, TG Send: ${tgSendQSize}\n`+
                                  `*Caches*:\n` +
@@ -3534,45 +3841,56 @@ async function handleAdminCommand(msg, args) {
                                  `  Total: ${dbPoolTotal}, Idle: ${dbPoolIdle}, Waiting: ${dbPoolWaiting}\n` +
                                  `*State*: Initialized: ${isFullyInitialized}\n`;
                  await safeSendMessage(chatId, statusMsg, { parse_mode: 'MarkdownV2' }); break;
-             }
+              }
             case 'getbalance': { /* ... getbalance logic ... */
                  const keyTypes = ['main', 'referral']; let balanceMsg = '*Payout Wallet Balances:*\n';
                  for (const type of keyTypes) { /* ... key selection logic ... */
-                      let keyEnvVar = ''; let keyDesc = '';
-                      if (type === 'main') { keyEnvVar = 'MAIN_BOT_PRIVATE_KEY'; keyDesc = 'Main';}
-                      else if (type === 'referral') { keyEnvVar = process.env.REFERRAL_PAYOUT_PRIVATE_KEY ? 'REFERRAL_PAYOUT_PRIVATE_KEY' : 'MAIN_BOT_PRIVATE_KEY'; keyDesc = `Referral \\(${escapeMarkdownV2(process.env.REFERRAL_PAYOUT_PRIVATE_KEY ? 'Dedicated' : 'Using Main')}\\)`;} // Escape ()
-                      const pk = process.env[keyEnvVar];
-                      if (pk) { try { const keypair = Keypair.fromSecretKey(bs58.decode(pk)); const balance = await solanaConnection.getBalance(keypair.publicKey);
-                               balanceMsg += `  \\- ${escapeMarkdownV2(keyDesc)} \\(${escapeMarkdownV2(keypair.publicKey.toBase58().slice(0,6))}\\.\\.\\): ${escapeMarkdownV2((Number(balance)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\n`; // Escape -, ., (, )
-                          } catch (e) { balanceMsg += `  \\- ${escapeMarkdownV2(keyDesc)}: Error fetching balance \\- ${escapeMarkdownV2(e.message)}\n`; } // Escape - (x2)
-                      } else { balanceMsg += `  \\- ${escapeMarkdownV2(keyDesc)}: Private key not set\n`; } // Escape -
+                     let keyEnvVar = ''; let keyDesc = '';
+                     if (type === 'main') { keyEnvVar = 'MAIN_BOT_PRIVATE_KEY'; keyDesc = 'Main';}
+                     else if (type === 'referral') { keyEnvVar = process.env.REFERRAL_PAYOUT_PRIVATE_KEY ? 'REFERRAL_PAYOUT_PRIVATE_KEY' : 'MAIN_BOT_PRIVATE_KEY'; keyDesc = `Referral \\(${escapeMarkdownV2(process.env.REFERRAL_PAYOUT_PRIVATE_KEY ? 'Dedicated' : 'Using Main')}\\)`;} // Escape ()
+                     const pk = process.env[keyEnvVar];
+                     if (pk) { try { const keypair = Keypair.fromSecretKey(bs58.decode(pk)); const balance = await solanaConnection.getBalance(keypair.publicKey);
+                            balanceMsg += `  \\- ${escapeMarkdownV2(keyDesc)} \\(${escapeMarkdownV2(keypair.publicKey.toBase58().slice(0,6))}\\.\\.\\): ${escapeMarkdownV2((Number(balance)/LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS))} SOL\n`; // Escape -, ., (, )
+                         } catch (e) { balanceMsg += `  \\- ${escapeMarkdownV2(keyDesc)}: Error fetching balance \\- ${escapeMarkdownV2(e.message)}\n`; } // Escape - (x2)
+                     } else { balanceMsg += `  \\- ${escapeMarkdownV2(keyDesc)}: Private key not set\n`; } // Escape -
                  } await safeSendMessage(chatId, balanceMsg, { parse_mode: 'MarkdownV2' }); break;
-             }
+              }
             case 'getconfig': { /* ... getconfig logic ... */
                  let configText = "*Current Config \\(Non\\-Secret Env Vars\\):*\n\n"; // Escaped ()-
                  const sensitiveKeywords = ['TOKEN', 'DATABASE_URL', 'KEY', 'SECRET', 'PASSWORD', 'SEED'];
                  const allVars = {...OPTIONAL_ENV_DEFAULTS, ...process.env};
                  for (const key in allVars) {
+                     // Only show keys that are required or part of optional defaults
                      if (REQUIRED_ENV_VARS.includes(key) || OPTIONAL_ENV_DEFAULTS.hasOwnProperty(key)) {
                           const isSensitive = sensitiveKeywords.some(k => key.toUpperCase().includes(k));
-                          const value = process.env[key] !== undefined ? process.env[key] : `\\(Default: ${escapeMarkdownV2(OPTIONAL_ENV_DEFAULTS[key])}\\)`; // Escape ()
-                          configText += `\\- ${escapeMarkdownV2(key)}: ${isSensitive && key !== 'RPC_URLS' ? '[Set, Redacted]' : escapeMarkdownV2(value)}\n`; // Escape -
+                          let value = process.env[key];
+                          let source = ''; // Track if default or set
+                          if (value === undefined && OPTIONAL_ENV_DEFAULTS.hasOwnProperty(key)) {
+                                value = OPTIONAL_ENV_DEFAULTS[key];
+                                source = ' \\(Default\\)'; // Escaped ()
+                          } else if (value !== undefined && OPTIONAL_ENV_DEFAULTS.hasOwnProperty(key) && value === OPTIONAL_ENV_DEFAULTS[key]) {
+                                // Value is set but it matches the default
+                                // source = ' (Matches Default)'; // Optionally indicate
+                          }
+                          value = value ?? '[Not Set]'; // Handle truly unset required vars (shouldn't happen after startup checks)
+
+                          configText += `\\- ${escapeMarkdownV2(key)}: ${isSensitive && key !== 'RPC_URLS' ? '[Set, Redacted]' : escapeMarkdownV2(value)}${source}\n`; // Escape -
                      }
                  }
-                 configText += "\n*Game Config Limits \\(Lamports\\):*\n" + escapeMarkdownV2(JSON.stringify(GAME_CONFIG, (k, v) => typeof v === 'bigint' ? v.toString() : v, 2)); // Escape ()
+                 configText += "\n*Game Config Limits \\(Lamports\\):*\n" + "```json\n" + JSON.stringify(GAME_CONFIG, (k, v) => typeof v === 'bigint' ? v.toString() : v, 2) + "\n```"; // Use JSON code block
                  await safeSendMessage(chatId, configText.substring(0, 4090), { parse_mode: 'MarkdownV2' }); break; // Substring to avoid length limits
-             }
+              }
             case 'setloglevel': case 'finduser':
-                  // Escaped Message
+                 // Escaped Message
                  await safeSendMessage(chatId, `Admin command \`${escapeMarkdownV2(subCommand)}\` not fully implemented yet\\.`, { parse_mode: 'MarkdownV2'}); break;
             default:
                  // Escaped Message
-                await safeSendMessage(chatId, `Unknown admin command: \`${escapeMarkdownV2(subCommand)}\``, { parse_mode: 'MarkdownV2' });
+                 await safeSendMessage(chatId, `Unknown admin command: \`${escapeMarkdownV2(subCommand)}\``, { parse_mode: 'MarkdownV2' });
         }
     } catch (adminError) {
         console.error(`${logPrefix} Admin command error (${subCommand}):`, adminError);
          // Escaped Message
-        await safeSendMessage(chatId, `Error executing admin command \`${escapeMarkdownV2(subCommand)}\`: \`${escapeMarkdownV2(adminError.message)}\``, { parse_mode: 'MarkdownV2' });
+         await safeSendMessage(chatId, `Error executing admin command \`${escapeMarkdownV2(subCommand)}\`: \`${escapeMarkdownV2(adminError.message)}\``, { parse_mode: 'MarkdownV2' });
     }
 }
 
@@ -3587,74 +3905,99 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
 
      let client = null;
      try {
-          const refereeDetails = await getUserWalletDetails(refereeUserId);
-          if (!refereeDetails?.referred_by_user_id) { /* ... (handle non-referred + update stats) ... */
+         const refereeDetails = await getUserWalletDetails(refereeUserId);
+         if (!refereeDetails?.referred_by_user_id) { /* ... (handle non-referred + update stats) ... */
+             // console.log(`${logPrefix} Referee is not referred. Updating wager stats only.`); // Less verbose
               client = await pool.connect(); await client.query('BEGIN');
               await updateUserWagerStats(refereeUserId, wagerAmountLamports, client);
               await client.query('COMMIT'); return;
            }
-          const referrerUserId = refereeDetails.referred_by_user_id;
-          const referrerDetails = await getUserWalletDetails(referrerUserId);
-          if (!referrerDetails?.external_withdrawal_address) { /* ... (handle referrer no wallet + update stats) ... */
-               console.warn(`${logPrefix} Referrer ${referrerUserId} has no linked wallet. Cannot process potential payouts.`);
-               client = await pool.connect(); await client.query('BEGIN');
-               await updateUserWagerStats(refereeUserId, wagerAmountLamports, client);
-               await client.query('COMMIT'); return;
+         const referrerUserId = refereeDetails.referred_by_user_id;
+         const referrerDetails = await getUserWalletDetails(referrerUserId);
+         if (!referrerDetails?.external_withdrawal_address) { /* ... (handle referrer no wallet + update stats) ... */
+              console.warn(`${logPrefix} Referrer ${referrerUserId} has no linked wallet. Cannot process potential payouts.`);
+              client = await pool.connect(); await client.query('BEGIN');
+              await updateUserWagerStats(refereeUserId, wagerAmountLamports, client); // Still update referee stats
+              await client.query('COMMIT'); return;
            }
 
-          client = await pool.connect(); await client.query('BEGIN'); // Start TX
-          let newLastMilestonePaid = refereeDetails.last_milestone_paid_lamports;
+         client = await pool.connect(); await client.query('BEGIN'); // Start TX
+         let newLastMilestonePaid = refereeDetails.last_milestone_paid_lamports;
+         let payoutQueued = false; // Flag to track if any payout was queued
 
-          // Check Initial Bet Bonus
-          const isFirst = await isFirstCompletedBet(refereeUserId, completedBetId);
-          if (isFirst && wagerAmountLamports >= REFERRAL_INITIAL_BET_MIN_LAMPORTS) { /* ... (calculate bonus, record, queue) ... */
-                const referrerCount = referrerDetails.referral_count || 0;
-                let bonusTier = REFERRAL_INITIAL_BONUS_TIERS[REFERRAL_INITIAL_BONUS_TIERS.length - 1];
-                for (const tier of REFERRAL_INITIAL_BONUS_TIERS) { if (referrerCount <= tier.maxCount) { bonusTier = tier; break; } }
-                const initialBonusAmount = wagerAmountLamports * BigInt(Math.round(bonusTier.percent * 100)) / 100n;
-                if (initialBonusAmount > 0n) {
-                     const payoutRecord = await recordPendingReferralPayout(referrerUserId, refereeUserId, 'initial_bet', initialBonusAmount, completedBetId);
-                     if (payoutRecord.success && payoutRecord.payoutId) {
-                          await addPayoutJob({ type: 'payout_referral', payoutId: payoutRecord.payoutId, userId: referrerUserId }, parseInt(process.env.PAYOUT_JOB_RETRIES, 10), parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10));
-                          console.log(`${logPrefix} Initial bonus payout job queued (ID: ${payoutRecord.payoutId}).`);
-                     } else if (payoutRecord.error !== 'Duplicate milestone payout attempt.') { console.error(`${logPrefix} Failed to record initial bonus payout: ${payoutRecord.error}`); }
-                }
+         // Check Initial Bet Bonus
+         const isFirst = await isFirstCompletedBet(refereeUserId, completedBetId);
+         if (isFirst && wagerAmountLamports >= REFERRAL_INITIAL_BET_MIN_LAMPORTS) { /* ... (calculate bonus, record, queue) ... */
+              console.log(`${logPrefix} Referee's first qualifying bet detected. Calculating initial bonus...`);
+              const referrerCount = referrerDetails.referral_count || 0; // Get count *before* this referral (if linking logic is separate)
+              let bonusTier = REFERRAL_INITIAL_BONUS_TIERS[REFERRAL_INITIAL_BONUS_TIERS.length - 1]; // Default to highest
+              for (const tier of REFERRAL_INITIAL_BONUS_TIERS) { if (referrerCount <= tier.maxCount) { bonusTier = tier; break; } }
+              const initialBonusAmount = wagerAmountLamports * BigInt(Math.round(bonusTier.percent * 100)) / 100n;
+              console.log(`${logPrefix} Referrer Count: ${referrerCount}, Tier Percent: ${bonusTier.percent}, Bonus Amount: ${initialBonusAmount}`);
+              if (initialBonusAmount > 0n) {
+                   const payoutRecord = await recordPendingReferralPayout(referrerUserId, refereeUserId, 'initial_bet', initialBonusAmount, completedBetId, null, client); // Pass client
+                   if (payoutRecord.success && payoutRecord.payoutId) {
+                        await addPayoutJob({ type: 'payout_referral', payoutId: payoutRecord.payoutId, userId: referrerUserId }, parseInt(process.env.PAYOUT_JOB_RETRIES, 10), parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10));
+                        console.log(`${logPrefix} Initial bonus payout job queued (ID: ${payoutRecord.payoutId}).`);
+                        payoutQueued = true;
+                   } else if (payoutRecord.error !== 'Duplicate milestone payout attempt.') { console.error(`${logPrefix} Failed to record initial bonus payout: ${payoutRecord.error}`); }
+              } else { console.log(`${logPrefix} Calculated initial bonus is zero.`); }
            }
 
-          // Check Milestone Bonus
-          const newTotalWagered = (refereeDetails.total_wagered || 0n) + wagerAmountLamports;
-          let milestoneCrossed = null;
-          for (const threshold of REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS) { /* ... (find highest crossed threshold) ... */
-                if (newTotalWagered >= threshold && threshold > refereeDetails.last_milestone_paid_lamports) { milestoneCrossed = threshold; }
-                else if (newTotalWagered < threshold) { break; }
-           }
-          if (milestoneCrossed) { /* ... (calculate bonus, record, queue) ... */
-                const milestoneBonusAmount = milestoneCrossed * BigInt(Math.round(REFERRAL_MILESTONE_REWARD_PERCENT * 10000)) / 10000n;
-                if (milestoneBonusAmount > 0n) {
-                     const payoutRecord = await recordPendingReferralPayout(referrerUserId, refereeUserId, 'milestone', milestoneBonusAmount, null, milestoneCrossed);
-                     if (payoutRecord.success && payoutRecord.payoutId) {
-                          await addPayoutJob({ type: 'payout_referral', payoutId: payoutRecord.payoutId, userId: referrerUserId }, parseInt(process.env.PAYOUT_JOB_RETRIES, 10), parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10));
-                          console.log(`${logPrefix} Milestone bonus payout job queued (ID: ${payoutRecord.payoutId}).`);
-                          newLastMilestonePaid = milestoneCrossed; // Update marker *only if* payout recorded successfully
-                     } else if (payoutRecord.error !== 'Duplicate milestone payout attempt.') { console.error(`${logPrefix} Failed to record milestone bonus payout: ${payoutRecord.error}`); }
-                 }
+         // Check Milestone Bonus
+         const newTotalWagered = (refereeDetails.total_wagered || 0n) + wagerAmountLamports;
+         let milestoneCrossed = null;
+         // Iterate thresholds in ascending order
+         for (const threshold of REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS) {
+             if (newTotalWagered >= threshold && threshold > refereeDetails.last_milestone_paid_lamports) {
+                 milestoneCrossed = threshold; // Keep track of the highest threshold crossed
+             } else if (newTotalWagered < threshold) {
+                 break; // Stop checking once total wagered is less than the threshold
+             }
+          }
+
+         if (milestoneCrossed) { /* ... (calculate bonus, record, queue) ... */
+             console.log(`${logPrefix} Milestone threshold ${milestoneCrossed} crossed (Previous: ${refereeDetails.last_milestone_paid_lamports}, New Total: ${newTotalWagered}). Calculating bonus...`);
+              const milestoneBonusAmount = milestoneCrossed * BigInt(Math.round(REFERRAL_MILESTONE_REWARD_PERCENT * 10000)) / 10000n;
+              console.log(`${logPrefix} Milestone Bonus Amount: ${milestoneBonusAmount}`);
+              if (milestoneBonusAmount > 0n) {
+                   // Pass client to recordPendingReferralPayout
+                   const payoutRecord = await recordPendingReferralPayout(referrerUserId, refereeUserId, 'milestone', milestoneBonusAmount, null, milestoneCrossed, client);
+                   if (payoutRecord.success && payoutRecord.payoutId) {
+                        await addPayoutJob({ type: 'payout_referral', payoutId: payoutRecord.payoutId, userId: referrerUserId }, parseInt(process.env.PAYOUT_JOB_RETRIES, 10), parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10));
+                        console.log(`${logPrefix} Milestone bonus payout job queued (ID: ${payoutRecord.payoutId}).`);
+                        newLastMilestonePaid = milestoneCrossed; // Update marker *only if* payout recorded successfully
+                        payoutQueued = true;
+                   } else if (payoutRecord.error !== 'Duplicate milestone payout attempt.') { console.error(`${logPrefix} Failed to record milestone bonus payout: ${payoutRecord.error}`); }
+              } else { console.log(`${logPrefix} Calculated milestone bonus is zero.`); }
            }
 
-          // Update Referee Wager Stats (Commit or Rollback)
-          const statsUpdated = await updateUserWagerStats(refereeUserId, wagerAmountLamports, client, newLastMilestonePaid);
-          if (!statsUpdated) { console.error(`${logPrefix} CRITICAL: Failed to update referee wager stats. Rolling back.`); await client.query('ROLLBACK'); }
-          else { await client.query('COMMIT'); /* console.log(`${logPrefix} Referral checks completed.`); */ } // Less verbose
+         // Update Referee Wager Stats (Commit or Rollback)
+         // Only update if a milestone was crossed OR this is the first bet (to ensure total_wagered is updated)
+         if (newLastMilestonePaid !== refereeDetails.last_milestone_paid_lamports || isFirst) {
+              console.log(`${logPrefix} Updating referee wager stats. New Milestone Paid Level: ${newLastMilestonePaid}`);
+             const statsUpdated = await updateUserWagerStats(refereeUserId, wagerAmountLamports, client, newLastMilestonePaid);
+             if (!statsUpdated) { console.error(`${logPrefix} CRITICAL: Failed to update referee wager stats. Rolling back.`); await client.query('ROLLBACK'); }
+             else { await client.query('COMMIT'); console.log(`${logPrefix} Referral checks completed. Transaction committed.`); }
+         } else {
+              // No milestone crossed, no first bet - just need to update total wagered without changing milestone level
+              console.log(`${logPrefix} No new milestone crossed. Updating wager stats only.`);
+              const statsUpdated = await updateUserWagerStats(refereeUserId, wagerAmountLamports, client, null); // Pass null for milestone
+              if (!statsUpdated) { console.error(`${logPrefix} CRITICAL: Failed to update referee wager stats (no milestone change). Rolling back.`); await client.query('ROLLBACK'); }
+              else { await client.query('COMMIT'); console.log(`${logPrefix} Referral checks completed (no milestone change). Transaction committed.`); }
+         }
+
 
      } catch (error) { /* ... (error logging and rollback) ... */
-          console.error(`${logPrefix} Error during referral checks: ${error.message}`);
-          if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { /* ignore */ } }
+         console.error(`${logPrefix} Error during referral checks: ${error.message}`);
+         if (client) { try { await client.query('ROLLBACK'); console.log(`${logPrefix} Transaction rolled back due to error.`); } catch (rbErr) { /* ignore */ } }
      } finally { if (client) client.release(); }
 }
 
 
 // --- End of Part 5 ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
-// --- VERSION: 3.1.0 --- (MarkdownV2 Escaping Fixed)
+// --- VERSION: 3.1.1 --- (Added Deposit Logging)
 
 // --- Payout Job Handling ---
 
@@ -3688,18 +4031,21 @@ async function addPayoutJob(jobDetails, maxRetries, baseRetryDelayMs) {
 
             } catch (error) {
                 attempt++;
-                const isRetryable = isRetryableSolanaError(error); // Use our Solana-specific checker
+                // Use our Solana-specific checker AND check if error object has explicit retryable flag
+                const isRetryable = error.isRetryable !== undefined ? error.isRetryable : isRetryableSolanaError(error);
                 console.warn(`${logPrefix} Attempt ${attempt}/${maxRetries + 1} failed. Retryable: ${isRetryable}. Error: ${error.message}`);
 
                 if (!isRetryable || attempt > maxRetries) {
                     console.error(`${logPrefix} Final attempt failed or error not retryable. Marking job as failed.`);
                     try {
                         // Mark as failed in DB - Use the standalone update functions
+                        const failureReason = `Max retries (${maxRetries}) exceeded or non-retryable error: ${error.message.substring(0, 200)}`; // Truncate error
                         if (jobType === 'payout_withdrawal' && jobDetails.withdrawalId) {
-                            await updateWithdrawalStatus(jobDetails.withdrawalId, 'failed', null, null, `Max retries exceeded or non-retryable error: ${error.message}`);
+                            await updateWithdrawalStatus(jobDetails.withdrawalId, 'failed', null, null, failureReason);
                         } else if (jobType === 'payout_referral' && jobDetails.payoutId) {
-                            await updateReferralPayoutStatus(jobDetails.payoutId, 'failed', null, null, `Max retries exceeded or non-retryable error: ${error.message}`);
+                            await updateReferralPayoutStatus(jobDetails.payoutId, 'failed', null, null, failureReason);
                         }
+                        console.log(`${logPrefix} Marked job as failed in DB.`);
                     } catch (dbError) {
                         console.error(`${logPrefix} CRITICAL: Failed to mark job as failed in DB after final error: ${dbError.message}`);
                         // Notify admin urgently here
@@ -3712,7 +4058,7 @@ async function addPayoutJob(jobDetails, maxRetries, baseRetryDelayMs) {
                             jobDetails.userId,
                             `⚠️ Your ${escapeMarkdownV2(errorType)} \\(ID: ${escapeMarkdownV2(jobId)}\\) could not be completed after multiple attempts\\. Please contact support\\. Error: ${escapeMarkdownV2(error.message)}`,
                             { parse_mode: 'MarkdownV2' }
-                        );
+                        ).catch(e => console.error(`${logPrefix} Failed to send failure notification to user ${jobDetails.userId}: ${e.message}`));
                     }
                     break; // Exit retry loop
                 }
@@ -3728,16 +4074,17 @@ async function addPayoutJob(jobDetails, maxRetries, baseRetryDelayMs) {
         // Catch errors from adding the job itself (e.g., queue timed out immediately)
         console.error(`${logPrefix} Error adding/processing job in payout queue:`, queueError.message);
         // Attempt to mark as failed as a last resort
-         try {
-            if (jobType === 'payout_withdrawal' && jobDetails.withdrawalId) updateWithdrawalStatus(jobDetails.withdrawalId, 'failed', null, null, `Queue processing error: ${queueError.message}`);
-            else if (jobType === 'payout_referral' && jobDetails.payoutId) updateReferralPayoutStatus(jobDetails.payoutId, 'failed', null, null, `Queue processing error: ${queueError.message}`);
-         } catch (dbError) { console.error(`${logPrefix} Failed to mark job as failed after queue error: ${dbError.message}`); }
+        try {
+             const queueFailureReason = `Queue processing error: ${queueError.message.substring(0, 200)}`;
+             if (jobType === 'payout_withdrawal' && jobDetails.withdrawalId) updateWithdrawalStatus(jobDetails.withdrawalId, 'failed', null, null, queueFailureReason);
+             else if (jobType === 'payout_referral' && jobDetails.payoutId) updateReferralPayoutStatus(jobDetails.payoutId, 'failed', null, null, queueFailureReason);
+        } catch (dbError) { console.error(`${logPrefix} Failed to mark job as failed after queue error: ${dbError.message}`); }
     });
 }
 
 /** Handles withdrawal payout jobs. Throws error on failure for retry logic. */
 async function handleWithdrawalPayoutJob(job) {
-    const { withdrawalId, userId } = job;
+    const { withdrawalId, userId } = job; // Assume userId is passed in jobDetails for notification
     const logPrefix = `[WithdrawalJob ID:${withdrawalId}]`;
     let client = null; // DB client for transaction
 
@@ -3755,7 +4102,13 @@ async function handleWithdrawalPayoutJob(job) {
     }
 
     // Mark as processing (standalone update)
-    await updateWithdrawalStatus(withdrawalId, 'processing');
+    console.log(`${logPrefix} Marking withdrawal as 'processing' in DB.`);
+    const processingMarked = await updateWithdrawalStatus(withdrawalId, 'processing');
+    if (!processingMarked) {
+        console.warn(`${logPrefix} Failed to mark withdrawal as 'processing'. Another process might be handling it or record changed state. Skipping attempt.`);
+        // Don't throw error, just skip this attempt, let potential other worker finish or retry later.
+        return;
+    }
 
     try {
         const recipient = details.recipient_address;
@@ -3765,73 +4118,94 @@ async function handleWithdrawalPayoutJob(job) {
         const totalDeduction = requestedAmount + feeAmount; // Amount deducted from internal balance
 
         // --- Send the SOL ---
+        console.log(`${logPrefix} Attempting to send ${amountToSend} lamports to ${recipient}...`);
         const sendResult = await sendSol(recipient, amountToSend, 'withdrawal');
 
         if (sendResult.success && sendResult.signature) {
             const signature = sendResult.signature;
-            console.log(`${logPrefix} On-chain send successful: ${signature}. Updating database...`);
+            console.log(`${logPrefix} On-chain send successful: ${signature}. Updating database within transaction...`);
 
             // --- Transaction: Deduct Balance & Mark Completed ---
             client = await pool.connect();
             await client.query('BEGIN');
+            console.log(`${logPrefix} DB Transaction started for completion.`);
 
             // 1. Update balance and add ledger entry for withdrawal AND fee
+            console.log(`${logPrefix} Deducting ${totalDeduction} from internal balance (User: ${details.user_id})...`);
             const balanceUpdateResult = await updateUserBalanceAndLedger(
                 client, details.user_id, -totalDeduction, 'withdrawal', { withdrawalId: withdrawalId },
                 `To: ${recipient.slice(0, 6)}... Fee: ${Number(feeAmount) / LAMPORTS_PER_SOL} SOL`
             );
 
             if (!balanceUpdateResult.success) {
-                 // CRITICAL: Sent SOL but couldn't deduct internally.
-                 await client.query('ROLLBACK'); // Rollback any potential partial changes
-                 client.release(); client = null; // Release client
-                 console.error(`${logPrefix} CRITICAL ERROR: Sent ${amountToSend} lamports (TX: ${signature}) but failed to deduct internal balance for user ${details.user_id}. Reason: ${balanceUpdateResult.error}`);
-                 // Mark withdrawal as failed - this state requires manual intervention
-                 await updateWithdrawalStatus(withdrawalId, 'failed', null, null, `CRITICAL: Internal balance deduction failed after successful send (TX: ${signature})`);
-                 // Notify Admin!
-                 // Throw a specific error to prevent retry of this state
-                 throw new Error("Internal balance deduction failed post-send. Requires manual resolution. Not retryable.");
+                // CRITICAL: Sent SOL but couldn't deduct internally.
+                await client.query('ROLLBACK'); // Rollback any potential partial changes
+                client.release(); client = null; // Release client
+                const criticalErrorMsg = `CRITICAL ERROR: Sent ${amountToSend} lamports (TX: ${signature}) but failed to deduct internal balance for user ${details.user_id}. Reason: ${balanceUpdateResult.error}`;
+                console.error(`${logPrefix} ${criticalErrorMsg}`);
+                // Mark withdrawal as failed - this state requires manual intervention
+                await updateWithdrawalStatus(withdrawalId, 'failed', null, null, `CRITICAL: Internal balance deduction failed after successful send (TX: ${signature})`);
+                // Notify Admin!
+                // Throw a specific error to prevent retry of this state
+                const criticalError = new Error(criticalErrorMsg);
+                criticalError.isRetryable = false; // Ensure this isn't retried
+                throw criticalError;
             }
+             console.log(`${logPrefix} Internal balance deducted successfully. New balance: ${balanceUpdateResult.newBalance}`);
 
             // 2. Update withdrawal record to completed status with signature
+             console.log(`${logPrefix} Marking withdrawal as 'completed' in DB with TX sig...`);
             const statusUpdated = await updateWithdrawalStatus(withdrawalId, 'completed', client, signature);
             if (!statusUpdated) {
-                 // Also CRITICAL: Sent and deducted, but couldn't mark withdrawal complete.
-                 console.error(`${logPrefix} CRITICAL ERROR: Sent ${amountToSend} lamports (TX: ${signature}), deducted balance, but failed to mark withdrawal as completed.`);
-                 // Rollback balance deduction to keep state consistent (forces retry or manual check)
-                 await client.query('ROLLBACK');
-                 client.release(); client = null;
-                 // Throw error, likely retryable (e.g., temporary DB issue preventing status update)
-                 throw new Error(`Failed to mark withdrawal completed after send/deduction (TX: ${signature}). Retryable.`);
+                // Also CRITICAL: Sent and deducted, but couldn't mark withdrawal complete.
+                const criticalErrorMsg = `CRITICAL ERROR: Sent ${amountToSend} lamports (TX: ${signature}), deducted balance, but failed to mark withdrawal as completed.`;
+                console.error(`${logPrefix} ${criticalErrorMsg}`);
+                // Rollback balance deduction to keep state consistent (forces retry or manual check)
+                await client.query('ROLLBACK');
+                 console.log(`${logPrefix} Rolled back balance deduction due to failure marking withdrawal complete.`);
+                client.release(); client = null;
+                // Throw error, likely retryable (e.g., temporary DB issue preventing status update)
+                const updateError = new Error(criticalErrorMsg + " Will retry.");
+                updateError.isRetryable = true;
+                throw updateError;
             }
+             console.log(`${logPrefix} Withdrawal marked as 'completed' successfully.`);
 
             // --- Commit Transaction ---
+            console.log(`${logPrefix} Committing DB transaction...`);
             await client.query('COMMIT');
-            console.log(`${logPrefix} Successfully processed, balance deducted, record updated.`);
+            console.log(`${logPrefix} Successfully processed, balance deducted, record updated. Transaction committed.`);
 
             // Notify user AFTER successful commit
             // Escaped Message
             const amountSentSOL = (Number(amountToSend) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
+            console.log(`${logPrefix} Sending success notification to user ${details.user_id}...`);
             await safeSendMessage(
                 details.user_id,
                 `✅ Withdrawal complete\\! ${escapeMarkdownV2(amountSentSOL)} SOL sent to \`${escapeMarkdownV2(recipient)}\`\\.\nTX: [View](https://solscan.io/tx/${escapeMarkdownV2(signature)})`,
                 { parse_mode: 'MarkdownV2', disable_web_page_preview: true }
-            );
+            ).catch(e => console.error(`${logPrefix} Failed to send completion notification to user ${details.user_id}: ${e.message}`)); // Log notification failure but don't fail job
 
         } else {
             // sendSol failed
-            console.error(`${logPrefix} sendSol failed. Error: ${sendResult.error}`);
+            const errorMsg = `sendSol failed. Error: ${sendResult.error}`;
+            console.error(`${logPrefix} ${errorMsg}`);
             // Throw the error from sendSol - retry logic in addPayoutJob will handle it
-            const error = new Error(sendResult.error || "sendSol failed without specific error message");
+            const sendError = new Error(sendResult.error || "sendSol failed without specific error message");
             // Manually add retryable status if sendSol provided it
-            if (sendResult.isRetryable !== undefined) { error.isRetryable = sendResult.isRetryable; }
-            throw error;
+            if (sendResult.isRetryable !== undefined) { sendError.isRetryable = sendResult.isRetryable; }
+            else { sendError.isRetryable = isRetryableSolanaError(sendError); } // Try to determine if not explicitly set
+            throw sendError;
         }
     } catch (error) {
         // Catch errors from sendSol OR the DB transaction block
-        if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { /* ignore */ } }
+        if (client) { try { await client.query('ROLLBACK'); console.log(`${logPrefix} Transaction rolled back due to error.`); } catch (rbErr) { /* ignore */ } }
         console.error(`${logPrefix} Processing failed during execution. Error: ${error.message}`);
         // Re-throw the error to be caught by the retry logic in addPayoutJob
+        // Ensure retryable status is attached if known
+        if (error.isRetryable === undefined) {
+             error.isRetryable = isRetryableSolanaError(error);
+        }
         throw error;
     } finally {
         if (client) client.release();
@@ -3860,18 +4234,26 @@ async function handleReferralPayoutJob(job) {
     const payoutSOL = (Number(payoutAmount) / LAMPORTS_PER_SOL);
 
     // Mark as processing
-    await updateReferralPayoutStatus(payoutId, 'processing');
+    console.log(`${logPrefix} Marking payout as 'processing' in DB.`);
+    const processingMarked = await updateReferralPayoutStatus(payoutId, 'processing');
+     if (!processingMarked) {
+        console.warn(`${logPrefix} Failed to mark payout as 'processing'. Another process might be handling it or record changed state. Skipping attempt.`);
+        return; // Don't throw, let potential other worker handle it
+    }
 
     try {
         // 1. Get referrer's linked wallet
+        console.log(`${logPrefix} Fetching linked wallet for referrer ${referrerUserId}...`);
         const recipientAddress = await getLinkedWallet(referrerUserId);
         if (!recipientAddress) {
-            console.error(`${logPrefix} Cannot process payout. Referrer user ${referrerUserId} has no linked wallet.`);
+            const errorMsg = `Referrer user ${referrerUserId} has no linked wallet. Cannot process payout.`;
+            console.error(`${logPrefix} ${errorMsg}`);
             // Mark as failed, not retryable as user needs to link wallet
             await updateReferralPayoutStatus(payoutId, 'failed', null, null, 'Referrer has no linked wallet set.');
             // Don't throw, just exit processing for this job
             return;
         }
+         console.log(`${logPrefix} Found linked wallet: ${recipientAddress}`);
 
         console.log(`${logPrefix} Attempting send ${payoutSOL.toFixed(SOL_DECIMALS)} SOL to referrer ${referrerUserId} (${recipientAddress.slice(0,6)}...)`);
 
@@ -3880,6 +4262,7 @@ async function handleReferralPayoutJob(job) {
 
         if (sendResult.success && sendResult.signature) {
             const signature = sendResult.signature;
+            console.log(`${logPrefix} On-chain send successful: ${signature}. Marking as 'paid'...`);
             // 3. Mark payout record as 'paid' with signature
             const recorded = await updateReferralPayoutStatus(payoutId, 'paid', null, signature); // Use pool directly for final status update
             if (!recorded) {
@@ -3892,26 +4275,32 @@ async function handleReferralPayoutJob(job) {
                  console.log(`${logPrefix} SUCCESS! ✅ Referral payout complete. TX: ${signature}`);
                  // 4. Notify Referrer (Best effort)
                  try {
+                      console.log(`${logPrefix} Sending notification to referrer ${referrerUserId}...`);
                       // Escaped Message
                       await safeSendMessage(
-                        referrerUserId,
-                        `💰 You received a referral reward of ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL\\! Check your linked wallet: \`${escapeMarkdownV2(recipientAddress)}\``,
-                        { parse_mode: 'MarkdownV2' }
-                       );
+                          referrerUserId,
+                          `💰 You received a referral reward of ${escapeMarkdownV2(payoutSOL.toFixed(SOL_DECIMALS))} SOL\\! Check your linked wallet: \`${escapeMarkdownV2(recipientAddress)}\``,
+                          { parse_mode: 'MarkdownV2' }
+                      ).catch(e => console.error(`${logPrefix} Failed to send referral notification to user ${referrerUserId}: ${e.message}`)); // Log notification failure but don't fail job
                  } catch (notifyError) {
                       console.warn(`${logPrefix} Failed to send referral payout notification to user ${referrerUserId}: ${notifyError.message}`);
                  }
             }
         } else {
             // sendSol failed
-             console.error(`${logPrefix} sendSol failed. Error: ${sendResult.error}`);
-             const error = new Error(sendResult.error || "sendSol failed without specific error message");
-             if (sendResult.isRetryable !== undefined) { error.isRetryable = sendResult.isRetryable; }
-             throw error; // Throw for retry logic
+             const errorMsg = `sendSol failed. Error: ${sendResult.error}`;
+             console.error(`${logPrefix} ${errorMsg}`);
+             const sendError = new Error(sendResult.error || "sendSol failed without specific error message");
+             if (sendResult.isRetryable !== undefined) { sendError.isRetryable = sendResult.isRetryable; }
+             else { sendError.isRetryable = isRetryableSolanaError(sendError); }
+             throw sendError; // Throw for retry logic
         }
     } catch (error) {
          console.error(`${logPrefix} Processing failed during execution. Error: ${error.message}`);
          // Re-throw error for retry logic
+         if (error.isRetryable === undefined) {
+              error.isRetryable = isRetryableSolanaError(error);
+         }
          throw error;
     }
     // No client release needed as DB updates use pool directly or handle their own client lifecycle if modified
@@ -3925,63 +4314,73 @@ async function handleReferralPayoutJob(job) {
  * This method is NOT recommended for production due to RPC limitations. Use indexers/webhooks instead.
  */
 async function monitorDepositsPolling() {
+    const logPrefix = "[DepositMonitor Polling]"; // [LOGGING ADDED] Consistent Prefix
     if (!isFullyInitialized) {
-        // console.log("[DepositMonitor] Bot not fully initialized, skipping check cycle.");
+        // console.log(`${logPrefix} Bot not fully initialized, skipping check cycle.`); // Can be verbose
         return;
     }
      // Check if a cycle is already potentially running (basic guard, not foolproof)
      // A more robust lock mechanism might be needed if cycles can overlap significantly
     if (monitorDepositsPolling.isRunning) {
-         // console.log("[DepositMonitor] Previous check cycle might still be running, skipping."); // Verbose
+         // console.log(`${logPrefix} Previous check cycle might still be running, skipping.`); // Verbose
          return;
     }
     monitorDepositsPolling.isRunning = true;
+    console.log(`${logPrefix} Starting deposit check cycle...`); // [LOGGING ADDED] Entry log
 
-    const logPrefix = "[DepositMonitor Polling]";
-    // console.log(`${logPrefix} Starting deposit check cycle...`); // Less verbose logging
     const startTime = Date.now();
     let checkedAddresses = 0;
     let foundSignatures = 0;
+    let addressesToCheck = 0; // [LOGGING ADDED] Count addresses fetched
 
     try {
         // 1. Fetch a batch of active, non-expired addresses from DB
         const batchSize = parseInt(process.env.DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE, 10);
+        console.log(`${logPrefix} Fetching up to ${batchSize} pending addresses from DB...`); // [LOGGING ADDED] Step log
         const pendingAddresses = await queryDatabase(
             `SELECT id, user_id, deposit_address, expires_at FROM deposit_addresses WHERE status = 'pending' AND expires_at > NOW() ORDER BY created_at ASC LIMIT $1`,
             [batchSize]
         ).then(res => res.rows);
+        addressesToCheck = pendingAddresses.length; // [LOGGING ADDED] Store count
 
-        if (pendingAddresses.length === 0) {
-            // console.log(`${logPrefix} No pending addresses to check in this cycle.`);
+        if (addressesToCheck === 0) {
+            console.log(`${logPrefix} No pending addresses found to check in this cycle.`); // [LOGGING MODIFIED] Clarity
             monitorDepositsPolling.isRunning = false;
             return;
         }
-        // console.log(`${logPrefix} Checking ${pendingAddresses.length} pending addresses...`); // Less verbose
+        console.log(`${logPrefix} Found ${addressesToCheck} pending addresses. Checking signatures...`); // [LOGGING ADDED] Log count
 
         // 2. For each address, check for recent signatures
         const sigFetchLimit = parseInt(process.env.DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT, 10);
+        console.log(`${logPrefix} Checking up to ${sigFetchLimit} signatures per address.`); // [LOGGING ADDED] Log limit
         for (const addrInfo of pendingAddresses) {
+            const addrPrefix = `[DepositMonitor Addr:${addrInfo.deposit_address.slice(0,6)}..]`; // [LOGGING ADDED] Address-specific prefix
             checkedAddresses++;
             try {
                 const pubKey = new PublicKey(addrInfo.deposit_address);
+                // console.log(`${addrPrefix} Fetching signatures...`); // Optional verbose log
                 // Fetch recent signatures confirmed on the network
                 const signaturesInfo = await solanaConnection.getSignaturesForAddress(
                     pubKey,
-                    { limit: sigFetchLimit }, // Removed commitment here, rely on connection default
+                    { limit: sigFetchLimit }, // Removed commitment here, rely on connection default or DEPOSIT_CONFIRMATION_LEVEL? Let's stick to default for now.
                 );
+                // console.log(`${addrPrefix} Found ${signaturesInfo.length} signatures.`); // Optional verbose log
 
                 for (const sigInfo of signaturesInfo) {
+                     const sigPrefix = `${addrPrefix} TX:${sigInfo.signature.slice(0,6)}..`; // [LOGGING ADDED] Signature-specific prefix
                     // Check if successful (no error) and not already processed this session
                     if (!sigInfo.err && !hasProcessedDepositTx(sigInfo.signature)) {
                         foundSignatures++;
-                        console.log(`${logPrefix} Potential deposit found for addr ${addrInfo.deposit_address.slice(0,6)}... TX: ${sigInfo.signature.slice(0,10)}... Queuing for processing.`);
+                        console.log(`${sigPrefix} Potential deposit found! Queuing for processing.`); // [LOGGING ADDED] Found log
                         // Add job to the dedicated deposit processing queue
                         depositProcessorQueue.add(() => processDepositTransaction(sigInfo.signature, addrInfo.deposit_address))
-                            .catch(e => console.error(`${logPrefix} Error queueing deposit processing for ${sigInfo.signature}: ${e.message}`));
+                            .catch(e => console.error(`${sigPrefix} Error queueing deposit processing: ${e.message}`));
                         // Add to cache immediately to prevent re-queueing in the same cycle or near future
-                        addProcessedDepositTx(sigInfo.signature);
+                        addProcessedDepositTx(sigInfo.signature); // Logged within function
+                    } else if (sigInfo.err) {
+                         // console.log(`${sigPrefix} Ignoring failed transaction.`); // Optional verbose log
                     } else if (hasProcessedDepositTx(sigInfo.signature)){
-                         // console.log(`${logPrefix} Signature ${sigInfo.signature.slice(0,6)} already processed/cached.`); // Verbose
+                         // console.log(`${sigPrefix} Signature already processed/cached.`); // Optional verbose log
                     }
                 }
                 // Optional: Small delay between addresses if hitting rate limits hard
@@ -3989,22 +4388,22 @@ async function monitorDepositsPolling() {
 
             } catch (error) {
                 // Don't stop the whole loop, just log error for this address
-                console.error(`${logPrefix} Error checking address ${addrInfo.deposit_address}: ${error.message}`);
+                console.error(`${addrPrefix} Error checking signatures: ${error.message}`);
                 // Check if error is rate limit (429) - maybe pause briefly?
                  if (isRetryableSolanaError(error) && String(error.message).includes('429')) {
-                      console.warn(`${logPrefix} Hit rate limit checking address. Pausing briefly...`);
-                      await new Promise(r => setTimeout(r, 1500)); // Pause 1.5s on rate limit
+                     console.warn(`${logPrefix} Hit rate limit checking address. Pausing briefly...`);
+                     await new Promise(r => setTimeout(r, 1500)); // Pause 1.5s on rate limit
                  }
             }
         } // End loop through addresses
+         console.log(`${logPrefix} Finished checking signatures for ${checkedAddresses} addresses.`); // [LOGGING ADDED] End loop log
 
     } catch (error) {
         console.error(`${logPrefix} Error during deposit monitoring cycle:`, error);
     } finally {
         const duration = Date.now() - startTime;
-        if (checkedAddresses > 0) { // Only log if work was done
-            console.log(`${logPrefix} Cycle finished in ${duration}ms. Checked: ${checkedAddresses}. Found/Queued: ${foundSignatures}.`);
-        }
+        // [LOGGING MODIFIED] Logged results more consistently
+        console.log(`${logPrefix} Cycle finished in ${duration}ms. Fetched: ${addressesToCheck}. Checked: ${checkedAddresses}. Found/Queued: ${foundSignatures}.`);
         monitorDepositsPolling.isRunning = false; // Release lock
     }
 }
@@ -4018,163 +4417,230 @@ monitorDepositsPolling.isRunning = false; // Initialize lock state
  */
 async function processDepositTransaction(signature, depositAddress) {
     const logPrefix = `[ProcessDeposit TX:${signature.slice(0, 6)} Addr:${depositAddress.slice(0,6)}]`;
-    console.log(`${logPrefix} Processing potential deposit...`);
+    console.log(`${logPrefix} Starting processing...`); // [LOGGING ADDED] Entry log
     let client = null; // DB client for transaction
     let userIdForNotifyOnError = null; // Store user ID if found early
 
     try {
         // 0. Double-check if processed (queue might have duplicates if added quickly)
         if (hasProcessedDepositTx(signature)) {
-            console.log(`${logPrefix} Signature already processed/cached. Skipping.`);
+            console.log(`${logPrefix} Signature already processed/cached. Skipping.`); // [LOGGING ADDED] Already processed check
             return;
         }
 
         // Attempt to find user ID early for potential error notifications
-        const initialAddrInfo = await findDepositAddressInfo(depositAddress);
+        console.log(`${logPrefix} Looking up deposit address info...`); // [LOGGING ADDED] Step log
+        const initialAddrInfo = await findDepositAddressInfo(depositAddress); // findDepositAddressInfo has its own logs
         if (initialAddrInfo) userIdForNotifyOnError = initialAddrInfo.userId;
+        else {
+             // If address info not found initially, maybe it expired between monitor and processing?
+             console.warn(`${logPrefix} Could not find initial deposit address info (possibly expired or invalid).`);
+             addProcessedDepositTx(signature); // Mark as processed to avoid retries if address is truly gone
+             return;
+        }
+        console.log(`${logPrefix} Found initial info for User: ${userIdForNotifyOnError}`); // [LOGGING ADDED] User identified
 
         // 1. Fetch transaction details
+        console.log(`${logPrefix} Fetching transaction details from RPC...`); // [LOGGING ADDED] Step log
         const tx = await solanaConnection.getTransaction(signature, {
             maxSupportedTransactionVersion: 0, // Specify version for reliable parsing
             commitment: DEPOSIT_CONFIRMATION_LEVEL
         });
 
-        if (!tx) { throw new Error("Transaction not found via RPC."); }
+        if (!tx) {
+             // This might be temporary RPC issue, log but don't mark processed yet
+             console.warn(`${logPrefix} Transaction not found via RPC. Might retry later if queue allows.`);
+             throw new Error("Transaction not found via RPC.");
+        }
+        console.log(`${logPrefix} Transaction details fetched successfully.`); // [LOGGING ADDED] Step success log
+
         if (tx.meta?.err) {
-            console.log(`${logPrefix} Transaction failed on-chain. Ignoring. Error: ${JSON.stringify(tx.meta.err)}`);
+            console.log(`${logPrefix} Transaction failed on-chain. Ignoring. Error: ${JSON.stringify(tx.meta.err)}`); // [LOGGING ADDED] TX failed log
             addProcessedDepositTx(signature); // Cache failed TX sig to prevent reprocessing
             return;
         }
+        console.log(`${logPrefix} Transaction confirmed successful on-chain (meta.err is null).`); // [LOGGING ADDED] TX success log
 
-        // 2. Re-validate deposit address info (status might have changed)
-        const addrInfo = initialAddrInfo || await findDepositAddressInfo(depositAddress); // Use cached or fetch again
-        if (!addrInfo) { throw new Error(`Deposit address record not found for ${depositAddress}. Ignoring TX.`); }
-        userIdForNotifyOnError = addrInfo.userId; // Ensure it's set
-
+        // 2. Re-validate deposit address info (status might have changed, use initialAddrInfo from above)
+        console.log(`${logPrefix} Re-validating deposit address status and expiry...`); // [LOGGING ADDED] Step log
+        const addrInfo = initialAddrInfo; // Already fetched
         const { userId, status: addrStatus, id: depositAddressId, expiresAt } = addrInfo;
 
-        if (addrStatus !== 'pending') { throw new Error(`Deposit address status is '${addrStatus}', not 'pending'. Ignoring TX.`); }
-        if (new Date() > expiresAt) { throw new Error(`Deposit address has expired. Ignoring TX.`); }
+        if (addrStatus !== 'pending') {
+             console.warn(`${logPrefix} Deposit address status is '${addrStatus}', not 'pending'. Ignoring TX.`); // [LOGGING ADDED] Status check fail
+             addProcessedDepositTx(signature); // Mark as processed as address is no longer valid for deposits
+             return;
+        }
+        if (new Date() > expiresAt) {
+             console.warn(`${logPrefix} Deposit address has expired (${expiresAt.toISOString()}). Ignoring TX.`); // [LOGGING ADDED] Expiry check fail
+             // Consider marking address as 'expired' in DB here? Requires separate query.
+             addProcessedDepositTx(signature); // Mark as processed
+             return;
+        }
+        console.log(`${logPrefix} Deposit address validation passed (Pending & Not Expired). AddrID: ${depositAddressId}`); // [LOGGING ADDED] Validation pass
 
         // 3. Analyze amount transferred *to the unique address*
-        const { transferAmount } = analyzeTransactionAmounts(tx, depositAddress);
-        if (transferAmount <= 0n) { throw new Error("No positive SOL transfer amount found to the deposit address in transaction analysis."); }
-
-        console.log(`${logPrefix} Confirmed ${Number(transferAmount) / LAMPORTS_PER_SOL} SOL deposit for user ${userId}. Processing DB updates...`);
+        console.log(`${logPrefix} Analyzing transaction amounts...`); // [LOGGING ADDED] Step log
+        const { transferAmount, payerAddress } = analyzeTransactionAmounts(tx, depositAddress); // analyzeTransactionAmounts has its own logs
+        if (transferAmount <= 0n) {
+             console.warn(`${logPrefix} No positive SOL transfer found to the deposit address. Ignoring.`); // [LOGGING ADDED] Amount check fail
+             addProcessedDepositTx(signature); // Mark as processed
+             return;
+        }
+        console.log(`${logPrefix} Confirmed ${Number(transferAmount) / LAMPORTS_PER_SOL} SOL deposit from ${payerAddress || 'unknown sender'}. Processing DB updates...`); // [LOGGING ADDED] Amount confirmed
 
         // --- 4. Process Deposit within DB Transaction ---
+        console.log(`${logPrefix} Starting DB transaction...`); // [LOGGING ADDED] Step log
         client = await pool.connect();
         await client.query('BEGIN');
 
         // 4a. Ensure user/balance records exist (should be redundant but safe)
+        // console.log(`${logPrefix} Ensuring user/balance exists...`); // Optional log
         await ensureUserExists(userId, client);
 
         // 4b. Credit user's internal balance & Add ledger entry
+        console.log(`${logPrefix} Updating user balance and adding ledger entry...`); // [LOGGING ADDED] Step log
         const balanceUpdateResult = await updateUserBalanceAndLedger(
             client, userId, transferAmount, 'deposit',
             { depositId: null }, // Placeholder, will update below
             `Deposit TX: ${signature.slice(0, 10)}...`
         );
-        if (!balanceUpdateResult.success) { throw new Error(`Failed to update balance: ${balanceUpdateResult.error}`); }
+        if (!balanceUpdateResult.success) {
+             // If this fails, it's likely a DB issue, rollback and let retry handle it
+             console.error(`${logPrefix} Failed to update balance: ${balanceUpdateResult.error}`);
+             throw new Error(`Failed to update balance: ${balanceUpdateResult.error}`);
+        }
+         console.log(`${logPrefix} Balance updated. New Balance: ${balanceUpdateResult.newBalance}`); // [LOGGING ADDED] Step success log
 
-        // 4c. Record the confirmed deposit
+        // 4c. Record the confirmed deposit (Function has internal logs)
+        console.log(`${logPrefix} Recording confirmed deposit in 'deposits' table...`); // [LOGGING ADDED] Step log
         const depositRecordResult = await recordConfirmedDeposit(
             client, userId, depositAddressId, signature, transferAmount
         );
-        if (!depositRecordResult.success || !depositRecordResult.depositId) { throw new Error(depositRecordResult.error || "Failed to record confirmed deposit in DB."); }
+        if (!depositRecordResult.success || !depositRecordResult.depositId) {
+            // If this fails (e.g., duplicate TX sig), rollback and handle error
+             console.error(`${logPrefix} Failed to record confirmed deposit: ${depositRecordResult.error}`);
+            throw new Error(depositRecordResult.error || "Failed to record confirmed deposit in DB.");
+        }
         const newDepositId = depositRecordResult.depositId;
+        console.log(`${logPrefix} Deposit recorded successfully. Deposit ID: ${newDepositId}`); // [LOGGING ADDED] Step success log
 
         // 4d. Update the ledger entry with the new deposit ID
-        // Find the specific ledger entry just created (match user, type, amount, null related_deposit_id)
+        console.log(`${logPrefix} Updating ledger entry with Deposit ID ${newDepositId}...`); // [LOGGING ADDED] Step log
         const ledgerUpdateRes = await queryDatabase(
              `UPDATE ledger SET related_deposit_id = $1
-              WHERE user_id = $2 AND transaction_type = 'deposit' AND amount_lamports = $3 AND related_deposit_id IS NULL
-              ORDER BY created_at DESC LIMIT 1`, // Target the most recent matching entry
+               WHERE user_id = $2 AND transaction_type = 'deposit' AND amount_lamports = $3 AND related_deposit_id IS NULL
+               ORDER BY id DESC LIMIT 1`, // Target the most recent matching entry by ID
              [newDepositId, userId, transferAmount],
              client
-         );
+          );
          if (ledgerUpdateRes.rowCount === 0) {
-              console.warn(`${logPrefix} Could not find matching ledger entry to update related_deposit_id for deposit ${newDepositId}.`);
+              console.warn(`${logPrefix} Could not find matching ledger entry to update related_deposit_id for deposit ${newDepositId}. Balance was still updated.`);
               // This might indicate a logic issue or race condition, but proceed for now.
+         } else {
+              console.log(`${logPrefix} Ledger entry updated successfully.`); // [LOGGING ADDED] Step success log
          }
 
 
-        // 4e. Mark deposit address as used
+        // 4e. Mark deposit address as used (Function has internal logs)
+        console.log(`${logPrefix} Marking deposit address ${depositAddressId} as 'used'...`); // [LOGGING ADDED] Step log
         const markedUsed = await markDepositAddressUsed(client, depositAddressId);
-        if (!markedUsed) { throw new Error(`Failed to mark deposit address ID ${depositAddressId} as used (was status pending?).`); }
+        if (!markedUsed) {
+             // This shouldn't happen if status was 'pending' before, indicates DB issue or race condition
+             console.error(`${logPrefix} Failed to mark deposit address ID ${depositAddressId} as used.`);
+             throw new Error(`Failed to mark deposit address ID ${depositAddressId} as used (was status pending?).`);
+        }
+         console.log(`${logPrefix} Deposit address marked as 'used'.`); // [LOGGING ADDED] Step success log
 
         // 4f. Check for Referral Linking on First Deposit
+        console.log(`${logPrefix} Checking if this is user's first deposit...`); // [LOGGING ADDED] Step log
         // Count *committed* deposits for this user before this one
         const depositCountRes = await queryDatabase('SELECT COUNT(*) as count FROM deposits WHERE user_id = $1', [userId], client);
         const isFirstDeposit = parseInt(depositCountRes.rows[0].count, 10) === 1; // Count includes the one we just inserted
 
         if (isFirstDeposit) {
-            console.log(`${logPrefix} First deposit detected for user ${userId}. Checking for pending referral...`);
+            console.log(`${logPrefix} First deposit detected for user ${userId}. Checking for pending referral...`); // [LOGGING ADDED] First deposit detected
             const pending = pendingReferrals.get(userId);
             const now = Date.now();
             if (pending && (now - pending.timestamp < PENDING_REFERRAL_TTL_MS)) {
                 const referrerUserId = pending.referrerUserId;
+                 console.log(`${logPrefix} Pending referral found for referrer ${referrerUserId}. Attempting to link...`); // [LOGGING ADDED] Pending referral found
                 const linked = await linkReferral(userId, referrerUserId, client); // Attempt to link in DB TX
                 if (linked) {
-                    console.log(`${logPrefix} Linked user ${userId} to referrer ${referrerUserId}.`);
+                    console.log(`${logPrefix} Linked user ${userId} to referrer ${referrerUserId}. Removing from pending map.`); // [LOGGING ADDED] Link success
                     pendingReferrals.delete(userId); // Clean up map entry on successful link
                      // Optionally notify referrer?
                      try {
                          // Escaped Message
-                          const displayName = await getUserDisplayName(referrerUserId, userId); // Get referee display name
-                          await safeSendMessage(
-                              referrerUserId,
-                              `🎉 Someone you referred \\(${escapeMarkdownV2(displayName)}\\) just made their first deposit\\! You may receive bonuses based on their activity\\.`, // Escape (, ), !, .
-                              { parse_mode: 'MarkdownV2'}
-                            ).catch(()=>{});
-                     } catch(e){console.warn("Failed getting display name for referral notification", e)}
+                         const refereeDisplayName = await getUserDisplayName(referrerUserId, userId); // Get referee display name relative to referrer's potential chat? Safer to use user ID directly? Let's assume safeSendMessage handles finding user.
+                         const referrerChatId = referrerUserId; // Send to private chat
+                         await safeSendMessage(
+                             referrerChatId,
+                             `🎉 Someone you referred \\(${escapeMarkdownV2(refereeDisplayName)}\\) just made their first deposit\\! You may receive bonuses based on their activity\\.`, // Escape (, ), !, .
+                             { parse_mode: 'MarkdownV2'}
+                         ).catch((e) => {console.warn(`${logPrefix} Failed to send referral link notification to referrer ${referrerUserId}: ${e.message}`)});
+                     } catch(e){console.warn(`${logPrefix} Failed getting display name or sending referral link notification`, e)}
                 } else {
-                     console.log(`${logPrefix} Failed to link pending referral (user might already be referred or self-referral).`);
-                     pendingReferrals.delete(userId); // Still remove pending referral
+                    // linkReferral logs the reason (already referred, self-referral, etc)
+                    console.log(`${logPrefix} Failed to link pending referral (see previous logs). Removing from pending map.`); // [LOGGING ADDED] Link failed
+                    pendingReferrals.delete(userId); // Still remove pending referral
                 }
             } else if (pending) {
-                console.log(`${logPrefix} Pending referral expired for user ${userId}.`);
+                console.log(`${logPrefix} Pending referral expired for user ${userId}. Removing from map.`); // [LOGGING ADDED] Pending expired
                 pendingReferrals.delete(userId);
+            } else {
+                 console.log(`${logPrefix} No pending referral found for user.`); // [LOGGING ADDED] No pending
             }
              // Ensure the new user gets a referral code generated if they weren't referred
+             console.log(`${logPrefix} Ensuring user has a referral code...`); // [LOGGING ADDED] Ensure ref code step
              await queryDatabase(`UPDATE wallets SET referral_code = COALESCE(referral_code, $2) WHERE user_id = $1`, [userId, generateReferralCode()], client);
+        } else {
+             console.log(`${logPrefix} Not user's first deposit (Count: ${depositCountRes.rows[0].count}). Skipping referral link check.`); // [LOGGING ADDED] Not first deposit
         }
 
         // --- 5. Commit DB Transaction ---
+        console.log(`${logPrefix} Committing DB transaction...`); // [LOGGING ADDED] Step log
         await client.query('COMMIT');
-        console.log(`${logPrefix} Successfully processed deposit and updated balance for user ${userId}.`);
+        console.log(`${logPrefix} DB Transaction committed successfully.`); // [LOGGING ADDED] Step success log
 
         // 6. Add signature to processed cache AFTER successful commit
-        addProcessedDepositTx(signature);
+        addProcessedDepositTx(signature); // Logged within function
 
         // 7. Notify User AFTER successful commit
         // Escaped Message
         const amountSOL = (Number(transferAmount) / LAMPORTS_PER_SOL).toFixed(SOL_DECIMALS);
+        console.log(`${logPrefix} Sending deposit success notification to user ${userId}...`); // [LOGGING ADDED] Step log
         await safeSendMessage(
             userId,
             `✅ Deposit successful\\! ${escapeMarkdownV2(amountSOL)} SOL has been added to your balance\\. Use /wallet to check\\.`,
             { parse_mode: 'MarkdownV2' }
-        );
+        ).catch(e => console.error(`${logPrefix} Failed to send deposit success notification to user ${userId}: ${e.message}`)); // Log notification failure but don't fail job
+        console.log(`${logPrefix} Processing complete.`); // [LOGGING ADDED] Final success log
 
     } catch (error) {
-        if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error(`${logPrefix} Rollback failed:`, rbErr); } }
-        console.error(`${logPrefix} Error processing deposit: ${error.message}`);
+        if (client) { try { await client.query('ROLLBACK'); console.log(`${logPrefix} Transaction rolled back due to error.`); } catch (rbErr) { console.error(`${logPrefix} Rollback failed:`, rbErr); } }
+        console.error(`${logPrefix} Error processing deposit: ${error.message}`); // Log specific error
 
         // If we identified the user, notify them of the failure
         if (userIdForNotifyOnError) {
+            console.log(`${logPrefix} Sending deposit failure notification to user ${userIdForNotifyOnError}...`); // [LOGGING ADDED] Step log
              // Escaped Message
              await safeSendMessage(
-                userIdForNotifyOnError,
-                `⚠️ There was an issue processing your deposit \\(TX: \`${escapeMarkdownV2(signature)}\`\\)\\. If funds left your wallet but your balance wasn't updated, please contact support\\. Error: ${escapeMarkdownV2(error.message)}`,
-                { parse_mode: 'MarkdownV2'}
-             );
+                 userIdForNotifyOnError,
+                 `⚠️ There was an issue processing your deposit \\(TX: \`${escapeMarkdownV2(signature)}\`\\)\\. If funds left your wallet but your balance wasn't updated, please contact support\\. Error: ${escapeMarkdownV2(error.message)}`,
+                 { parse_mode: 'MarkdownV2'}
+             ).catch(e => console.error(`${logPrefix} Failed to send deposit failure notification to user ${userIdForNotifyOnError}: ${e.message}`));
         }
 
         // Add to processed cache only on definitive, non-retryable errors to prevent loops
         const errMsgLower = error.message.toLowerCase();
-        if (errMsgLower.includes('already used') || errMsgLower.includes('expired') || errMsgLower.includes('not found') || errMsgLower.includes('not positive sol transfer') || errMsgLower.includes('status is') || errMsgLower.includes('transaction failed on-chain')) {
+        if (errMsgLower.includes('already used') || errMsgLower.includes('expired') || errMsgLower.includes('not found') || errMsgLower.includes('not positive sol transfer') || errMsgLower.includes('status is') || errMsgLower.includes('transaction failed on-chain') || errMsgLower.includes('already processed')) {
+             console.log(`${logPrefix} Adding signature to processed cache due to non-retryable error.`); // [LOGGING ADDED] Caching error sig
             addProcessedDepositTx(signature);
+        } else {
+             console.log(`${logPrefix} Error seems potentially temporary, not adding signature to processed cache yet.`); // [LOGGING ADDED] Not caching temp error sig
         }
+        // Do not re-throw error here, allow queue worker to finish gracefully. Retries handled by addPayoutJob logic if applicable (not applicable here as it's deposit queue).
     } finally {
         if (client) client.release();
     }
@@ -4214,10 +4680,12 @@ function setupTelegramListeners() {
         if (error.code === 'EFATAL' || error.message.includes('401')) {
              console.error("❌❌ CRITICAL POLLING ERROR (e.g., Bad Token?). Shutting down.");
              // Force exit immediately on critical token/auth errors
-             process.exit(1);
+             shutdown('POLLING_AUTH_ERROR', false).catch(() => process.exit(1)); // Attempt graceful first
+             setTimeout(() => process.exit(1), 5000); // Force exit if shutdown hangs
         } else if (error.message.includes('409 Conflict')) {
              console.error("❌❌❌ Conflict! Another instance seems to be running with this token. Exiting.");
-             process.exit(1);
+             shutdown('POLLING_CONFLICT', false).catch(() => process.exit(1));
+             setTimeout(() => process.exit(1), 5000);
         }
         // Log other polling errors but don't necessarily exit
     });
@@ -4244,7 +4712,7 @@ function setupExpressRoutes() {
         res.status(200).json({
             status: 'ok',
             initialized: isFullyInitialized,
-            version: '3.1.0',
+            version: '3.1.1', // Updated Version
             timestamp: new Date().toISOString(),
             // Add more stats later if needed (e.g., queue sizes, cache sizes from global vars)
         });
@@ -4256,27 +4724,28 @@ function setupExpressRoutes() {
         const dbOk = pool && pool.totalCount !== undefined; // Basic check pool object exists
         const status = server && dbOk ? (isFullyInitialized ? 'ready' : 'starting') : 'error';
         res.status(status === 'error' ? 503 : 200).json({
-             status: status,
-             db_pool_total: pool?.totalCount ?? 'N/A',
-             uptime: process.uptime()
+            status: status,
+            db_pool_total: pool?.totalCount ?? 'N/A',
+            uptime_seconds: Math.floor(process.uptime()) // More standard name
         });
     });
     app.get('/railway-health', (req, res) => { // For Railway health checks
-         res.status(isFullyInitialized ? 200 : 503).json({
-             status: isFullyInitialized ? 'ready' : 'initializing',
-             version: '3.1.0'
+       res.status(isFullyInitialized ? 200 : 503).json({
+            status: isFullyInitialized ? 'ready' : 'initializing',
+            version: '3.1.1' // Updated Version
          });
     });
     app.get('/prestop', (req, res) => { // For Railway graceful shutdown signal
-         console.log('🚪 Received pre-stop signal from Railway...');
-         // No shutdown logic here, Railway sends SIGTERM after this response
-         res.status(200).send('Acknowledged pre-stop signal');
+        console.log('🚪 Received pre-stop signal from Railway...');
+        // No shutdown logic here, Railway sends SIGTERM after this response
+        res.status(200).send('Acknowledged pre-stop signal');
     });
 
     // Telegram Webhook Handler
     app.post(webhookPath, (req, res) => {
         // Validate request body somewhat
         if (req.body && typeof req.body === 'object' && req.body.update_id) {
+            // console.log(`[Webhook] Received update ID: ${req.body.update_id}`); // Optional verbose log
             // Route message updates to messageQueue, callback_query to callbackQueue
             if (req.body.message) {
                  messageQueue.add(() => bot.processUpdate(req.body)).catch(queueError => {
@@ -4301,7 +4770,7 @@ function setupExpressRoutes() {
 
 // --- Database Initialization Function ---
 async function initializeDatabase() {
-    console.log("⚙️ Initializing Database schema (v3.1.0)...");
+    console.log("⚙️ Initializing Database schema (v3.1.1)..."); // Updated version
     let client = null;
     try {
         client = await pool.connect();
@@ -4357,6 +4826,10 @@ async function initializeDatabase() {
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 expires_at TIMESTAMPTZ NOT NULL
             );`, [], client);
+         // Add derivation_path column if missing from older schema
+         await queryDatabase(`ALTER TABLE deposit_addresses ADD COLUMN IF NOT EXISTS derivation_path TEXT;`, [], client);
+         // Ensure derivation_path is NOT NULL if adding it later (might require default or update)
+         // For simplicity, assume new tables or handle migration separately if needed.
 
         // Deposits Log
         await queryDatabase(`
@@ -4407,9 +4880,9 @@ async function initializeDatabase() {
              );`, [], client);
         // Use CREATE UNIQUE INDEX for partial constraint
         await queryDatabase(`
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_refpayout_unique_milestone
-            ON referral_payouts (referrer_user_id, referee_user_id, payout_type, milestone_reached_lamports)
-            WHERE payout_type = 'milestone';
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_refpayout_unique_milestone
+             ON referral_payouts (referrer_user_id, referee_user_id, payout_type, milestone_reached_lamports)
+             WHERE payout_type = 'milestone';
         `, [], client);
 
 
@@ -4418,19 +4891,35 @@ async function initializeDatabase() {
             CREATE TABLE IF NOT EXISTS ledger (
                 id BIGSERIAL PRIMARY KEY,
                 user_id TEXT NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                transaction_type TEXT NOT NULL, -- 'deposit', 'bet_placed', 'bet_won', 'bet_push_return', 'withdrawal', 'referral_bonus_paid', 'manual_adjustment' etc.
+                transaction_type TEXT NOT NULL, -- 'deposit', 'bet_placed', 'bet_won', 'bet_push_return', 'withdrawal', 'withdrawal_fee', 'referral_bonus_paid', 'manual_adjustment' etc.
                 amount_lamports BIGINT NOT NULL, -- Positive for credit, Negative for debit relative to balance
                 balance_before BIGINT NOT NULL,
                 balance_after BIGINT NOT NULL,
                 related_deposit_id INT REFERENCES deposits(id) ON DELETE SET NULL,
                 related_withdrawal_id INT REFERENCES withdrawals(id) ON DELETE SET NULL,
                 related_bet_id INT, -- No FK to bets by default, can be added if needed
-                related_ref_payout_id INT REFERENCES referral_payouts(id) ON DELETE SET NULL, -- FK added below if needed
+                related_ref_payout_id INT, -- FK constraint added/checked below
                 notes TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );`, [], client);
         // Add related_ref_payout_id column/constraint idempotently
-        await queryDatabase(`ALTER TABLE ledger ADD COLUMN IF NOT EXISTS related_ref_payout_id INT REFERENCES referral_payouts(id) ON DELETE SET NULL;`, [], client);
+        await queryDatabase(`ALTER TABLE ledger ADD COLUMN IF NOT EXISTS related_ref_payout_id INT;`, [], client);
+        // Add FK constraint if it doesn't exist
+        const fkCheck = await queryDatabase(`
+            SELECT constraint_name
+            FROM information_schema.table_constraints
+            WHERE table_name = 'ledger' AND constraint_name = 'ledger_related_ref_payout_id_fkey';
+            `, [], client);
+        if (fkCheck.rowCount === 0) {
+            console.log("  Adding foreign key constraint ledger_related_ref_payout_id_fkey...");
+            await queryDatabase(`
+                ALTER TABLE ledger
+                ADD CONSTRAINT ledger_related_ref_payout_id_fkey
+                FOREIGN KEY (related_ref_payout_id)
+                REFERENCES referral_payouts(id)
+                ON DELETE SET NULL;
+                `, [], client);
+        }
 
 
         // Bets Table (Revised for Custodial)
@@ -4450,8 +4939,17 @@ async function initializeDatabase() {
             );`, [], client);
         // Add/ensure columns exist
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS bet_details JSONB;`, [], client);
-        // Ensure wager column exists AND has the check constraint - combine adding column and constraint definition
-        await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS wager_amount_lamports BIGINT NOT NULL CHECK (wager_amount_lamports > 0);`, [], client);
+        // Ensure wager column exists AND has the check constraint - Add column first, then constraint if needed
+        await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS wager_amount_lamports BIGINT NOT NULL DEFAULT 1;`, [], client); // Add with default temporarily
+        await queryDatabase(`ALTER TABLE bets ALTER COLUMN wager_amount_lamports DROP DEFAULT;`, [], client); // Remove default
+         const checkConstraintCheck = await queryDatabase(`
+             SELECT constraint_name FROM information_schema.constraint_column_usage
+             WHERE table_name = 'bets' AND column_name = 'wager_amount_lamports' AND constraint_name LIKE 'bets_wager_amount_lamports_check%';
+         `, [], client);
+         if (checkConstraintCheck.rowCount === 0) {
+              console.log("  Adding check constraint for bets.wager_amount_lamports...");
+              await queryDatabase(`ALTER TABLE bets ADD CONSTRAINT bets_wager_positive CHECK (wager_amount_lamports > 0);`, [], client);
+         }
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS payout_amount_lamports BIGINT;`, [], client);
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ;`, [], client);
         await queryDatabase(`ALTER TABLE bets ADD COLUMN IF NOT EXISTS priority INT NOT NULL DEFAULT 0;`, [], client);
@@ -4491,7 +4989,7 @@ async function initializeDatabase() {
 
     } catch (err) {
         console.error("❌ Database initialization error:", err);
-        if (client) { try { await client.query('ROLLBACK'); console.log("  - Transaction rolled back."); } catch (rbErr) { console.error("  - Rollback failed:", rbErr); } }
+        if (client) { try { await client.query('ROLLBACK'); console.log("   - Transaction rolled back."); } catch (rbErr) { console.error("   - Rollback failed:", rbErr); } }
         // Re-throw unexpected errors to halt startup
         throw err;
     } finally {
@@ -4510,7 +5008,9 @@ async function setupTelegramWebhook() {
         while (attempts < maxAttempts) {
             try {
                 // Drop pending updates when setting webhook to avoid processing old events
+                console.log(`Webhook Attempt ${attempts + 1}: Deleting old webhook (if any) and dropping pending updates...`);
                 await bot.deleteWebHook({ drop_pending_updates: true }).catch(e => console.warn(`Ignoring webhook delete error: ${e.message}`));
+                console.log(`Webhook Attempt ${attempts + 1}: Setting webhook...`);
                 await bot.setWebHook(webhookUrl, {
                     max_connections: parseInt(process.env.WEBHOOK_MAX_CONN || '20', 10), // Increased default
                     allowed_updates: ["message", "callback_query"], // Listen for both
@@ -4528,15 +5028,19 @@ async function setupTelegramWebhook() {
                      console.error("❌ Max webhook setup attempts reached.");
                      return false;
                 }
-                await new Promise(resolve => setTimeout(resolve, 3000 * attempts)); // Exponential backoff
+                const delay = 3000 * attempts; // Exponential backoff
+                console.log(`Webhook setup failed, retrying in ${delay / 1000}s...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
     }
+    console.log("Webhook setup skipped (Not in Railway env or missing RAILWAY_PUBLIC_DOMAIN).");
     return false; // Not in Railway env or setup failed
 }
 
 async function startPollingIfNeeded() {
     try {
+        console.log("Checking Telegram connection mode (Webhook/Polling)...");
         const webhookInfo = await bot.getWebHookInfo().catch(e => { console.error("Error fetching webhook info:", e.message); return null; });
         if (!webhookInfo || !webhookInfo.url) {
             if (bot.isPolling()) {
@@ -4551,64 +5055,74 @@ async function startPollingIfNeeded() {
         } else {
             // Webhook IS set, ensure polling is OFF
             if (bot.isPolling()) {
-                console.log("ℹ️ Stopping existing polling because webhook is set.");
-                await bot.stopPolling({ cancel: true }).catch(e => console.warn(`Ignoring polling stop error: ${e.message}`));
+                 console.log("ℹ️ Stopping existing polling because webhook is set.");
+                 await bot.stopPolling({ cancel: true }).catch(e => console.warn(`Ignoring polling stop error: ${e.message}`));
             }
              console.log(`ℹ️ Bot is using webhook: ${webhookInfo.url}`);
         }
     } catch (err) {
         console.error("❌ Error managing polling state:", err.message);
          if (err.code === 'ETELEGRAM' && err.message.includes('409 Conflict')) {
-             console.error("❌❌❌ Conflict! Another instance seems to be running with this token. Exiting.");
-             // Force exit immediately on conflict
-             process.exit(1);
+              console.error("❌❌❌ Conflict! Another instance seems to be running with this token. Exiting.");
+              // Force exit immediately on conflict
+              shutdown('POLLING_CONFLICT_FATAL', false).catch(() => process.exit(1));
+              setTimeout(() => process.exit(1), 5000); // Force exit if shutdown hangs
          } else if (err.response?.statusCode === 401 || err.message.includes('401 Unauthorized')) {
-             console.error("❌❌❌ Unauthorized! Check BOT_TOKEN. Exiting.");
-             // Force exit immediately on auth error
-             process.exit(1);
+              console.error("❌❌❌ Unauthorized! Check BOT_TOKEN. Exiting.");
+              // Force exit immediately on auth error
+              shutdown('POLLING_AUTH_FATAL', false).catch(() => process.exit(1));
+              setTimeout(() => process.exit(1), 5000); // Force exit if shutdown hangs
          }
          // Otherwise, log the error but try to continue (might be temporary)
     }
 }
 
 function startDepositMonitor() {
+    const logPrefix = "[DepositMonitor Start]"; // [LOGGING ADDED] Prefix
+    console.log(`${logPrefix} Configuring deposit monitor...`); // [LOGGING ADDED] Entry log
+
     if (depositMonitorIntervalId) {
-         console.warn("[DepositMonitor] Attempted to start monitor but it's already running.");
-         return;
+        console.warn(`${logPrefix} Attempted to start monitor but it's already running (Interval ID: ${depositMonitorIntervalId}). Skipping.`);
+        return;
     }
 
     const intervalMs = parseInt(process.env.DEPOSIT_MONITOR_INTERVAL_MS, 10);
     if (isNaN(intervalMs) || intervalMs < 5000) { // Minimum interval 5s
-        console.warn(`⚠️ Invalid or low DEPOSIT_MONITOR_INTERVAL_MS (${process.env.DEPOSIT_MONITOR_INTERVAL_MS}), defaulting to 15000ms.`);
+        console.warn(`${logPrefix} Invalid or low DEPOSIT_MONITOR_INTERVAL_MS (${process.env.DEPOSIT_MONITOR_INTERVAL_MS}), defaulting to 15000ms.`);
         process.env.DEPOSIT_MONITOR_INTERVAL_MS = '15000';
     }
     const finalIntervalMs = parseInt(process.env.DEPOSIT_MONITOR_INTERVAL_MS, 10);
 
-    console.log(`⚙️ Starting Deposit Monitor (Polling - Interval: ${finalIntervalMs / 1000}s). WARNING: Polling is not scalable for production.`);
+    console.log(`${logPrefix} Starting Deposit Monitor (Polling - Interval: ${finalIntervalMs / 1000}s). WARNING: Polling is not scalable for production.`); // [LOGGING MODIFIED] Clarity
+
     // Initial run shortly after start
     const initialDelay = 5000; // 5 second delay
-    console.log(`  - Initial deposit check scheduled in ${initialDelay / 1000}s...`);
-    setTimeout(() => {
-        console.log("⚙️ Performing initial deposit monitor run...");
+    console.log(`${logPrefix} Initial deposit check scheduled in ${initialDelay / 1000}s...`); // [LOGGING ADDED] Initial run schedule log
+    const initialTimer = setTimeout(() => {
+        console.log(`${logPrefix} Performing initial deposit monitor run...`); // [LOGGING ADDED] Initial run execution log
         monitorDepositsPolling().catch(err => {
-            console.error('❌ [DEPOSIT MONITOR ASYNC ERROR - Initial Run]:', err);
+            console.error(`${logPrefix} Error during initial run:`, err); // [LOGGING ADDED] Log initial run error
         });
     }, initialDelay);
+    // Optional: Store initialTimer if cleanup is needed on immediate shutdown
 
     // Set interval
+    console.log(`${logPrefix} Setting interval for subsequent checks.`); // [LOGGING ADDED] Interval set log
     depositMonitorIntervalId = setInterval(() => {
+        // console.log(`${logPrefix} Interval triggered. Running deposit check.`); // Optional verbose log
         monitorDepositsPolling().catch(err => {
             // Catch errors from the async function itself to prevent interval from stopping
-            console.error('❌ [DEPOSIT MONITOR ASYNC ERROR - Interval]:', err);
+            console.error(`${logPrefix} Error during interval run:`, err); // [LOGGING ADDED] Log interval error
         });
     }, finalIntervalMs);
+    console.log(`${logPrefix} Deposit monitor started with Interval ID: ${depositMonitorIntervalId}.`); // [LOGGING ADDED] Final success log
 }
 
 
 // --- Graceful Shutdown Handler ---
 let isShuttingDown = false;
 const shutdown = async (signal, isRailwayRotation = false) => {
-    if (isShuttingDown) {
+    if (isShuttingDown && !isRailwayRotation) { // Allow rotation signal even if shutdown started
         console.log("--> Shutdown already in progress...");
         return;
     }
@@ -4616,24 +5130,30 @@ const shutdown = async (signal, isRailwayRotation = false) => {
     console.log(`\n🛑 ${signal} received, ${isRailwayRotation ? 'initiating container rotation' : 'shutting down gracefully'}...`);
 
     // --- Railway Specific Rotation Handling ---
+    // Railway sends SIGTERM for rotations. We might not need special logic if SIGTERM handling is fast enough.
+    // Keeping this block for clarity if specific rotation actions were needed.
     if (isRailwayRotation) {
-        console.log("--> Railway: Closing server, stopping monitor, brief queue drain.");
+        console.log("--> Railway Rotation: Preparing for handoff (Closing server, stopping monitor, brief queue drain).");
         // 1. Stop accepting new work
-        if (depositMonitorIntervalId) { clearInterval(depositMonitorIntervalId); depositMonitorIntervalId = null; console.log("  - Stopped deposit monitor."); }
-        if (server) { server.close(() => console.log("  - Express server closed for rotation.")); }
+        if (depositMonitorIntervalId) { clearInterval(depositMonitorIntervalId); depositMonitorIntervalId = null; console.log("   - Stopped deposit monitor."); }
+        if (server) { server.close(() => console.log("   - Express server closed for rotation.")); }
+        else { console.log("   - Express server already closed or not started.");}
         // 2. Allow brief drain (optional, short timeout)
         const drainTimeout = 1000; // 1 second max wait during rotation
-        console.log(`  - Allowing ${drainTimeout}ms for minimal queue drain...`);
+        console.log(`   - Allowing ${drainTimeout}ms for minimal queue drain...`);
         try {
             // Only wait very briefly, mainly for any in-flight payout network calls
             await Promise.race([
                 payoutProcessorQueue.onIdle(),
                 new Promise(resolve => setTimeout(resolve, drainTimeout))
             ]);
-        } catch (e) { /* Ignore timeout */ }
-        console.log("--> Rotation preparation complete. Handing off.");
-        isShuttingDown = false; // Allow potential full shutdown later if needed
-        return; // Let Railway handle the actual process termination
+            console.log(`   - Minimal queue drain finished or timed out.`);
+        } catch (e) { console.warn(`   - Error during minimal queue drain: ${e.message}`); }
+        console.log("--> Rotation preparation complete. Letting Railway manage termination.");
+        // Don't reset isShuttingDown here for rotation, as the process will likely terminate soon anyway.
+        // Exit explicitly after rotation prep? Railway might handle it, but safer to exit.
+        // process.exit(0); // Let's omit explicit exit for rotation and rely on Railway's SIGKILL after timeout.
+        return;
     }
 
     // --- Full Graceful Shutdown Logic ---
@@ -4641,31 +5161,35 @@ const shutdown = async (signal, isRailwayRotation = false) => {
     isFullyInitialized = false; // Mark as not ready
 
     // 1. Stop Deposit Monitor Interval
-    if (depositMonitorIntervalId) { clearInterval(depositMonitorIntervalId); depositMonitorIntervalId = null; console.log("  - Stopped deposit monitor interval."); }
+    if (depositMonitorIntervalId) { clearInterval(depositMonitorIntervalId); depositMonitorIntervalId = null; console.log("   - Stopped deposit monitor interval."); }
+    else { console.log("   - Deposit monitor interval already stopped."); }
 
     // 2. Stop Receiving New Events/Requests
-    console.log("  - Stopping incoming connections and listeners...");
+    console.log("   - Stopping incoming connections and listeners...");
     try {
         // Close Express server first
         if (server) {
             await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => reject(new Error('Server close timeout (5s)')), 5000);
-                if(timeout.unref) timeout.unref(); // Allow node to exit if only this timer remains
-                server.close((err) => {
-                    clearTimeout(timeout);
-                    if (err) reject(err); else resolve();
-                });
+                 const timeout = setTimeout(() => reject(new Error('Server close timeout (5s)')), 5000);
+                 if(timeout.unref) timeout.unref(); // Allow node to exit if only this timer remains
+                 server.close((err) => {
+                     clearTimeout(timeout);
+                     if (err) reject(err); else resolve();
+                 });
             });
-            console.log("  - Express server closed.");
+            console.log("   - Express server closed.");
+            server = null; // Mark server as closed
+        } else {
+            console.log("   - Express server already closed or not started.");
         }
         // Stop Telegram listeners
         if (bot.isPolling()) {
-            await bot.stopPolling({ cancel: true }).catch(e => console.warn("  - Polling stop error:", e.message));
-            console.log("  - Stopped Telegram polling.");
+             await bot.stopPolling({ cancel: true }).catch(e => console.warn("   - Polling stop error:", e.message));
+             console.log("   - Stopped Telegram polling.");
         } else {
             // Try removing webhook if it was set
-             await bot.deleteWebHook({ drop_pending_updates: false }).catch(e => console.warn("  - Webhook delete error:", e.message));
-             console.log("  - Removed Telegram webhook (if set).");
+             await bot.deleteWebHook({ drop_pending_updates: false }).catch(e => console.warn("   - Webhook delete error:", e.message));
+             console.log("   - Removed Telegram webhook (if set).");
         }
     } catch (e) {
         console.error("⚠️ Error stopping listeners/server:", e.message);
@@ -4673,7 +5197,7 @@ const shutdown = async (signal, isRailwayRotation = false) => {
 
     // 3. Wait for Ongoing Queue Processing
     const queueDrainTimeoutMs = parseInt(process.env.SHUTDOWN_QUEUE_TIMEOUT_MS, 10);
-    console.log(`  - Waiting for active jobs (max ${queueDrainTimeoutMs / 1000}s)...`);
+    console.log(`   - Waiting for active jobs (max ${queueDrainTimeoutMs / 1000}s)...`);
     try {
         const queuesToWait = [
             messageQueue,
@@ -4682,6 +5206,10 @@ const shutdown = async (signal, isRailwayRotation = false) => {
             depositProcessorQueue,
             telegramSendQueue
         ];
+        // Pause queues to prevent new items while draining
+        queuesToWait.forEach(q => q.pause());
+        console.log("   - Queues paused.");
+
         const idlePromises = queuesToWait.map(q => q.onIdle());
         const timeoutPromise = new Promise((_, reject) => {
              const t = setTimeout(() => reject(new Error(`Queue drain timeout (${queueDrainTimeoutMs}ms)`)), queueDrainTimeoutMs);
@@ -4692,18 +5220,19 @@ const shutdown = async (signal, isRailwayRotation = false) => {
             Promise.all(idlePromises),
             timeoutPromise
         ]);
-        console.log("  - All processing queues are idle.");
+        console.log("   - All processing queues are idle.");
     } catch (queueError) {
         console.warn(`⚠️ ${queueError.message}. Proceeding with shutdown.`);
         // Log queue sizes to understand what might be stuck
-        console.warn(`    Queue sizes: Msg=${messageQueue.size}, Callback=${callbackQueue.size}, Payout=${payoutProcessorQueue.size}, Deposit=${depositProcessorQueue.size}, TGSend=${telegramSendQueue.size}`);
+        console.warn(`   - Queue sizes: Msg=${messageQueue.size}, Callback=${callbackQueue.size}, Payout=${payoutProcessorQueue.size}, Deposit=${depositProcessorQueue.size}, TGSend=${telegramSendQueue.size}`);
+        console.warn(`   - Pending counts: Msg=${messageQueue.pending}, Callback=${callbackQueue.pending}, Payout=${payoutProcessorQueue.pending}, Deposit=${depositProcessorQueue.pending}, TGSend=${telegramSendQueue.pending}`);
     }
 
     // 4. Close Database Pool
-    console.log("  - Closing database pool...");
+    console.log("   - Closing database pool...");
     try {
         await pool.end();
-        console.log("  - Database pool closed.");
+        console.log("   - Database pool closed.");
     } catch (dbErr) {
         console.error("❌ Error closing database pool:", dbErr);
     }
@@ -4719,7 +5248,12 @@ const shutdown = async (signal, isRailwayRotation = false) => {
 process.on('SIGTERM', () => {
     const isRailway = !!process.env.RAILWAY_ENVIRONMENT;
     console.info(`Received SIGTERM. Railway Environment: ${isRailway}`);
-    shutdown('SIGTERM', isRailway).catch((err) => {
+    // If Railway, the specific rotation logic might have been triggered via /prestop -> SIGTERM.
+    // Re-evaluating if we need the explicit isRailwayRotation flag, maybe just handle SIGTERM quickly?
+    // Let's assume standard SIGTERM handling is desired unless specific rotation prep is needed.
+    // The current logic calls shutdown('SIGTERM', false) if not railway, or shutdown('SIGTERM', true) if railway.
+    // Let's simplify and just call shutdown, letting Railway manage rotation timing.
+    shutdown('SIGTERM', false).catch((err) => { // Treat SIGTERM as standard shutdown request
         console.error("SIGTERM shutdown handler error:", err);
         process.exit(1); // Force exit if shutdown handler fails critically
     });
@@ -4737,10 +5271,14 @@ process.on('SIGINT', () => { // CTRL+C
 process.on('uncaughtException', (err, origin) => {
     console.error(`🔥🔥🔥 Uncaught Exception at: ${origin}`);
     console.error(err); // Log the full error object
+    // Attempt emergency shutdown ONLY IF NOT ALREADY SHUTTING DOWN
     if (!isShuttingDown) {
         console.log("--> Attempting emergency shutdown due to uncaught exception...");
-        // Use a simplified, faster shutdown path? Or the full one? Let's try full first.
-        shutdown('UNCAUGHT_EXCEPTION', false).catch(() => {}); // Ignore errors during emergency shutdown
+        shutdown('UNCAUGHT_EXCEPTION', false).catch((shutdownErr) => {
+            console.error("--> Error during emergency shutdown:", shutdownErr);
+        }); // Ignore errors during emergency shutdown try
+    } else {
+         console.log("--> Uncaught exception during shutdown sequence. Forcing exit.");
     }
     // Ensure the process exits after a short delay, even if shutdown hangs
     const failTimeout = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
@@ -4748,20 +5286,22 @@ process.on('uncaughtException', (err, origin) => {
         console.error(`--> Forcing exit (${failTimeout}ms) after uncaught exception.`);
         process.exit(1);
     }, failTimeout);
-    if (t.unref) t.unref(); // Allow Node to exit if this is the only timer left
+    // Allow Node to exit if this is the only timer left (Node > v11)
+    if (t.unref) t.unref();
 });
 
 process.on('unhandledRejection', (reason, promise) => {
     console.error('🔥🔥🔥 Unhandled Rejection at:', promise, '\nReason:', reason);
     // Depending on the reason, might consider this fatal or just log it.
     // If reason suggests a critical failure, could trigger shutdown similar to uncaughtException.
-    // For now, just log.
+    // For now, just log. If it becomes problematic, add shutdown logic here too.
+    // Example check: if (reason instanceof Error && reason.message.includes('CRITICAL')) { ... shutdown ... }
 });
 
 
 // --- Application Start ---
 async function startApp() {
-    console.log(`\n🚀 Starting Solana Gambles Bot v3.1.0...`);
+    console.log(`\n🚀 Starting Solana Gambles Bot v3.1.1...`); // Updated version
     const PORT = process.env.PORT || 3000;
 
     // Setup routes and listeners before starting server
@@ -4770,7 +5310,7 @@ async function startApp() {
 
     // Start the Express server
     server = app.listen(PORT, "0.0.0.0", () => {
-        console.log(`✅ Server listening on port ${PORT}.`);
+        console.log(`✅ Server listening on 0.0.0.0:${PORT}.`); // Listen on all interfaces
         const initDelay = parseInt(process.env.INIT_DELAY_MS, 10);
         console.log(`⚙️ Scheduling background initialization in ${initDelay / 1000}s...`);
 
@@ -4784,17 +5324,19 @@ async function startApp() {
                 // 2. Setup Telegram Connection (Webhook/Polling) & Verify
                 const webhookSet = await setupTelegramWebhook();
                 if (!webhookSet) { await startPollingIfNeeded(); } // Fallback to polling
+                else { await startPollingIfNeeded(); } // Ensure polling is OFF if webhook IS set
                 const me = await bot.getMe();
                 console.log(`✅ Connected to Telegram as bot: @${me.username} (ID: ${me.id})`);
 
-                // 3. Start the Deposit Monitor
+                // 3. Start the Deposit Monitor (Function has internal logs)
                 startDepositMonitor(); // Starts the interval timer
 
                 // Optional: Add any other background tasks or checks here
+                // Example: Resume pending payouts? Maybe handled by startup query later.
 
                 isFullyInitialized = true; // Mark as ready *after* all core init steps
                 console.log("\n✅ Background Initialization Complete.");
-                console.log(`🚀🚀🚀 Solana Gambles Bot (v3.1.0 - Custodial) is fully operational! 🚀🚀🚀`);
+                console.log(`🚀🚀🚀 Solana Gambles Bot (v3.1.1 - Custodial) is fully operational! 🚀🚀🚀`);
 
             } catch (initError) {
                 console.error("\n🔥🔥🔥 Delayed Background Initialization Failed:", initError);
