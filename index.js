@@ -1471,7 +1471,7 @@ async function getTotalReferralEarnings(userId) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.1.3 --- (Attempt 3: Fix @metamask/key-tree curve error by specifying coin_type in fromSeed options)
+// --- VERSION: 3.1.2 --- (Attempt 2: Fix @metamask/key-tree curve error by ensuring Uint8Array seed + explicit curve option)
 
 // --- Solana Utilities --
 
@@ -1509,9 +1509,10 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
         }
         console.log(`${logPrefix} Seed buffer generated successfully.`);
 
-        // Ensure seed is Uint8Array
+        // ---- FIX ATTEMPT 2: Explicit Uint8Array conversion AND restore curve option ----
         console.log(`${logPrefix} Explicitly converting seed Buffer to Uint8Array...`);
         const seedBytes = Uint8Array.from(masterSeedBuffer);
+        // --------------------------------------------------------------------------------
 
         // 2. Derive the user-specific account path component (Hardened)
         console.log(`${logPrefix} Deriving account index from user ID...`);
@@ -1525,15 +1526,14 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
         console.log(`${logPrefix} Constructed derivation path: ${derivationPath}`);
 
         // 4. Create the root HD node from the master seed bytes using @metamask/key-tree
-        console.log(`${logPrefix} Creating root SLIP10Node from Uint8Array seed bytes, specifying coin_type 501...`); // Log modified approach
-        // ---- FIX ATTEMPT 3: Specify coin_type instead of curve ----
-        const rootNode = await SLIP10Node.fromSeed(seedBytes, { coin_type: 501 }); // Solana's BIP44 coin type is 501
-        // -------------------------------------------------------------
+        console.log(`${logPrefix} Creating root SLIP10Node from Uint8Array seed bytes with explicit curve option...`);
+        // ---- FIX ATTEMPT 2: Pass Uint8Array and RESTORE the curve option ----
+        const rootNode = await SLIP10Node.fromSeed(seedBytes, { curve: 'ed25519' });
+        // ---------------------------------------------------------------------
         if (!rootNode) {
              throw new Error("Failed to create root SLIP10Node from seed.");
         }
-        // Check if the created node has the expected curve now
-        console.log(`${logPrefix} Root SLIP10Node created. Node curve: ${rootNode.curve}`); // [LOGGING ADDED] Log the curve determined by the library
+        console.log(`${logPrefix} Root SLIP10Node created successfully.`);
 
         // 5. Derive the child node using the path
         console.log(`${logPrefix} Deriving child node using path: slip10:${derivationPath}...`);
@@ -1687,7 +1687,7 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     }
 
     const amountSOL = Number(amountToSend) / LAMPORTS_PER_SOL;
-    console.log(`[${operationId}] Attempting to send ${amountSOL.toFixed(SOL_DECIMALS)} SOL from ${payerWallet.publicKey.toBase58()} to ${recipientPubKey.toBase58()} using ${keyTypeForLog} key...`);
+    console.log(`[${operationId}] Attempting to send ${amountSOL.toFixed(SOL_DECIMALS)} SOL from ${payerWallet.publicKey.toBase58()} to ${recipientPubKey.toBase58()} using ${keyTypeForLog} key...`); // Log sender address
 
     try {
         // 1. Get latest blockhash
@@ -1701,7 +1701,7 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
         // 2. Calculate Priority Fee (Simplified: using fixed base/max for now)
         const basePriorityFee = parseInt(process.env.PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS, 10);
         const maxPriorityFee = parseInt(process.env.PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS, 10);
-        let priorityFeeMicroLamports = Math.max(1, Math.min(basePriorityFee, maxPriorityFee));
+        let priorityFeeMicroLamports = Math.max(1, Math.min(basePriorityFee, maxPriorityFee)); // Ensure at least 1 microLamport
         const computeUnitLimit = parseInt(process.env.PAYOUT_COMPUTE_UNIT_LIMIT, 10);
         console.log(`[${operationId}] Using Compute Unit Limit: ${computeUnitLimit}, Priority Fee: ${priorityFeeMicroLamports} microLamports`);
 
@@ -1733,14 +1733,15 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
         // 4. Sign and Send Transaction
         console.log(`[${operationId}] Sending and confirming transaction...`);
         const signature = await sendAndConfirmTransaction(
-            solanaConnection,
+            solanaConnection, // Use the potentially rate-limited connection
             transaction,
-            [payerWallet],
+            [payerWallet], // Signer
             {
-                commitment: DEPOSIT_CONFIRMATION_LEVEL,
-                skipPreflight: false,
+                commitment: DEPOSIT_CONFIRMATION_LEVEL, // Use consistent confirmation level
+                skipPreflight: false, // Keep preflight checks enabled
                 preflightCommitment: DEPOSIT_CONFIRMATION_LEVEL,
-                lastValidBlockHeight: lastValidBlockHeight,
+                lastValidBlockHeight: lastValidBlockHeight, // Include for better confirmation
+                // maxRetries: 0 // Let the RateLimitedConnection handle retries if configured internally
             }
         );
 
@@ -1753,13 +1754,13 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
             console.error(`[${operationId}] Simulation Logs (if available, last 10):`);
             error.logs.slice(-10).forEach(log => console.error(`   -> ${log}`));
         } else if (error.stack) {
-             // console.error(`[${operationId}] Stack: ${error.stack}`);
+             // console.error(`[${operationId}] Stack: ${error.stack}`); // Optionally log full stack
         }
 
         const isRetryable = isRetryableSolanaError(error);
         let userFriendlyError = `Send/Confirm error: ${error.message}`;
 
-        // Improve user-friendly messages
+        // Improve user-friendly messages for common errors
         const errorMsgLower = String(error.message || '').toLowerCase();
         if (errorMsgLower.includes('insufficient lamports') || errorMsgLower.includes('insufficient funds')) {
             userFriendlyError = `Insufficient funds in the ${keyTypeForLog} payout wallet.`;
@@ -1781,6 +1782,7 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
 /**
  * Analyzes a fetched Solana transaction to find the SOL amount transferred *to* a target address.
  * Handles basic SystemProgram transfers.
+ * NOTE: Might need adjustments for complex transactions or different program interactions.
  * @param {ConfirmedTransaction | TransactionResponse | null} tx The fetched transaction object.
  * @param {string} targetAddress The address receiving the funds.
  * @returns {{transferAmount: bigint, payerAddress: string | null}} Amount in lamports and the likely payer.
@@ -1796,32 +1798,39 @@ function analyzeTransactionAmounts(tx, targetAddress) {
     }
 
     try {
-        new PublicKey(targetAddress);
+        new PublicKey(targetAddress); // Validate target address format
     } catch (e) {
         console.warn(`${logPrefix} Invalid targetAddress format: ${targetAddress}`);
         return { transferAmount: 0n, payerAddress: null };
     }
 
+    // Check for transaction error
     if (tx.meta?.err) {
         console.log(`${logPrefix} Transaction meta contains error. Returning zero amount. Error: ${JSON.stringify(tx.meta.err)}`);
         return { transferAmount: 0n, payerAddress: null };
     }
 
+    // --- Method 1: Balance Changes (Most Reliable) ---
+    // console.log(`${logPrefix} Attempting analysis via balance changes...`);
     if (tx.meta?.preBalances && tx.meta?.postBalances && tx.transaction?.message) {
         try {
+            // Handle both legacy and version 0 message formats for account keys
              const accountKeys = (tx.transaction.message.staticAccountKeys || tx.transaction.message.accountKeys).map(k => k.toBase58());
              const header = tx.transaction.message.header;
             const targetIndex = accountKeys.indexOf(targetAddress);
+            // console.log(`${logPrefix} Target index in accountKeys: ${targetIndex}`);
 
             if (targetIndex !== -1 &&
                 tx.meta.preBalances.length > targetIndex && tx.meta.postBalances.length > targetIndex) {
                 const preBalance = BigInt(tx.meta.preBalances[targetIndex]);
                 const postBalance = BigInt(tx.meta.postBalances[targetIndex]);
                 const balanceChange = postBalance - preBalance;
+                // console.log(`${logPrefix} Pre: ${preBalance}, Post: ${postBalance}, Change: ${balanceChange}`);
 
                 if (balanceChange > 0n) {
                     transferAmount = balanceChange;
                     console.log(`${logPrefix} Positive balance change detected: ${transferAmount} lamports.`);
+                    // Try to identify the payer (usually the first signer who had a negative balance change)
                      const signers = accountKeys.slice(0, header.numRequiredSignatures);
                      for (const signerKey of signers) {
                          const signerIndex = accountKeys.indexOf(signerKey);
@@ -1832,10 +1841,11 @@ function analyzeTransactionAmounts(tx, targetAddress) {
                             if (postSigner < preSigner) {
                                 payerAddress = signerKey;
                                 console.log(`${logPrefix} Identified likely payer (signer with negative balance change): ${payerAddress}`);
-                                break;
+                                break; // Assume first signer with decreased balance is payer
                             }
                          }
                      }
+                    // Fallback to first signer if no obvious payer found
                     if (!payerAddress && signers.length > 0) {
                         payerAddress = signers[0];
                         console.log(`${logPrefix} Could not find signer with negative balance change, falling back to first signer as payer: ${payerAddress}`);
@@ -1848,6 +1858,7 @@ function analyzeTransactionAmounts(tx, targetAddress) {
             }
         } catch (e) {
              console.warn(`${logPrefix} Error analyzing balance changes: ${e.message}`);
+             // Fallback to instruction parsing if balance analysis fails
              transferAmount = 0n;
              payerAddress = null;
         }
@@ -1855,36 +1866,66 @@ function analyzeTransactionAmounts(tx, targetAddress) {
          console.log(`${logPrefix} Balance change analysis skipped: Meta or message data missing.`);
     }
 
+    // --- Method 2: Instruction Parsing (Fallback / Cross-check) ---
+    // Only use if balance change method didn't find a positive transfer
     if (transferAmount === 0n && tx.meta?.logMessages) {
         console.log(`${logPrefix} Attempting analysis via log messages (Fallback)...`);
-        const sysTransferToRegex = /Transfer: src=([1-9A-HJ-NP-Za-km-z]+) dst=([1-9A-HJ-NP-Za-km-z]+) lamports=(\d+)/;
-        const sysTransferInvokeRegex = /Program log: Instruction: Transfer/;
-        const lamportsRegex = /(\d+) lamports/;
+        // Example: Look for SystemProgram transfer logs
+        const sysTransferToRegex = /Transfer: src=([1-9A-HJ-NP-Za-km-z]+) dst=([1-9A-HJ-NP-Za-km-z]+) lamports=(\d+)/; // For newer log formats
+        const sysTransferInvokeRegex = /Program log: Instruction: Transfer/; // Check if system program transfer was invoked
+        const lamportsRegex = /(\d+) lamports/; // Generic lamports extraction
 
         let potentialPayer = null;
         let potentialAmount = 0n;
+
+        // More robust log parsing attempt
         let isSysTransfer = false;
         let parsedSrc = null;
         let parsedDst = null;
         let parsedLamports = null;
 
         for (const log of tx.meta.logMessages) {
+            // Check for newer direct format first
             const matchNew = log.match(sysTransferToRegex);
             if (matchNew && matchNew[2] === targetAddress) {
                 potentialPayer = matchNew[1];
                 potentialAmount = BigInt(matchNew[3]);
                 console.log(`${logPrefix} Found transfer via new log format: ${potentialAmount} lamports from ${potentialPayer}`);
+                // If found via this regex, prioritize it
                 transferAmount = potentialAmount;
                 payerAddress = potentialPayer;
-                break;
+                break; // Exit loop once found
             }
-            // Fallback logic remains less reliable
+
+            // Check for invoke pattern (less direct)
+            if (log.includes('Program SystemProgram') && log.includes('Invoke')) {
+                 isSysTransfer = true; // Potential system transfer block started
+                 parsedSrc = null; parsedDst = null; parsedLamports = null; // Reset for this block
+            }
+            if (isSysTransfer && log.includes('Program log: Instruction: Transfer')) {
+                 // Instruction confirmed within block, now look for lamports in subsequent logs
+            }
+            if (isSysTransfer && log.includes('lamports')) {
+                 const lamportMatch = log.match(lamportsRegex);
+                 if (lamportMatch && lamportMatch[1]) {
+                      parsedLamports = BigInt(lamportMatch[1]);
+                      // We need source/destination to confirm *this* transfer is relevant
+                      // This requires looking at account keys involved in the instruction, which isn't in logs easily.
+                      // This fallback is less reliable for amount confirmation without balance changes.
+                      // console.log(`${logPrefix} Found lamports amount in log: ${parsedLamports}`);
+                 }
+            }
+            if (log.includes('Program SystemProgram') && log.includes('success')) {
+                 isSysTransfer = false; // End of potential system transfer block
+            }
+             // Add more sophisticated parsing here if needed for other transfer types or older log formats
         }
-        if (transferAmount === 0n) {
+        if (transferAmount === 0n) { // Only log if primary method failed
             console.log(`${logPrefix} Log message parsing did not find a definitive transfer to the target address.`);
         }
     }
 
+    // Final log summarizing result
     if (transferAmount > 0n) {
         console.log(`${logPrefix} Final analysis result: Found ${transferAmount} lamports from ${payerAddress || 'Unknown'}`);
     } else {
@@ -1905,10 +1946,13 @@ function analyzeTransactionAmounts(tx, targetAddress) {
  * @returns {Promise<TelegramBot.Message | undefined>} The sent message object or undefined on failure.
  */
 async function safeSendMessage(chatId, text, options = {}) {
+    // Input validation
     if (!chatId || typeof text !== 'string' || text.trim() === '') {
         console.error("[safeSendMessage] Invalid input:", { chatId, text });
         return undefined;
     }
+
+    // Message length check (Telegram limit is 4096 chars)
     const MAX_LENGTH = 4096;
     if (text.length > MAX_LENGTH) {
         console.warn(`[safeSendMessage] Message for chat ${chatId} too long (${text.length} > ${MAX_LENGTH}), truncating.`);
@@ -1917,16 +1961,31 @@ async function safeSendMessage(chatId, text, options = {}) {
 
     return telegramSendQueue.add(async () => {
         try {
+            // console.debug(`[safeSendMessage] Attempting to send to chat ${chatId}: "${text.substring(0, 50)}..."`);
             const sentMessage = await bot.sendMessage(chatId, text, options);
+            // console.debug(`[safeSendMessage] Successfully sent message ID ${sentMessage.message_id} to chat ${chatId}`);
             return sentMessage;
         } catch (error) {
             console.error(`❌ Telegram send error to chat ${chatId}: Code: ${error.code} | ${error.message}`);
             if (error.response?.body) {
                  console.error(`   -> Response Body: ${JSON.stringify(error.response.body)}`);
             }
-            // Specific error handling remains the same
-            if (error.code === 'ETELEGRAM') { /* ... */ }
-            return undefined;
+
+            // Handle specific, common errors
+            if (error.code === 'ETELEGRAM') {
+                if (error.message.includes('400 Bad Request: message is too long')) {
+                     console.error(`   -> Message confirmed too long, even after potential truncation.`);
+                } else if (error.message.includes('400 Bad Request: can\'t parse entities')) {
+                     console.error(`   -> Telegram Parse Error: Ensure proper MarkdownV2 escaping! Text snippet: ${text.substring(0, 100)}...`);
+                } else if (error.message.includes('403 Forbidden: bot was blocked by the user') || error.message.includes('403 Forbidden: user is deactivated')) {
+                     console.warn(`   -> Bot blocked or user deactivated for chat/user ${chatId}. Consider marking user inactive.`);
+                } else if (error.message.includes('403 Forbidden: bot was kicked')) {
+                     console.warn(`   -> Bot kicked from group chat ${chatId}. Consider cleaning up group-related data.`);
+                } else if (error.message.includes('429 Too Many Requests')) {
+                     console.warn(`   -> Hit Telegram rate limits sending to ${chatId}. Queue should handle, but may indicate high load.`);
+                }
+            }
+            return undefined; // Indicate failure
         }
     });
 }
@@ -1939,8 +1998,11 @@ async function safeSendMessage(chatId, text, options = {}) {
  * @returns {string} Escaped string.
  */
 const escapeMarkdownV2 = (text) => {
-    if (text === null || typeof text === 'undefined') { return ''; }
-    const textString = String(text);
+    if (text === null || typeof text === 'undefined') {
+        return ''; // Return empty string for null/undefined
+    }
+    const textString = String(text); // Convert numbers/bigints to string
+    // Escape all reserved characters: _ * [ ] ( ) ~ ` > # + - = | { } . ! \
     return textString.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 };
 
@@ -1950,7 +2012,9 @@ const escapeMarkdownV2 = (text) => {
  * @returns {string} Escaped string.
  */
 function escapeHtml(text) {
-    if (text === null || typeof text === 'undefined') { return ''; }
+    if (text === null || typeof text === 'undefined') {
+        return ''; // Return empty string for null/undefined
+    }
     const textString = String(text);
     return textString.replace(/&/g, "&amp;")
                       .replace(/</g, "&lt;")
@@ -1971,12 +2035,21 @@ async function getUserDisplayName(chatId, userId) {
         const member = await bot.getChatMember(chatId, userId);
         const user = member.user;
         let name = '';
-        if (user.username) { name = `@${user.username}`; }
-        else if (user.first_name) { name = user.first_name; if (user.last_name) { name += ` ${user.last_name}`; } }
-        else { name = `User_${String(userId).slice(-4)}`; }
+        if (user.username) {
+            name = `@${user.username}`; // Keep @ for username
+        } else if (user.first_name) {
+            name = user.first_name;
+            if (user.last_name) {
+                name += ` ${user.last_name}`;
+            }
+        } else {
+            name = `User_${String(userId).slice(-4)}`; // Fallback
+        }
+        // Escape the final chosen name
         return escapeMarkdownV2(name);
     } catch (error) {
         console.warn(`[getUserDisplayName] Failed to get chat member for ${userId} in ${chatId}: ${error.message}. Falling back to ID.`);
+        // Fallback to generic name based on ID, already escaped
         return escapeMarkdownV2(`User_${String(userId).slice(-4)}`);
     }
 }
@@ -1990,20 +2063,30 @@ function updateWalletCache(userId, data) {
     const existing = walletCache.get(userId) || {};
     const entryTimestamp = Date.now();
     walletCache.set(userId, { ...existing, ...data, timestamp: entryTimestamp });
+    // console.log(`[Cache Update] Wallet cache updated for user ${userId}. Keys: ${Object.keys(data).join(', ')}`);
     setTimeout(() => {
         const current = walletCache.get(userId);
         if (current && current.timestamp === entryTimestamp && Date.now() - current.timestamp >= WALLET_CACHE_TTL_MS) {
+            // console.log(`[Cache Eviction] Wallet cache evicted for user ${userId} after TTL.`);
             walletCache.delete(userId);
         }
-    }, WALLET_CACHE_TTL_MS + 1000);
+    }, WALLET_CACHE_TTL_MS + 1000); // Add buffer
 }
 
 /** Gets wallet cache data if not expired. */
 function getWalletCache(userId) {
     userId = String(userId);
     const entry = walletCache.get(userId);
-    if (entry && Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) { return entry; }
-    if (entry) { walletCache.delete(userId); }
+    if (entry && Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) {
+        // console.log(`[Cache Hit] Wallet cache hit for user ${userId}.`);
+        return entry;
+    }
+    if (entry) {
+        // console.log(`[Cache Stale] Wallet cache entry for user ${userId} expired.`);
+        walletCache.delete(userId);
+    } else {
+         // console.log(`[Cache Miss] Wallet cache miss for user ${userId}.`);
+    }
     return undefined;
 }
 
@@ -2011,10 +2094,11 @@ function getWalletCache(userId) {
 function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) {
     activeDepositAddresses.set(address, { userId: String(userId), expiresAt: expiresAtTimestamp });
     console.log(`[Cache Update] Added/Updated deposit address ${address.slice(0,6)}.. for user ${userId} in cache. Expires: ${new Date(expiresAtTimestamp).toISOString()}`);
-    const delay = expiresAtTimestamp - Date.now() + 1000;
+    const delay = expiresAtTimestamp - Date.now() + 1000; // Add buffer
     if (delay > 0) {
         setTimeout(() => {
             const current = activeDepositAddresses.get(address);
+            // Only delete if it's the exact same entry we set the timer for
             if (current && current.userId === String(userId) && current.expiresAt === expiresAtTimestamp) {
                  console.log(`[Cache Eviction] Deposit address ${address.slice(0,6)}.. expired and removed from cache.`);
                  activeDepositAddresses.delete(address);
@@ -2023,6 +2107,7 @@ function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) {
             }
         }, delay);
     } else {
+        // If already expired when adding (shouldn't normally happen), remove immediately
         console.log(`[Cache Update] Deposit address ${address.slice(0,6)}.. was already expired when added to cache. Removing immediately.`);
         removeActiveDepositAddressCache(address);
     }
@@ -2032,24 +2117,38 @@ function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) {
 function getActiveDepositAddressCache(address) {
     const entry = activeDepositAddresses.get(address);
     const now = Date.now();
-    if (entry && now < entry.expiresAt) { return entry; }
-    if (entry) { activeDepositAddresses.delete(address); }
+    if (entry && now < entry.expiresAt) {
+        // console.log(`[Cache Hit] Deposit address ${address.slice(0,6)}.. found in cache.`);
+        return entry;
+    }
+    if (entry) {
+        // console.log(`[Cache Stale] Deposit address ${address.slice(0,6)}.. found in cache but expired.`);
+        activeDepositAddresses.delete(address); // Clean up expired entry
+    } else {
+         // console.log(`[Cache Miss] Deposit address ${address.slice(0,6)}.. not found in cache.`);
+    }
     return undefined;
 }
 
 /** Removes an address from the deposit cache. */
 function removeActiveDepositAddressCache(address) {
     const deleted = activeDepositAddresses.delete(address);
-    if (deleted) { console.log(`[Cache Update] Explicitly removed deposit address ${address.slice(0,6)}.. from cache.`); }
+    if (deleted) {
+        console.log(`[Cache Update] Explicitly removed deposit address ${address.slice(0,6)}.. from cache.`);
+    }
     return deleted;
 }
 
 /** Adds a signature to the processed set and handles cache size limit. */
 function addProcessedDepositTx(signature) {
-    if (processedDepositTxSignatures.has(signature)) return;
+    if (processedDepositTxSignatures.has(signature)) return; // Don't log if already added
+
     if (processedDepositTxSignatures.size >= MAX_PROCESSED_TX_CACHE_SIZE) {
         const oldestSig = processedDepositTxSignatures.values().next().value;
-        if (oldestSig) { processedDepositTxSignatures.delete(oldestSig); }
+        if (oldestSig) {
+            processedDepositTxSignatures.delete(oldestSig);
+            // console.log(`[Cache Eviction] Removed oldest processed TX sig (${oldestSig.slice(0,6)}..) due to cache size limit.`);
+        }
     }
     processedDepositTxSignatures.add(signature);
     console.log(`[Cache Update] Added TX signature ${signature.slice(0,6)}.. to processed deposit cache. Size: ${processedDepositTxSignatures.size}/${MAX_PROCESSED_TX_CACHE_SIZE}`);
