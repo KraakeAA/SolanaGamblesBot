@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node index.js",
     "docker:build": "docker build --no-cache -t solana-bot .",
-    "docker:run": "docker run -it --env-file .env --rm solana-bot"
+    "docker:run": "docker run -it --env-file .env --rm solana-bot",
+    "postinstall": "npm install @metamask/key-tree"
   },
   "dependencies": {
     "@metamask/key-tree": "^10.1.1",
