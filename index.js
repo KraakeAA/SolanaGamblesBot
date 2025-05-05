@@ -4708,9 +4708,20 @@ startApp().catch(async err => { /* handles top-level startup errors */ });
 
 // --- End of Part 6 / End of File ---
 
-// Export functions if needed
+// Export functions if needed (adjust as necessary)
 export {
     addPayoutJob,
-    // ... other exports if desired ...
+    handleWithdrawalPayoutJob,
+    handleReferralPayoutJob,
+    monitorDepositsPolling,
+    processDepositTransaction,
+    sweepDepositAddresses,
+    setupTelegramListeners,
+    setupExpressRoutes,
+    initializeDatabase,
+    startPollingIfNeeded,
+    startDepositMonitor,
+    startDepositSweeper,
+    shutdown,
     startApp
 };
