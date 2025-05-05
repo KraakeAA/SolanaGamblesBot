@@ -4110,16 +4110,30 @@ async function processDepositTransaction(signature, depositAddress) {
             newDepositId = depositRecordResult.depositId; // Store the new ID
 
             // 6d. Update the ledger entry with the new deposit ID
-            const ledgerUpdateRes = await queryDatabase(
-                 `UPDATE ledger SET related_deposit_id = $1
-                   WHERE user_id = $2 AND transaction_type = 'deposit' AND amount_lamports = $3 AND related_deposit_id IS NULL
-                   ORDER BY id DESC LIMIT 1`,
-                 [newDepositId, userId, transferAmount],
-                 client
-             );
-             if (ledgerUpdateRes.rowCount === 0) {
-                  console.warn(`${logPrefix} Could not find matching ledger entry to update related_deposit_id for deposit ${newDepositId}. Balance was still updated.`);
-             }
+console.log(`${logPrefix} Updating latest matching ledger entry with Deposit ID ${newDepositId}...`);
+const ledgerUpdateRes = await queryDatabase(
+    `UPDATE ledger
+     SET related_deposit_id = $1
+     WHERE id = (
+         SELECT id
+         FROM ledger
+         WHERE user_id = $2        -- Matches parameter $2 (userId)
+           AND transaction_type = 'deposit'
+           AND amount_lamports = $3  -- Matches parameter $3 (transferAmount)
+           AND related_deposit_id IS NULL
+         ORDER BY created_at DESC, id DESC -- Order by creation time first, then ID
+         LIMIT 1
+     )`, // <<< CORRECTED SQL using Subquery
+    [newDepositId, userId, transferAmount], // Parameters: $1=newDepositId, $2=userId, $3=transferAmount
+    client
+);
+ if (ledgerUpdateRes.rowCount === 0) {
+      console.warn(`${logPrefix} Could not find matching ledger entry to update related_deposit_id for deposit ${newDepositId}. Balance was still updated.`);
+      // Consider notifying admin if this happens unexpectedly
+      await notifyAdmin(`⚠️ Ledger Mismatch: Could not find ledger entry to link deposit ID ${newDepositId} for User ${userId}, Amount ${transferAmount}. Balance was credited.`);
+ } else {
+      console.log(`${logPrefix} Ledger entry updated successfully.`);
+ }
 
             // 6e. Mark deposit address as used
             const markedUsed = await markDepositAddressUsed(client, depositAddressId);
