@@ -20,7 +20,7 @@
         "failureThreshold": 3
       },
       "readiness": {
-        "path": "/health",
+        "path": "/",
         "port": 3000,
         "initialDelaySeconds": 30,
         "timeoutSeconds": 5,
