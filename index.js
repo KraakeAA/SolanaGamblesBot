@@ -5521,7 +5521,12 @@ function setupExpressServer() {
     console.log('⚙️ [Startup] Setting up Express server...');
     const port = process.env.PORT || 3000;
 
-    app.get('/', (req, res) => res.send(`Solana Gambles Bot v${process.env.npm_package_version || '3.1.7'} Alive! ${new Date().toISOString()}`));
+    // --- ADD THIS NEW ROOT ROUTE HANDLER ---
+    app.get('/', (req, res) => {
+        console.log(">>> [Root Route Handler] Entered / route.");
+        res.status(200).send('OK from root');
+    });
+    // --- END ADD ---
 
     app.get('/health', (req, res) => {
         // --- ADD THIS LOG ---
@@ -5529,8 +5534,12 @@ function setupExpressServer() {
         // --- END ADD ---
         const status = isFullyInitialized ? 'OK' : 'INITIALIZING';
         const httpStatus = isFullyInitialized ? 200 : 503;
-        console.log(`[Health Check Probe] Responding with Status: ${httpStatus} (${status})`); // ADDED Debug Log
-        res.status(httpStatus).json({ status: status });
+        const responseJson = { status: status };
+        // --- ADD THIS LOG ---
+        console.log(`>>> [Health Route Handler] Attempting to send status ${httpStatus} with body: ${JSON.stringify(responseJson)}`);
+        // --- END ADD ---
+        console.log(`[Health Check Probe] Responding with Status: ${httpStatus} (${status})`);
+        res.status(httpStatus).json(responseJson); // Send the JSON response
     });
 
     if (!bot.options.polling && process.env.BOT_TOKEN) {
