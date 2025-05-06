@@ -1,5 +1,5 @@
 // index.js - Part 1: Imports, Environment Configuration, Core Initializations
-// --- VERSION: 3.1.8 --- (Fix Markdown Escape, Improve RPC Error Handling, Add State Debug Logging, Fix Version Display)
+// --- VERSION: 3.1.9 --- (Clean SOL Formatting, Fix Markdown Escape, Improve RPC Error Handling, Add State Debug Logging, Fix Version Display, Re-implement Roulette)
 
 // --- All Imports MUST come first ---
 import 'dotenv/config'; // Keep for local development via .env file
@@ -16,9 +16,8 @@ import {
     sendAndConfirmTransaction,
     ComputeBudgetProgram,
     SendTransactionError,
-    TransactionExpiredBlockheightExceededError, // Import specific error type if needed for retries
-    type TransactionSignature // Import type alias correctly
-    // REMOVED: Redundant TransactionSignature value import
+    TransactionExpiredBlockheightExceededError // Import specific error type if needed for retries
+    // REMOVED: TypeScript type-only import for TransactionSignature
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import * as crypto from 'crypto'; // Keep for other crypto uses if any
@@ -36,7 +35,7 @@ import nacl from 'tweetnacl'; // Keep for keypair generation from derived seed
 import RateLimitedConnection from './lib/solana-connection.js'; // Ensure this path is correct
 
 // --- Deployment Check Log ---
-const BOT_VERSION = process.env.npm_package_version || '3.1.8'; // Use package version or fallback
+const BOT_VERSION = process.env.npm_package_version || '3.1.9'; // Use package version or fallback - Updated version
 console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} --- v${BOT_VERSION} ---`); // Updated Version
 // --- END DEPLOYMENT CHECK ---
 
@@ -215,7 +214,7 @@ const OPTIONAL_ENV_DEFAULTS = {
     'DB_CONN_TIMEOUT': '5000',
     'DB_SSL': 'true',
     'DB_REJECT_UNAUTHORIZED': 'true',
-    'USER_STATE_CACHE_TTL_MS': '300000', // 5 minutes - TODO: Review if this TTL is causing custom amount state loss
+    'USER_STATE_CACHE_TTL_MS': '300000', // 5 minutes
     'WALLET_CACHE_TTL_MS': '600000',     // 10 minutes
     'DEPOSIT_ADDR_CACHE_TTL_MS': '3660000', // ~1 hour + buffer
     'MAX_PROCESSED_TX_CACHE': '5000',
@@ -239,14 +238,14 @@ console.log("✅ Environment variables checked/defaults applied.");
 
 
 // --- Global Constants & State ---
-const SOL_DECIMALS = 9;
+const SOL_DECIMALS = 9; // Maximum precision for SOL amounts
 const DEPOSIT_ADDRESS_EXPIRY_MS = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000;
 const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS === 'finalized' ? 'finalized' : 'confirmed';
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
 const MAX_PROCESSED_TX_CACHE_SIZE = parseInt(process.env.MAX_PROCESSED_TX_CACHE, 10);
 const USER_COMMAND_COOLDOWN_MS = parseInt(process.env.USER_COMMAND_COOLDOWN_MS, 10);
-const USER_STATE_TTL_MS = parseInt(process.env.USER_STATE_CACHE_TTL_MS, 10); // Default 5 minutes
+const USER_STATE_TTL_MS = parseInt(process.env.USER_STATE_CACHE_TTL_MS, 10);
 const WALLET_CACHE_TTL_MS = parseInt(process.env.WALLET_CACHE_TTL_MS, 10);
 const DEPOSIT_ADDR_CACHE_TTL_MS = parseInt(process.env.DEPOSIT_ADDR_CACHE_TTL_MS, 10);
 const REFERRAL_INITIAL_BET_MIN_LAMPORTS = BigInt(process.env.REFERRAL_INITIAL_BET_MIN_LAMPORTS);
@@ -266,10 +265,10 @@ const REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS = [
     BigInt(250 * LAMPORTS_PER_SOL), BigInt(500 * LAMPORTS_PER_SOL), BigInt(1000 * LAMPORTS_PER_SOL)
 ];
 // Sweeping Constants
-const SWEEP_FEE_BUFFER_LAMPORTS = BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS); // Buffer LEFT BEHIND in address
+const SWEEP_FEE_BUFFER_LAMPORTS = BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS);
 const SWEEP_BATCH_SIZE = parseInt(process.env.SWEEP_BATCH_SIZE, 10);
 const SWEEP_ADDRESS_DELAY_MS = parseInt(process.env.SWEEP_ADDRESS_DELAY_MS, 10);
-const SWEEP_RETRY_ATTEMPTS = parseInt(process.env.SWEEP_RETRY_ATTEMPTS, 10); // Max *additional* attempts
+const SWEEP_RETRY_ATTEMPTS = parseInt(process.env.SWEEP_RETRY_ATTEMPTS, 10);
 const SWEEP_RETRY_DELAY_MS = parseInt(process.env.SWEEP_RETRY_DELAY_MS, 10);
 
 // Standard Bet Amounts
@@ -281,15 +280,15 @@ console.log(`[Config] Standard Bet Amounts (Lamports): ${STANDARD_BET_AMOUNTS_LA
 const userStateCache = new Map(); // Map<userId, { state: string, chatId: string, messageId?: number, data?: any, timestamp: number }>
 const walletCache = new Map(); // Map<userId, { withdrawalAddress?: string, referralCode?: string, timestamp: number, timeoutId?: NodeJS.Timeout }>
 const activeDepositAddresses = new Map(); // Map<deposit_address, { userId: string, expiresAt: number, timeoutId?: NodeJS.Timeout }>
-const processedDepositTxSignatures = new Set(); // Store processed deposit TX sigs this session
-const commandCooldown = new Map(); // Map<userId, timestamp>
-const pendingReferrals = new Map(); // Map<userId, { referrerUserId: string, timestamp: number }>
+const processedDepositTxSignatures = new Set();
+const commandCooldown = new Map();
+const pendingReferrals = new Map();
 const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 let isFullyInitialized = false;
-let server; // Express server instance
-let depositMonitorIntervalId = null; // Interval ID for the deposit monitor
-let sweepIntervalId = null; // Interval ID for the deposit sweeper
+let server;
+let depositMonitorIntervalId = null;
+let sweepIntervalId = null;
 // --- End Global Constants & State ---
 
 
@@ -297,9 +296,9 @@ let sweepIntervalId = null; // Interval ID for the deposit sweeper
 
 // Express App
 const app = express();
-app.use(express.json({ limit: '10kb' })); // Keep request size limit reasonable
+app.use(express.json({ limit: '10kb' }));
 
-// Solana Connection (Using RateLimitedConnection wrapper)
+// Solana Connection
 console.log("⚙️ Initializing Multi-RPC Solana connection...");
 console.log(`ℹ️ Using RPC Endpoints: ${parsedRpcUrls.join(', ')}`);
 const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
@@ -309,9 +308,9 @@ const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
     rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
     retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
     retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
-    commitment: process.env.RPC_COMMITMENT, // Default 'confirmed'
-    httpHeaders: { 'User-Agent': `SolanaGamblesBot/${BOT_VERSION}` }, // Updated version
-    clientId: `SolanaGamblesBot/${BOT_VERSION}` // Updated version
+    commitment: process.env.RPC_COMMITMENT,
+    httpHeaders: { 'User-Agent': `SolanaGamblesBot/${BOT_VERSION}` },
+    clientId: `SolanaGamblesBot/${BOT_VERSION}`
 });
 console.log("✅ Multi-RPC Solana connection instance created.");
 
@@ -338,9 +337,9 @@ const depositProcessorQueue = new PQueue({
     throwOnTimeout: true
 });
 const telegramSendQueue = new PQueue({
-    concurrency: parseInt(process.env.TELEGRAM_SEND_QUEUE_CONCURRENCY, 10), // MUST BE 1
+    concurrency: parseInt(process.env.TELEGRAM_SEND_QUEUE_CONCURRENCY, 10),
     interval: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_MS, 10),
-    intervalCap: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_CAP, 10) // MUST BE 1
+    intervalCap: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_CAP, 10)
 });
 console.log("✅ Processing Queues initialized.");
 
@@ -356,23 +355,22 @@ const pool = new Pool({
 });
 pool.on('error', (err, client) => {
     console.error('❌ Unexpected error on idle PostgreSQL client', err);
-    // Consider removing the client? pool.remove(client)? Requires careful testing.
-    notifyAdmin(`🚨 DB Pool Error (Idle Client): ${err.message}`).catch(()=>{}); // Fire and forget notification
+    notifyAdmin(`🚨 DB Pool Error (Idle Client): ${err.message}`).catch(()=>{});
 });
 console.log("✅ PostgreSQL Pool created.");
 
 // Telegram Bot Instance
 console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
-    polling: false, // Set dynamically later based on webhook success
-    request: {       // Adjust request options for stability
-        timeout: 15000, // Increased request timeout
+    polling: false,
+    request: {
+        timeout: 15000,
         agentOptions: {
             keepAlive: true,
-            keepAliveMsecs: 60000, // Standard keep-alive
-            maxSockets: 100, // Allow more sockets
+            keepAliveMsecs: 60000,
+            maxSockets: 100,
             maxFreeSockets: 10,
-            scheduling: 'fifo', // Default scheduling
+            scheduling: 'fifo',
         }
     }
 });
@@ -382,8 +380,8 @@ console.log("✅ Telegram Bot instance created.");
 console.log("⚙️ Loading Game Configuration...");
 const GAME_CONFIG = {
     coinflip: {
-        key: "coinflip", // Add key for reference
-        name: "Coinflip", // Add display name
+        key: "coinflip",
+        name: "Coinflip",
         minBetLamports: BigInt(process.env.CF_MIN_BET_LAMPORTS),
         maxBetLamports: BigInt(process.env.CF_MAX_BET_LAMPORTS),
         houseEdge: parseFloat(process.env.CF_HOUSE_EDGE)
@@ -441,10 +439,33 @@ console.log("✅ Game Config Loaded and Validated.");
 // --- End Core Initializations ---
 
 // --- Export necessary variables/instances for other parts if splitting files physically ---
-// Example: export { pool, bot, solanaConnection, userStateCache, /* ... other needed exports */ };
+export {
+    pool, bot, solanaConnection, userStateCache, walletCache, activeDepositAddresses,
+    processedDepositTxSignatures, commandCooldown, pendingReferrals, GAME_CONFIG,
+    messageQueue, callbackQueue, payoutProcessorQueue, depositProcessorQueue, telegramSendQueue,
+    BOT_VERSION, LAMPORTS_PER_SOL, SOL_DECIMALS, DEPOSIT_CONFIRMATION_LEVEL,
+    MIN_WITHDRAWAL_LAMPORTS, WITHDRAWAL_FEE_LAMPORTS, REFERRAL_INITIAL_BET_MIN_LAMPORTS,
+    REFERRAL_MILESTONE_REWARD_PERCENT, REFERRAL_INITIAL_BONUS_TIERS, REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS,
+    DEPOSIT_ADDRESS_EXPIRY_MS, USER_STATE_TTL_MS, PENDING_REFERRAL_TTL_MS, STANDARD_BET_AMOUNTS_LAMPORTS,
+    STANDARD_BET_AMOUNTS_SOL, MAX_PROCESSED_TX_CACHE_SIZE, USER_COMMAND_COOLDOWN_MS,
+    isFullyInitialized, server, // Allow modification in Part 6
+    depositMonitorIntervalId, sweepIntervalId, // Allow modification in Part 6
+    // Also export functions from subsequent parts if needed globally
+    // Part 2 functions
+    queryDatabase, ensureUserExists, linkUserWallet, getUserWalletDetails, getLinkedWallet, getUserByReferralCode, linkReferral, updateUserWagerStats, getUserBalance, updateUserBalanceAndLedger, createDepositAddressRecord, findDepositAddressInfo, markDepositAddressUsed, recordConfirmedDeposit, getNextDepositAddressIndex, createWithdrawalRequest, updateWithdrawalStatus, getWithdrawalDetails, createBetRecord, updateBetStatus, isFirstCompletedBet, getBetDetails, recordPendingReferralPayout, updateReferralPayoutStatus, getReferralPayoutDetails, getTotalReferralEarnings,
+    // Part 3 functions
+    sleep, formatSol, createSafeIndex, generateUniqueDepositAddress, getKeypairFromPath, isRetryableSolanaError, sendSol, analyzeTransactionAmounts, notifyAdmin, safeSendMessage, escapeMarkdownV2, escapeHtml, getUserDisplayName, updateWalletCache, getWalletCache, addActiveDepositAddressCache, getActiveDepositAddressCache, removeActiveDepositAddressCache, addProcessedDepositTx, hasProcessedDepositTx, generateReferralCode,
+    // Part 4 functions
+    playCoinflip, simulateRace, simulateSlots, simulateRouletteSpin, getRoulettePayoutMultiplier, simulateWar,
+    // Part 5a functions
+    handleMessage, handleCallbackQuery, proceedToGameStep, placeBet, handleCoinflipGame, handleRaceGame, RACE_HORSES, handleSlotsGame, handleWarGame, handleRouletteGame,
+    // Part 5b functions
+    routeStatefulInput, handleCustomAmountInput, handleWithdrawalAddressInput, handleWithdrawalAmountInput, handleRouletteBetInput, handleRouletteNumberInput, handleStartCommand, handleHelpCommand, handleWalletCommand, handleReferralCommand, handleDepositCommand, handleWithdrawCommand, showBetAmountButtons, handleCoinflipCommand, handleRaceCommand, handleSlotsCommand, handleWarCommand, handleRouletteCommand, commandHandlers, menuCommandHandlers, handleAdminCommand, _handleReferralChecks,
+    // Part 6 functions are generally internal or startup/shutdown related
+    // initializeDatabase, loadActiveDepositsCache, startDepositMonitor, monitorDepositsPolling, processDepositTransaction, startDepositSweeper, sweepDepositAddresses, addPayoutJob, handleWithdrawalPayoutJob, handleReferralPayoutJob, setupTelegramConnection, startPollingFallback, setupExpressServer, shutdown, setupTelegramListeners
+};
 
-// --- End of Part 1 ---
-// index.js - Part 2: Database Operations
+// --- End of Part 1 ---// index.js - Part 2: Database Operations
 // --- VERSION: 3.1.8 --- (Fix Markdown Escape, Improve RPC Error Handling, Add State Debug Logging, Fix Version Display, Re-implement Roulette)
 
 // --- Assuming 'pool', 'PublicKey', utils like 'generateReferralCode', 'updateWalletCache' etc. are available from other parts ---
