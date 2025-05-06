@@ -7,14 +7,13 @@
   "deploy": {
     "startTimeout": 28,
     "shutdownTimeout": 25,
-    // Remove deploy.healthcheckPath and deploy.healthcheckTimeout
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3,
-    "probes": { // Keep this section
+    "probes": {
       "liveness": {
         "path": "/health",
         "port": 3000,
-        "initialDelaySeconds": 30, // Keep this at 30s for now
+        "initialDelaySeconds": 30,
         "timeoutSeconds": 5,
         "periodSeconds": 10,
         "successThreshold": 1,
@@ -23,7 +22,7 @@
       "readiness": {
         "path": "/health",
         "port": 3000,
-        "initialDelaySeconds": 30, // Keep this at 30s for now
+        "initialDelaySeconds": 30,
         "timeoutSeconds": 5,
         "periodSeconds": 10,
         "successThreshold": 1,
@@ -49,7 +48,6 @@
         "memory": 1024,
         "cpu": 1000
       }
-      // Remove the checks block from here
     }
   ],
   "plugins": [
@@ -61,7 +59,6 @@
       }
     }
   ],
-  // Remove the top-level healthChecks array from here
   "lifecycle": {
     "preStop": {
       "exec": {
