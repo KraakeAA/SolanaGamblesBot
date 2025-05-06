@@ -5273,9 +5273,11 @@ async function monitorDepositsPolling() {
                 }
             } catch (error) {
                 // *** ENHANCED LOGGING for RPC errors ***
-                console.error(`❌ ${addrLogPrefix} Error checking signatures: ${error.message}`);
+                console.error(`❌ ${addrLogPrefix} Error checking signatures for address ${address}: ${error.message}`); // Log full address on error
                 if (error.message?.includes('Failed to query long-term storage')) {
-                     console.error(` -> Specific RPC Error: Failed to query long-term storage. Check RPC provider health/history support for address ${address}.`);
+                     console.error(`   -> Specific RPC Error Details: Failed to query long-term storage. Check RPC provider health/history support.`);
+                } else {
+                     console.error(`   -> Error Details:`, error); // Log full error object for other cases
                 }
                  if (isRetryableSolanaError(error) && (error?.status === 429 || String(error?.message).toLowerCase().includes('rate limit') || String(error?.message).includes('429'))) {
                      console.warn(`🚦 ${addrLogPrefix} Rate limit detected during signature fetch. Pausing briefly...`);
@@ -5514,7 +5516,7 @@ async function sweepDepositAddresses() {
         // Get rent exemption dynamically - might change slightly over time
         const rentLamports = BigInt(await solanaConnection.getMinimumBalanceForRentExemption(0)); // For empty account
         const minimumLamportsToLeave = rentLamports + SWEEP_FEE_BUFFER_LAMPORTS;
-        // console.log(`${logPrefix} Sweep Target: ${sweepTargetAddress.toBase58()}. Min balance to leave: ${minimumLamportsToLeave} lamports (Rent: ${rentLamports}, Buffer: ${SWEEP_FEE_BUFFER_LAMPORTS})`); // Less verbose
+        // console.log(`${logPrefix} Sweep Target: ${sweepTargetAddress.toBase58()}. Min balance to leave: ${formatSol(minimumLamportsToLeave)} SOL`); // Less verbose
 
         const addressesRes = await queryDatabase(
             `SELECT id, deposit_address, derivation_path
@@ -5552,7 +5554,7 @@ async function sweepDepositAddresses() {
                 const balanceLamportsBigInt = BigInt(await solanaConnection.getBalance(depositKeypair.publicKey, DEPOSIT_CONFIRMATION_LEVEL));
 
                 if (balanceLamportsBigInt <= minimumLamportsToLeave) {
-                    console.log(`ℹ️ ${addrLogPrefix} Balance (${formatSol(balanceLamportsBigInt)} SOL) too low to sweep (<= ${formatSol(minimumLamportsToLeave)} SOL). Marking as swept.`);
+                    console.log(`ℹ️ ${addrLogPrefix} Balance (${formatSol(balanceLamportsBigInt)} SOL) too low to sweep (<= ${formatSol(minimumLamportsToLeave)} SOL). Marking as swept.`); // Use formatter
                     lowBalanceSkipped++;
                     await queryDatabase("UPDATE deposit_addresses SET status = 'swept' WHERE id = $1 AND status = 'used'", [addressId]);
                     continue; // Move to next address
@@ -5725,7 +5727,7 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
     const recipient = details.recipient_address;
     const amount = details.final_send_amount_lamports;
     const fee = details.fee_lamports;
-    const totalDeduction = amount + fee; // This was already checked, but good to have
+    const totalDeduction = amount + fee;
     const amountSOL = formatSol(amount); // Use formatter
 
     let sendResult = null;
@@ -5741,7 +5743,6 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
         }
 
         // Deduct balance *now* that we are processing, before sending
-        // This prevents sending funds if the DB update fails for some reason
         let client = null;
         try {
             client = await pool.connect();
@@ -5763,7 +5764,6 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
             console.log(`${logPrefix} Balance successfully deducted (${formatSol(totalDeduction)} SOL).`);
         } catch(dbError) {
             if (client) { try { await client.query('ROLLBACK'); } catch(e){} finally { client.release(); }}
-            // Rethrow the original error, potentially wrapped
             const wrappedError = new Error(`DB Error during balance deduction: ${dbError.message}`);
             wrappedError.isRetryable = false; // Assume DB errors are not retryable for payout
              await updateWithdrawalDbStatus(withdrawalId, 'failed', null, null, wrappedError.message.substring(0,500));
@@ -5826,7 +5826,7 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
 
 
             // Notify user about the failure
-             // *** UPDATED TO USE formatSol ***
+            // *** UPDATED TO USE formatSol ***
             await safeSendMessage(userId,
                 `❌ *Withdrawal Failed!* ❌\n\n` +
                 `Could not send ${escapeMarkdownV2(amountSOL)} SOL.\n` +
@@ -5964,6 +5964,10 @@ async function handleReferralPayoutJob(payoutId) {
         if (jobError.isRetryable === undefined) {
              jobError.isRetryable = isRetryableSolanaError(jobError);
         }
+        if (jobError.message.includes("no linked withdrawal wallet")) { // Ensure non-retryable if wallet is missing
+            jobError.isRetryable = false;
+        }
+
         // Ensure status is marked 'failed' if not already
         const currentStatusCheck = await getReferralPayoutDetails(payoutId);
          if (currentStatusCheck && currentStatusCheck.status !== 'failed') {
@@ -6068,12 +6072,35 @@ function setupExpressServer() {
         const webhookPath = `/telegram/${process.env.BOT_TOKEN}`;
         console.log(`⚙️ [Startup] Configuring webhook endpoint at ${webhookPath}`);
         app.post(webhookPath, (req, res) => {
-            // console.log(`[Webhook DEBUG] POST received on ${webhookPath}.`); // Debug Log
+            // *** ADDED MORE DETAILED LOGGING HERE ***
+            console.log(`[Webhook Handler DEBUG] POST received on ${webhookPath}. Body keys: ${Object.keys(req.body || {}).join(', ')}`);
             try {
-                bot.processUpdate(req.body); // Let the library handle parsing
-                // The actual handling is done by the 'message' and 'callback_query' listeners setup elsewhere
+                console.log("[Webhook Handler DEBUG] Calling bot.processUpdate...");
+                bot.processUpdate(req.body); // Let the library handle parsing and emit 'message' or 'callback_query' events
+                console.log("[Webhook Handler DEBUG] Finished bot.processUpdate.");
+
+                // The actual handling is now done by the listeners setup in setupTelegramListeners
+                // which add tasks to the queues. We add logging inside the queue tasks themselves.
+                if (req.body.message) {
+                    // Add task to message queue
+                    messageQueue.add(() => {
+                        // *** ADDED QUEUE TASK LOG ***
+                        console.log(`>>> [MsgQueue Task Start] Starting handleMessage task for msg ID: ${req.body.message?.message_id}`);
+                        return handleMessage(req.body.message); // Return the promise from handleMessage
+                    }).catch(e => console.error(`[MsgQueueErr Webhook]: ${e.message}`));
+                } else if (req.body.callback_query) {
+                    // Add task to callback queue
+                    callbackQueue.add(() => {
+                        // *** ADDED QUEUE TASK LOG ***
+                        console.log(`>>> [CBQueue Task Start] Starting handleCallbackQuery task for cb ID: ${req.body.callback_query?.id}`);
+                        return handleCallbackQuery(req.body.callback_query); // Return the promise
+                    }).catch(e => { console.error(`[CBQueueErr Webhook]: ${e.message}`); bot.answerCallbackQuery(req.body.callback_query.id).catch(()=>{}); });
+                } else {
+                    console.log(`[Webhook Handler DEBUG] Received update with no message or callback_query.`);
+                }
+
             } catch (processUpdateError) {
-                 console.error(`❌ [Webhook DEBUG] Error calling bot.processUpdate: ${processUpdateError.message}`, processUpdateError.stack);
+                 console.error(`❌ [Webhook Handler DEBUG] Error calling bot.processUpdate: ${processUpdateError.message}`, processUpdateError.stack);
                  // Don't crash the server, just log the error
             }
             res.sendStatus(200); // Acknowledge receipt quickly
@@ -6116,8 +6143,6 @@ async function shutdown(signal) {
      if (bot?.isPolling?.()) {
          await bot.stopPolling({ cancel: true }).then(() => console.log("✅ [Shutdown] Polling stopped.")).catch(e => console.error("❌ [Shutdown] Error stopping polling:", e.message));
      } else if(bot) {
-         // No need to delete webhook on shutdown typically, avoids issues if restart happens quickly
-         // await bot.deleteWebHook({ drop_pending_updates: false }).then(() => console.log("✅ [Shutdown] Webhook deleted.")).catch(e => console.error("❌ [Shutdown] Error deleting webhook:", e.message));
          console.log("ℹ️ [Shutdown] In webhook mode, not deleting webhook on shutdown.");
      }
 
@@ -6145,7 +6170,6 @@ async function shutdown(signal) {
          console.log("✅ [Shutdown] All processing queues are idle.");
      } catch (queueError) {
          console.warn(`⚠️ [Shutdown] Queues did not idle within timeout or errored: ${queueError.message}`);
-         // Consider stopping queues forcefully if needed: allQueues.forEach(q => q.pause()); allQueues.forEach(q => q.clear());
      }
 
      console.log("🚦 [Shutdown] Closing Database pool...");
@@ -6216,7 +6240,7 @@ process.on('unhandledRejection', async (reason, promise) => {
 
         console.log("⚙️ [Startup Step 6/7] Starting Polling (if needed)...");
         if (!useWebhook) {
-            await startPollingFallback();
+            await startPollingFallback(); // This starts polling if useWebhook is false
         }
 
         const initDelay = parseInt(process.env.INIT_DELAY_MS, 10) || 1000;
@@ -6289,6 +6313,8 @@ function setupTelegramListeners() {
     console.log("ℹ️ [Listeners] Cleared previous listeners.");
 
     // Listener for regular messages (Commands or stateful input)
+    // NOTE: These listeners now ONLY add to queue if IN POLLING MODE.
+    // Webhook mode relies on the app.post handler to queue tasks.
     bot.on('message', (msg) => {
         if (!bot.options.polling) return; // Only process if polling is explicitly enabled
         console.log(`[Polling DEBUG] Received message event. Queuing handleMessage for msg ID: ${msg.message_id}`);
@@ -6330,5 +6356,10 @@ function setupTelegramListeners() {
 
     console.log("✅ [Listeners] Telegram event listeners are ready.");
 }
+
+
+// --- Export necessary functions/variables if needed ---
+// Example: export { initializeDatabase, startDepositMonitor, /* ... */ };
+
 
 // --- End of Part 6 / End of File index.js ---
