@@ -4872,8 +4872,8 @@ async function monitorDepositsPolling() {
             } catch (error) {
                 console.error(`❌ ${addrLogPrefix} Error checking signatures: ${error.message}`);
                  if (isRetryableSolanaError(error) && (error?.status === 429 || String(error?.message).toLowerCase().includes('rate limit') || String(error?.message).includes('429'))) {
-                     console.warn(`🚦 ${addrLogPrefix} Rate limit detected during signature fetch. Pausing briefly...`);
-                     await sleep(1500);
+                    console.warn(`🚦 ${addrLogPrefix} Rate limit detected during signature fetch. Pausing briefly...`);
+                    await sleep(1500);
                  }
             }
         }
@@ -5037,12 +5037,12 @@ async function processDepositTransaction(signature, depositAddress, depositAddre
 function startDepositSweeper() {
     let intervalMs = parseInt(process.env.SWEEP_INTERVAL_MS, 10);
      if (isNaN(intervalMs) || intervalMs <= 0) {
-         console.warn("⚠️ [DepositSweeper] Sweeping is disabled (SWEEP_INTERVAL_MS not set or zero).");
-         return;
+        console.warn("⚠️ [DepositSweeper] Sweeping is disabled (SWEEP_INTERVAL_MS not set or zero).");
+        return;
      }
      if (intervalMs < 60000) {
-         intervalMs = 60000;
-         console.warn(`⚠️ [DepositSweeper] SWEEP_INTERVAL_MS too low, enforcing minimum ${intervalMs}ms.`);
+        intervalMs = 60000;
+        console.warn(`⚠️ [DepositSweeper] SWEEP_INTERVAL_MS too low, enforcing minimum ${intervalMs}ms.`);
      }
 
     if (sweepIntervalId) {
@@ -5338,16 +5338,16 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
         }
 
     } catch (jobError) {
-         console.error(`❌ ${logPrefix} Error during withdrawal job execution: ${jobError.message}`, jobError.stack);
-         if (jobError.isRetryable === undefined) {
-              jobError.isRetryable = isRetryableSolanaError(jobError);
-         }
+        console.error(`❌ ${logPrefix} Error during withdrawal job execution: ${jobError.message}`, jobError.stack);
+        if (jobError.isRetryable === undefined) {
+             jobError.isRetryable = isRetryableSolanaError(jobError);
+        }
 
-         const jobProcessingError = `Job processing error: ${jobError.message}`;
-         await updateWithdrawalDbStatus(withdrawalId, 'failed', null, null, jobProcessingError.substring(0, 500))
+        const jobProcessingError = `Job processing error: ${jobError.message}`;
+        await updateWithdrawalDbStatus(withdrawalId, 'failed', null, null, jobProcessingError.substring(0, 500))
              .catch(dbErr => console.error(`⚠️ ${logPrefix} Failed to update status to 'failed' after job error: ${dbErr.message}`));
 
-         throw jobError;
+        throw jobError;
     }
 }
 
@@ -5367,9 +5367,9 @@ async function handleReferralPayoutJob(payoutId) {
     }
 
      if (details.status === 'paid' || details.status === 'failed') {
-        console.log(`ℹ️ ${logPrefix} Job skipped, referral payout already in terminal state '${details.status}'.`);
-        return;
-    }
+         console.log(`ℹ️ ${logPrefix} Job skipped, referral payout already in terminal state '${details.status}'.`);
+         return;
+     }
 
     const referrerUserId = details.referrer_user_id;
     const amount = details.payout_amount_lamports;
@@ -5524,6 +5524,9 @@ function setupExpressServer() {
     app.get('/', (req, res) => res.send(`Solana Gambles Bot v${process.env.npm_package_version || '3.1.7'} Alive! ${new Date().toISOString()}`));
 
     app.get('/health', (req, res) => {
+        // --- ADD THIS LOG ---
+        console.log(`>>> [Health Route Handler] Entered /health. isFullyInitialized = ${isFullyInitialized}`);
+        // --- END ADD ---
         const status = isFullyInitialized ? 'OK' : 'INITIALIZING';
         const httpStatus = isFullyInitialized ? 200 : 503;
         console.log(`[Health Check Probe] Responding with Status: ${httpStatus} (${status})`); // ADDED Debug Log
@@ -5540,13 +5543,13 @@ function setupExpressServer() {
                 bot.processUpdate(req.body);
                 console.log(`[Webhook DEBUG] bot.processUpdate called successfully.`);
                  if (req.body.message) {
-                      console.log(`[Webhook DEBUG] Queuing handleMessage for message ID: ${req.body.message.message_id}`);
-                      messageQueue.add(() => handleMessage(req.body.message)).catch(e => console.error(`[MsgQueueErr Webhook]: ${e.message}`));
+                     console.log(`[Webhook DEBUG] Queuing handleMessage for message ID: ${req.body.message.message_id}`);
+                     messageQueue.add(() => handleMessage(req.body.message)).catch(e => console.error(`[MsgQueueErr Webhook]: ${e.message}`));
                  } else if (req.body.callback_query) {
-                      console.log(`[Webhook DEBUG] Queuing handleCallbackQuery for callback ID: ${req.body.callback_query.id}`);
-                      callbackQueue.add(() => handleCallbackQuery(req.body.callback_query)).catch(e => { console.error(`[CBQueueErr Webhook]: ${e.message}`); bot.answerCallbackQuery(req.body.callback_query.id).catch(()=>{}); });
+                     console.log(`[Webhook DEBUG] Queuing handleCallbackQuery for callback ID: ${req.body.callback_query.id}`);
+                     callbackQueue.add(() => handleCallbackQuery(req.body.callback_query)).catch(e => { console.error(`[CBQueueErr Webhook]: ${e.message}`); bot.answerCallbackQuery(req.body.callback_query.id).catch(()=>{}); });
                  } else {
-                      console.log(`[Webhook DEBUG] Received update with no message or callback_query.`);
+                     console.log(`[Webhook DEBUG] Received update with no message or callback_query.`);
                  }
             } catch (processUpdateError) {
                  console.error(`❌ [Webhook DEBUG] Error calling bot.processUpdate: ${processUpdateError.message}`, processUpdateError.stack);
@@ -5559,6 +5562,9 @@ function setupExpressServer() {
 
     console.log(`⚙️ [Startup] Attempting to start Express server listening on 0.0.0.0:${port}...`);
     server = app.listen(port, '0.0.0.0', () => {
+        // --- ADD THIS LOG ---
+        console.log(`>>> [Express Listen] Server successfully listening on 0.0.0.0:${port}.`);
+        // --- END ADD ---
         console.log(`✅ [Startup] Express server listening on 0.0.0.0:${port}`);
     });
 
@@ -5621,8 +5627,8 @@ async function shutdown(signal) {
 
       console.log("🚦 [Shutdown] Closing Database pool...");
       await pool.end()
-          .then(() => console.log("✅ [Shutdown] Database pool closed."))
-          .catch(e => console.error("❌ [Shutdown] Error closing Database pool:", e.message));
+           .then(() => console.log("✅ [Shutdown] Database pool closed."))
+           .catch(e => console.error("❌ [Shutdown] Error closing Database pool:", e.message));
 
       console.log(`🏁 [Shutdown] Graceful shutdown complete (Signal: ${signal}). Exiting.`);
       process.exit(signal === 'SIGINT' || signal === 'SIGTERM' ? 0 : 1);
@@ -5635,6 +5641,9 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 console.log("⚙️ [Startup] Setting up global error handlers (uncaughtException, unhandledRejection)...");
 process.on('uncaughtException', async (error, origin) => {
+    // --- ADD THIS LOG ---
+    console.error(`>>> [uncaughtException Handler] Caught exception. Origin: ${origin}`, error);
+    // --- END ADD ---
     console.error(`\n🚨🚨🚨 UNCAUGHT EXCEPTION [${origin}] 🚨🚨🚨`);
     console.error(error);
     isFullyInitialized = false;
@@ -5656,6 +5665,9 @@ process.on('uncaughtException', async (error, origin) => {
 });
 
 process.on('unhandledRejection', async (reason, promise) => {
+    // --- ADD THIS LOG ---
+    console.error(`>>> [unhandledRejection Handler] Caught rejection. Reason:`, reason);
+    // --- END ADD ---
     console.error('\n🔥🔥🔥 UNHANDLED REJECTION 🔥🔥🔥');
     console.error('Reason:', reason);
     isFullyInitialized = false;
@@ -5691,36 +5703,69 @@ process.on('unhandledRejection', async (reason, promise) => {
         const initDelay = parseInt(process.env.INIT_DELAY_MS, 10) || 1000;
         console.log(`⚙️ [Startup Step 7/7] Scheduling Background Tasks (Monitor, Sweeper) in ${initDelay / 1000}s...`);
 
+        // --- ADD THIS LOG ---
+        console.log(`>>> [Startup IIFE] Setting final timeout with delay: ${initDelay}ms`);
+        // --- END ADD ---
+
         setTimeout(() => {
+            // --- ADD THIS LOG ---
+            console.log(`>>> [Startup Timeout Callback] Entered final timeout callback.`);
+            // --- END ADD ---
             try {
                 console.log("⚙️ [Startup Final Phase] Starting Background Tasks now...");
+
+                // --- ADD LOGS AROUND BACKGROUND TASKS ---
+                console.log(`>>> [Startup Timeout Callback] Calling startDepositMonitor()...`);
                 startDepositMonitor();
+                console.log(`>>> [Startup Timeout Callback] Finished calling startDepositMonitor().`);
+
+                console.log(`>>> [Startup Timeout Callback] Calling startDepositSweeper()...`);
                 startDepositSweeper();
+                console.log(`>>> [Startup Timeout Callback] Finished calling startDepositSweeper().`);
+                // --- END ADD ---
+
                 console.log("✅ [Startup Final Phase] Background Tasks scheduled/started.");
 
                 console.log("⚙️ [Startup Final Phase] Setting isFullyInitialized to true...");
+
+                // --- ADD LOGS AROUND isFullyInitialized ---
+                console.log(`>>> [Startup Timeout Callback] Setting isFullyInitialized = true NOW.`);
                 isFullyInitialized = true;
+                console.log(`>>> [Startup Timeout Callback] isFullyInitialized is now: ${isFullyInitialized}`);
+                // --- END ADD ---
+
                 console.log("✅ [Startup Final Phase] isFullyInitialized flag is now true.");
 
-                // Moved bot.getMe() test here for token validation right before final notification
+                // --- ADD LOGS AROUND bot.getMe() ---
+                console.log(`>>> [Startup Timeout Callback] Calling bot.getMe()...`);
+                // --- END ADD ---
                 bot.getMe().then(me => {
-                     console.log(`✅ [Startup Final Phase] Token validated successfully via getMe(). Bot username: @${me.username}`);
-                     notifyAdmin(`✅ Bot v${escapeMarkdownV2(botVersion)} Started Successfully (Mode: ${useWebhook ? 'Webhook' : 'Polling'})`).catch(()=>{});
-                     console.log(`\n🎉🎉🎉 Bot is fully operational! (${new Date().toISOString()}) 🎉🎉🎉`);
+                    // --- ADD THIS LOG ---
+                    console.log(`>>> [Startup Timeout Callback] bot.getMe() SUCCEEDED.`);
+                    // --- END ADD ---
+                    console.log(`✅ [Startup Final Phase] Token validated successfully via getMe(). Bot username: @${me.username}`);
+                    notifyAdmin(`✅ Bot v${escapeMarkdownV2(botVersion)} Started Successfully (Mode: ${useWebhook ? 'Webhook' : 'Polling'})`).catch(()=>{});
+                    console.log(`\n🎉🎉🎉 Bot is fully operational! (${new Date().toISOString()}) 🎉🎉🎉`);
                 }).catch(async getMeError => {
-                     console.error(`❌❌❌ FATAL: bot.getMe() failed during startup! TOKEN INVALID or Telegram API unreachable? Error: ${getMeError.message}`);
-                     isFullyInitialized = false; // Ensure not marked as initialized
-                     await notifyAdmin(`🚨 BOT STARTUP FAILED (getMe error): ${escapeMarkdownV2(getMeError.message)}. TOKEN INVALID? Network Blocked?`);
-                     // Consider shutting down if token is confirmed invalid
-                     // await shutdown('INVALID_TOKEN').catch(() => process.exit(1));
+                     // --- ADD THIS LOG ---
+                    console.error(`>>> [Startup Timeout Callback] bot.getMe() FAILED: ${getMeError.message}`);
+                     // --- END ADD ---
+                    console.error(`❌❌❌ FATAL: bot.getMe() failed during startup! TOKEN INVALID or Telegram API unreachable? Error: ${getMeError.message}`);
+                    isFullyInitialized = false; // Ensure not marked as initialized
+                    await notifyAdmin(`🚨 BOT STARTUP FAILED (getMe error): ${escapeMarkdownV2(getMeError.message)}. TOKEN INVALID? Network Blocked?`);
+                    // Consider shutting down if token is confirmed invalid
+                    // await shutdown('INVALID_TOKEN').catch(() => process.exit(1));
                 });
 
             } catch (startupError) {
-                 console.error("❌❌❌ FATAL ERROR DURING FINAL STARTUP PHASE (Background Task Init / Flag Setting) ❌❌❌:", startupError);
-                 isFullyInitialized = false;
-                 notifyAdmin(`🚨 BOT STARTUP FAILED (Final Phase): ${escapeMarkdownV2(startupError.message)}. Exiting.`).catch(()=>{});
-                 shutdown('STARTUP_FINAL_ERROR').catch(() => process.exit(1));
-                 setTimeout(() => process.exit(1), 5000).unref();
+                 // --- ADD THIS LOG ---
+                console.error(`>>> [Startup Timeout Callback] CRITICAL ERROR inside final timeout: ${startupError.message}`, startupError.stack);
+                 // --- END ADD ---
+                console.error("❌❌❌ FATAL ERROR DURING FINAL STARTUP PHASE (Background Task Init / Flag Setting) ❌❌❌:", startupError);
+                isFullyInitialized = false;
+                notifyAdmin(`🚨 BOT STARTUP FAILED (Final Phase): ${escapeMarkdownV2(startupError.message)}. Exiting.`).catch(()=>{});
+                shutdown('STARTUP_FINAL_ERROR').catch(() => process.exit(1));
+                setTimeout(() => process.exit(1), 5000).unref();
             }
         }, initDelay);
 
