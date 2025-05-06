@@ -4525,7 +4525,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
 
 // --- End of Part 5b ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
-// --- VERSION: 3.1.7 --- (Fix BigInt/Number TypeError in Sweeper & Added Startup/Webhook/Polling Debug Logging)
+// --- VERSION: 3.1.7 --- (Forced Polling Mode)
 
 // --- Assuming imports, constants, functions from previous parts are available ---
 // import { pool, solanaConnection, bot, app, server, isFullyInitialized, depositMonitorIntervalId, sweepIntervalId, userStateCache, walletCache, activeDepositAddresses, processedDepositTxSignatures, MAX_PROCESSED_TX_CACHE_SIZE, messageQueue, callbackQueue, payoutProcessorQueue, depositProcessorQueue, telegramSendQueue, DEPOSIT_CONFIRMATION_LEVEL, SWEEP_BATCH_SIZE, SWEEP_ADDRESS_DELAY_MS, SWEEP_RETRY_ATTEMPTS, SWEEP_RETRY_DELAY_MS, SWEEP_FEE_BUFFER_LAMPORTS, LAMPORTS_PER_SOL, SOL_DECIMALS, REQUIRED_ENV_VARS, OPTIONAL_ENV_DEFAULTS, DEPOSIT_ADDRESS_EXPIRY_MS } from './part1'; // Assumed imports
@@ -5251,8 +5251,7 @@ async function addPayoutJob(jobData, _retries = 0, _retryDelay = 0) {
 
                 if (!isRetryable || attempts >= maxAttempts) {
                     console.error(`❌ ${attemptLogPrefix} Job failed permanently. No more retries. Error: ${error.message}`);
-                    // Handler function should have updated DB/notified user appropriately
-                    return; // Exit job cleanly
+                    return; // Exit job
                 }
 
                 const delay = baseDelay * Math.pow(2, attempts - 1) * (1 + (Math.random() - 0.5) * 0.4);
@@ -5456,67 +5455,46 @@ async function handleReferralPayoutJob(payoutId) {
 
 // --- Startup and Shutdown ---
 
-/** Setup Telegram: Set Webhook or start Polling */
+/** Setup Telegram: Force Polling mode and ensure webhook is deleted */
+// MODIFIED: Simplified function to always use polling
 async function setupTelegramConnection() {
-    console.log('⚙️ [Startup] Configuring Telegram connection (Webhook/Polling)...');
-    let webhookUrl = process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : process.env.WEBHOOK_URL;
+    console.log('⚙️ [Startup] Forcing Polling mode. Ensuring webhook is deleted...');
+    bot.options.polling = true; // Force polling option
+    try {
+        // It's good practice to delete any lingering webhook when starting in polling mode
+        await bot.deleteWebHook({ drop_pending_updates: true });
+        console.log('✅ [Startup] Lingering webhook deleted (if any). Ready for polling.');
+    } catch (error) {
+        console.warn(`⚠️ [Startup] Non-critical error deleting webhook before polling: ${error.message}`);
+        // Continue even if delete fails, startPolling will also try to delete
+    }
+    // This function no longer needs to return a value
+}
 
-    if (webhookUrl && process.env.BOT_TOKEN) {
-        const webhookPath = `/telegram/${process.env.BOT_TOKEN}`;
-        webhookUrl = `${webhookUrl}${webhookPath}`;
-        console.log(`ℹ️ [Startup] Attempting to set webhook: ${webhookUrl}`);
-
-        try {
-            if (bot.isPolling()) {
-                 console.log("ℹ️ [Startup] Stopping existing polling before setting webhook...");
-                 await bot.stopPolling({ cancel: true }).catch(e => console.warn("⚠️ [Startup] Error stopping polling:", e.message));
-            }
-            await bot.deleteWebHook({ drop_pending_updates: true }).catch((e) => console.warn(`⚠️ [Startup] Non-critical error deleting old webhook: ${e.message}`));
-
-            const setResult = await bot.setWebHook(webhookUrl, {
-                max_connections: parseInt(process.env.WEBHOOK_MAX_CONN, 10) || 10,
-                allowed_updates: ['message', 'callback_query']
-            });
-
-            if (!setResult) {
-                 throw new Error("setWebHook returned false or timed out.");
-            }
-
-            console.log(`✅ [Startup] Telegram Webhook set successfully to ${webhookUrl}`);
-            bot.options.polling = false;
-            return true;
-        } catch (error) {
-            console.error(`❌ [Startup] Failed to set Telegram Webhook: ${error.message}. Falling back to polling.`);
-            await notifyAdmin(`⚠️ WARNING: Webhook setup failed for ${escapeMarkdownV2(webhookUrl)}\nError: ${escapeMarkdownV2(error.message)}\nFalling back to polling.`).catch(()=>{});
-            bot.options.polling = true;
-            return false;
-        }
-    } else {
-        console.log('ℹ️ [Startup] Webhook URL not configured or BOT_TOKEN missing. Using Polling mode.');
-        bot.options.polling = true;
-        return false;
+/** Start polling */
+// RENAMED: from startPollingFallback to startPolling
+async function startPolling() {
+    if (!bot.options.polling) {
+         // This shouldn't happen with the modified setupTelegramConnection, but safety check
+         console.warn("⚠️ [Startup] startPolling called but polling option is false? Skipping.");
+         return;
+    }
+    console.log('⚙️ [Startup] Starting Polling for Telegram updates...');
+    try {
+         // Ensure webhook is definitely deleted before starting polling
+         await bot.deleteWebHook({ drop_pending_updates: true }).catch(() => {});
+         // Start polling
+         await bot.startPolling({ polling: { interval: 300, params: { timeout: 10, allowed_updates: ['message', 'callback_query'] } } });
+         console.log('✅ [Startup] Telegram Polling started successfully.');
+    } catch (err) {
+         console.error(`❌ CRITICAL: Telegram Polling failed to start: ${err.message}`, err.stack);
+         await notifyAdmin(`🚨 CRITICAL POLLING FAILED TO START: ${escapeMarkdownV2(err.message)}. Bot cannot receive updates. Exiting.`).catch(()=>{});
+         process.exit(3);
     }
 }
 
-/** Start polling if webhook wasn't used or failed */
-async function startPollingFallback() {
-      if (!bot.options.polling) {
-           console.log("ℹ️ [Startup] Skipping polling start, webhook mode is active.");
-           return;
-      }
-      console.log('⚙️ [Startup] Starting Polling for Telegram updates...');
-      try {
-           await bot.deleteWebHook({ drop_pending_updates: true }).catch(() => {});
-           await bot.startPolling({ polling: { interval: 300, params: { timeout: 10, allowed_updates: ['message', 'callback_query'] } } });
-           console.log('✅ [Startup] Telegram Polling started successfully.');
-      } catch (err) {
-           console.error(`❌ CRITICAL: Telegram Polling failed to start: ${err.message}`, err.stack);
-           await notifyAdmin(`🚨 CRITICAL POLLING FAILED TO START: ${escapeMarkdownV2(err.message)}. Bot cannot receive updates. Exiting.`).catch(()=>{});
-           process.exit(3);
-      }
-}
-
-/** Configure Express server routes and start listening */
+/** Configure Express server routes and start listening (No Webhook Endpoint) */
+// MODIFIED: Removed webhook endpoint setup
 function setupExpressServer() {
     console.log('⚙️ [Startup] Setting up Express server...');
     const port = process.env.PORT || 3000;
@@ -5526,36 +5504,12 @@ function setupExpressServer() {
     app.get('/health', (req, res) => {
         const status = isFullyInitialized ? 'OK' : 'INITIALIZING';
         const httpStatus = isFullyInitialized ? 200 : 503;
-        console.log(`[Health Check Probe] Responding with Status: ${httpStatus} (${status})`); // ADDED Debug Log
+        console.log(`[Health Check Probe] Responding with Status: ${httpStatus} (${status})`);
         res.status(httpStatus).json({ status: status });
     });
 
-    if (!bot.options.polling && process.env.BOT_TOKEN) {
-        const webhookPath = `/telegram/${process.env.BOT_TOKEN}`;
-        console.log(`⚙️ [Startup] Configuring webhook endpoint at ${webhookPath}`);
-        app.post(webhookPath, (req, res) => {
-            // ADDED Debugging Logs Here:
-            console.log(`[Webhook DEBUG] POST received on ${webhookPath}. Body keys: ${Object.keys(req.body || {}).join(', ')}`);
-            try {
-                bot.processUpdate(req.body);
-                console.log(`[Webhook DEBUG] bot.processUpdate called successfully.`);
-                 if (req.body.message) {
-                      console.log(`[Webhook DEBUG] Queuing handleMessage for message ID: ${req.body.message.message_id}`);
-                      messageQueue.add(() => handleMessage(req.body.message)).catch(e => console.error(`[MsgQueueErr Webhook]: ${e.message}`));
-                 } else if (req.body.callback_query) {
-                      console.log(`[Webhook DEBUG] Queuing handleCallbackQuery for callback ID: ${req.body.callback_query.id}`);
-                      callbackQueue.add(() => handleCallbackQuery(req.body.callback_query)).catch(e => { console.error(`[CBQueueErr Webhook]: ${e.message}`); bot.answerCallbackQuery(req.body.callback_query.id).catch(()=>{}); });
-                 } else {
-                      console.log(`[Webhook DEBUG] Received update with no message or callback_query.`);
-                 }
-            } catch (processUpdateError) {
-                 console.error(`❌ [Webhook DEBUG] Error calling bot.processUpdate: ${processUpdateError.message}`, processUpdateError.stack);
-            }
-            res.sendStatus(200); // Acknowledge receipt quickly
-        });
-    } else {
-         console.log("ℹ️ [Startup] Skipping webhook endpoint setup (Polling mode or no BOT_TOKEN).");
-    }
+    // REMOVED: Webhook endpoint setup block
+    console.log("ℹ️ [Startup] Webhook endpoint setup skipped (Forcing Polling mode).");
 
     console.log(`⚙️ [Startup] Attempting to start Express server listening on 0.0.0.0:${port}...`);
     server = app.listen(port, '0.0.0.0', () => {
@@ -5590,7 +5544,8 @@ async function shutdown(signal) {
       if (bot?.isPolling?.()) {
            await bot.stopPolling({ cancel: true }).then(() => console.log("✅ [Shutdown] Polling stopped.")).catch(e => console.error("❌ [Shutdown] Error stopping polling:", e.message));
       } else if(bot) {
-           await bot.deleteWebHook({ drop_pending_updates: false }).then(() => console.log("✅ [Shutdown] Webhook deleted.")).catch(e => console.error("❌ [Shutdown] Error deleting webhook:", e.message));
+           // Attempt to delete webhook just in case it was somehow set
+           await bot.deleteWebHook({ drop_pending_updates: false }).then(() => console.log("✅ [Shutdown] Webhook deleted (if any existed).")).catch(e => console.error("❌ [Shutdown] Error deleting webhook:", e.message));
       }
 
       console.log("🚦 [Shutdown] Closing HTTP server...");
@@ -5669,7 +5624,7 @@ process.on('unhandledRejection', async (reason, promise) => {
 
     try {
         console.log("⚙️ [Startup Step 1/7] Setting up Telegram Listeners (early)...");
-        setupTelegramListeners(); // Setup listeners early
+        setupTelegramListeners();
 
         console.log("⚙️ [Startup Step 2/7] Initializing Database...");
         await initializeDatabase();
@@ -5677,16 +5632,16 @@ process.on('unhandledRejection', async (reason, promise) => {
         console.log("⚙️ [Startup Step 3/7] Loading Active Deposits Cache...");
         await loadActiveDepositsCache();
 
-        console.log("⚙️ [Startup Step 4/7] Setting up Telegram Connection...");
-        const useWebhook = await setupTelegramConnection();
+        // MODIFIED: Always set polling mode, delete webhook
+        console.log("⚙️ [Startup Step 4/7] Setting up Telegram Connection (Forcing Polling)...");
+        await setupTelegramConnection(); // This now forces polling=true and deletes webhook
 
         console.log("⚙️ [Startup Step 5/7] Setting up Express Server...");
-        setupExpressServer(); // Start listening
+        setupExpressServer(); // This version no longer configures webhook endpoint
 
-        console.log("⚙️ [Startup Step 6/7] Starting Polling (if needed)...");
-        if (!useWebhook) {
-            await startPollingFallback();
-        }
+        // MODIFIED: Unconditionally start polling now
+        console.log("⚙️ [Startup Step 6/7] Starting Polling...");
+        await startPolling(); // Call the polling function directly
 
         const initDelay = parseInt(process.env.INIT_DELAY_MS, 10) || 1000;
         console.log(`⚙️ [Startup Step 7/7] Scheduling Background Tasks (Monitor, Sweeper) in ${initDelay / 1000}s...`);
@@ -5702,17 +5657,16 @@ process.on('unhandledRejection', async (reason, promise) => {
                 isFullyInitialized = true;
                 console.log("✅ [Startup Final Phase] isFullyInitialized flag is now true.");
 
-                // Moved bot.getMe() test here for token validation right before final notification
+                // Test token and notify admin
                 bot.getMe().then(me => {
                      console.log(`✅ [Startup Final Phase] Token validated successfully via getMe(). Bot username: @${me.username}`);
-                     notifyAdmin(`✅ Bot v${escapeMarkdownV2(botVersion)} Started Successfully (Mode: ${useWebhook ? 'Webhook' : 'Polling'})`).catch(()=>{});
+                     // MODIFIED: Report Polling mode in notification
+                     notifyAdmin(`✅ Bot v${escapeMarkdownV2(botVersion)} Started Successfully (Mode: Polling)`).catch(()=>{});
                      console.log(`\n🎉🎉🎉 Bot is fully operational! (${new Date().toISOString()}) 🎉🎉🎉`);
                 }).catch(async getMeError => {
                      console.error(`❌❌❌ FATAL: bot.getMe() failed during startup! TOKEN INVALID or Telegram API unreachable? Error: ${getMeError.message}`);
-                     isFullyInitialized = false; // Ensure not marked as initialized
+                     isFullyInitialized = false;
                      await notifyAdmin(`🚨 BOT STARTUP FAILED (getMe error): ${escapeMarkdownV2(getMeError.message)}. TOKEN INVALID? Network Blocked?`);
-                     // Consider shutting down if token is confirmed invalid
-                     // await shutdown('INVALID_TOKEN').catch(() => process.exit(1));
                 });
 
             } catch (startupError) {
@@ -5743,7 +5697,9 @@ function setupTelegramListeners() {
     bot.removeAllListeners('error');
     console.log("ℹ️ [Listeners] Cleared previous listeners.");
 
+    // Add new listeners
     bot.on('message', (msg) => {
+        // Only process if polling is explicitly enabled in options
         if (bot.options.polling) {
              console.log(`[Polling DEBUG] Received message event. Queuing handleMessage for msg ID: ${msg.message_id}`); // ADDED Debug Log
              messageQueue.add(() => handleMessage(msg)).catch(e => console.error(`[MsgQueueErr Polling]: ${e.message}`));
@@ -5752,6 +5708,7 @@ function setupTelegramListeners() {
     console.log("✅ [Listeners] 'message' listener added.");
 
     bot.on('callback_query', (cb) => {
+        // Only process if polling is explicitly enabled in options
         if (bot.options.polling) {
              console.log(`[Polling DEBUG] Received callback_query event. Queuing handleCallbackQuery for cb ID: ${cb.id}`); // ADDED Debug Log
              callbackQueue.add(() => handleCallbackQuery(cb)).catch(e => { console.error(`[CBQueueErr Polling]: ${e.message}`); bot.answerCallbackQuery(cb.id, { text: "Processing error" }).catch(()=>{}); });
@@ -5765,12 +5722,14 @@ function setupTelegramListeners() {
             notifyAdmin(`🚨 POLLING CONFLICT (409) or EFATAL detected. Another bot instance might be running. Shutting down this instance.`).catch(()=>{});
             shutdown('POLLING_CONFLICT').catch(() => process.exit(1));
         }
+        // Consider adding notification for other polling errors if they persist
     });
     console.log("✅ [Listeners] 'polling_error' listener added.");
 
+    // Webhook errors shouldn't occur in polling mode, but keep listener for safety/completeness
     bot.on('webhook_error', (error) => {
-         console.error(`❌ TG Webhook Error: Code ${error.code} | ${error.message}`, error.stack);
-         notifyAdmin(`🚨 Telegram Webhook Error: ${error.code} - ${escapeMarkdownV2(error.message)}`).catch(()=>{});
+         console.error(`❌ TG Webhook Error (should not occur in polling mode): Code ${error.code} | ${error.message}`, error.stack);
+         notifyAdmin(`🚨 Unexpected Telegram Webhook Error in Polling Mode: ${error.code} - ${escapeMarkdownV2(error.message)}`).catch(()=>{});
     });
     console.log("✅ [Listeners] 'webhook_error' listener added.");
 
