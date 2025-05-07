@@ -5999,7 +5999,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
 
 // --- End of Part 5b ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
-// --- VERSION: 3.2.1 --- (Incorporating all discussed DB Init Fixes)
+// --- VERSION: 3.2.1 --- (Simplified DB Init - No ALTER TABLE)
 
 // --- Assuming functions & constants from Parts 1, 2, 3, 5a, 5b are available ---
 // Global variables like 'server', 'isFullyInitialized', 'depositMonitorIntervalId', 'sweepIntervalId',
@@ -6032,24 +6032,11 @@ async function initializeDatabase() {
                 referral_count INTEGER NOT NULL DEFAULT 0,
                 total_wagered BIGINT NOT NULL DEFAULT 0,
                 last_milestone_paid_lamports BIGINT NOT NULL DEFAULT 0,
-                last_bet_amounts JSONB DEFAULT '{}'::jsonb,
+                last_bet_amounts JSONB DEFAULT '{}'::jsonb, -- Definition included here
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         `);
-
-        // Ensure 'last_bet_amounts' column exists if table was created before this column was added to DDL
-        console.log('⚙️ [DB Init] Ensuring wallets.last_bet_amounts column exists...');
-        try {
-            await client.query(`ALTER TABLE wallets ADD COLUMN last_bet_amounts JSONB DEFAULT '{}'::jsonb;`);
-            console.log('✅ [DB Init] Column wallets.last_bet_amounts added (or an error was expected if it already existed and caught).');
-        } catch (e) {
-            if (e.code === '42701') { // 42701 is 'duplicate_column' error in PostgreSQL
-                console.log('ℹ️ [DB Init] Column wallets.last_bet_amounts already exists.');
-            } else {
-                console.error(`❌ [DB Init] Error trying to add wallets.last_bet_amounts: ${e.message} (Code: ${e.code})`);
-                throw e; // Re-throw other errors to fail initialization
-            }
-        }
+        // REMOVED the ALTER TABLE check for last_bet_amounts. CREATE TABLE above must be correct.
 
         console.log('⚙️ [DB Init] Ensuring wallets indexes...');
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referral_code ON wallets (referral_code);');
@@ -6075,7 +6062,7 @@ async function initializeDatabase() {
                 user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
                 deposit_address VARCHAR(44) NOT NULL UNIQUE,
                 derivation_path VARCHAR(255) NOT NULL,
-                status VARCHAR(30) NOT NULL DEFAULT 'pending', -- pending, used, expired, swept, sweep_error, sweep_error_key_mismatch, sweep_error_processing, swept_low_balance
+                status VARCHAR(30) NOT NULL DEFAULT 'pending', -- pending, used, expired, swept, sweep_error, etc.
                 expires_at TIMESTAMPTZ NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 last_checked_at TIMESTAMPTZ
@@ -6130,43 +6117,28 @@ async function initializeDatabase() {
         await client.query('CREATE INDEX IF NOT EXISTS idx_bets_created_at_desc ON bets (created_at DESC);');
 
 
-        // Inside initializeDatabase function in Part 6:
-
-        // Wallets Table
-        console.log('⚙️ [DB Init] Ensuring wallets table...');
+        // Withdrawals Table
+        console.log('⚙️ [DB Init] Ensuring withdrawals table...');
         await client.query(`
-            CREATE TABLE IF NOT EXISTS wallets (
-                user_id VARCHAR(255) PRIMARY KEY,
-                external_withdrawal_address VARCHAR(44), 
-                linked_at TIMESTAMPTZ,
-                last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                referral_code VARCHAR(12) UNIQUE, 
-                referred_by_user_id VARCHAR(255) REFERENCES wallets(user_id) ON DELETE SET NULL,
-                referral_count INTEGER NOT NULL DEFAULT 0,
-                total_wagered BIGINT NOT NULL DEFAULT 0,
-                last_milestone_paid_lamports BIGINT NOT NULL DEFAULT 0,
-                last_bet_amounts JSONB DEFAULT '{}'::jsonb, // Column definition included here
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            CREATE TABLE IF NOT EXISTS withdrawals (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
+                requested_amount_lamports BIGINT NOT NULL,
+                fee_lamports BIGINT NOT NULL DEFAULT 0,
+                final_send_amount_lamports BIGINT NOT NULL,
+                recipient_address VARCHAR(44) NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                payout_tx_signature VARCHAR(88) UNIQUE,
+                error_message TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                processed_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ
             );
         `);
-        // REMOVED the ALTER TABLE ... ADD COLUMN last_bet_amounts block entirely.
+        console.log('⚙️ [DB Init] Ensuring withdrawals indexes...');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id_status ON withdrawals (user_id, status);');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals (status);');
 
-        console.log('⚙️ [DB Init] Ensuring wallets indexes...'); // This should now run without transaction aborted error
-        await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referral_code ON wallets (referral_code);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referred_by ON wallets (referred_by_user_id);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_total_wagered ON wallets (total_wagered DESC);');
-
-        // User Balances Table (No changes needed here)
-        console.log('⚙️ [DB Init] Ensuring user_balances table...');
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS user_balances (
-                user_id VARCHAR(255) PRIMARY KEY REFERENCES wallets(user_id) ON DELETE CASCADE,
-                balance_lamports BIGINT NOT NULL DEFAULT 0 CHECK (balance_lamports >= 0),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-        `);
-
-        // ... (rest of table/index creations, ensuring referral_payouts and ledger DDL are also corrected as previously discussed) ...
 
         // Referral Payouts Table
         console.log('⚙️ [DB Init] Ensuring referral_payouts table...');
@@ -6187,7 +6159,7 @@ async function initializeDatabase() {
                 paid_at TIMESTAMPTZ
             );
         `);
-        // Correctly define the partial unique index separately:
+        // Define the partial unique index separately using CREATE UNIQUE INDEX
         console.log('⚙️ [DB Init] Ensuring referral_payouts unique partial index for milestones...');
         await client.query(`
             CREATE UNIQUE INDEX IF NOT EXISTS idx_refpayout_unique_milestone ON referral_payouts
@@ -6385,6 +6357,7 @@ async function monitorDepositsPolling() {
         await batchUpdateClient.query('UPDATE deposit_addresses SET last_checked_at = NOW() WHERE id = ANY($1::int[])', [addressIdsToCheck]);
         await batchUpdateClient.query('COMMIT');
         batchUpdateClient.release(); batchUpdateClient = null;
+
 
         for (const row of pendingAddressesRes.rows) {
             const address = row.deposit_address;
@@ -6725,17 +6698,16 @@ async function sweepDepositAddresses() {
     }
 }
 
-// --- Background Task: Leaderboard Manager (Full Definition) ---
 async function updateLeaderboardsCycle() {
     const logPrefix = '[LeaderboardManager Cycle]';
     console.log(`🏆 ${logPrefix} Starting leaderboard update cycle...`);
     
     const periods = ['daily', 'weekly', 'all_time'];
-    const scoreTypes = ['total_wagered', 'total_profit']; // Define which scores to track
-    const gamesToTrack = Object.keys(GAME_CONFIG); // Track for all configured games
+    const scoreTypes = ['total_wagered', 'total_profit'];
+    const gamesToTrack = Object.keys(GAME_CONFIG);
 
     const now = new Date();
-    const todayISO = now.toISOString().split('T')[0]; // YYYY-MM-DD for daily
+    const todayISO = now.toISOString().split('T')[0];
 
     const getWeekNumber = (d) => {
         d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -6757,23 +6729,21 @@ async function updateLeaderboardsCycle() {
 
                 switch (period) {
                     case 'daily':
-                        startDate = new Date(todayISO); // Start of today
+                        startDate = new Date(todayISO); startDate.setUTCHours(0,0,0,0);
                         periodIdentifier = todayISO;
                         break;
                     case 'weekly':
-                        const dayOfWeek = now.getDay(); // Sunday - 0, Monday - 1
-                        const diff = now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // Adjust to Monday
-                        startDate = new Date(now.setDate(diff));
-                        startDate.setHours(0,0,0,0); // Start of Monday
+                        const dayOfWeek = now.getUTCDay(); // Sunday - 0, Monday - 1
+                        const diff = now.getUTCDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // Adjust to Monday
+                        startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), diff));
+                        startDate.setUTCHours(0,0,0,0);
                         periodIdentifier = currentWeekIdentifier;
                         break;
                     case 'all_time':
-                        startDate = new Date(0); // Unix epoch start
+                        startDate = new Date(0);
                         periodIdentifier = 'all';
                         break;
-                    default:
-                        console.warn(`${logPrefix} Unknown period type: ${period}. Skipping.`);
-                        continue;
+                    default: continue;
                 }
 
                 for (const scoreType of scoreTypes) {
@@ -6795,22 +6765,19 @@ async function updateLeaderboardsCycle() {
                             SELECT user_id, SUM(COALESCE(payout_amount_lamports, 0) - wager_amount_lamports) as ${scoreColumnAlias}
                             FROM bets
                             WHERE game_type = $1 AND status LIKE 'completed_%' AND created_at >= $2
-                            GROUP BY user_id; 
-                            -- Not filtering by HAVING SUM > 0, as even net loss can be a "score" for some leaderboards
+                            GROUP BY user_id;
                         `;
                     } else {
-                        console.warn(`${logPrefix} Unknown score type: ${scoreType}. Skipping.`);
                         continue;
                     }
 
-                    await client.query('BEGIN'); // Transaction for each specific leaderboard update
+                    await client.query('BEGIN');
                     try {
                         const scoreDataRes = await client.query(scoreDataQuery, queryParams);
                         if (scoreDataRes.rowCount > 0) {
                             for (const row of scoreDataRes.rows) {
-                                // Fetch display name (can be cached or simplified)
-                                const userDetails = await getUserWalletDetails(row.user_id, client); // Ensures transactional read
-                                const displayName = userDetails?.referral_code || `User...${row.user_id.slice(-4)}`; // Example display name
+                                const userDetails = await getUserWalletDetails(row.user_id, client);
+                                const displayName = userDetails?.referral_code || `User...${row.user_id.slice(-4)}`;
 
                                 await client.query(`
                                     INSERT INTO game_leaderboards (game_key, user_id, score_type, period_type, period_identifier, score, player_display_name, updated_at)
@@ -6820,21 +6787,19 @@ async function updateLeaderboardsCycle() {
                                     WHERE game_leaderboards.score <> EXCLUDED.score OR game_leaderboards.player_display_name <> EXCLUDED.player_display_name;
                                 `, [gameKey, row.user_id, scoreType, period, periodIdentifier, BigInt(row[scoreColumnAlias]), displayName]);
                             }
-                            console.log(`${logPrefix} Updated/checked ${scoreDataRes.rowCount} entries for ${gameKey}/${period}/${scoreType}.`);
-                        } else {
-                            console.log(`${logPrefix} No new data to update for ${gameKey}/${period}/${scoreType}.`);
+                            // console.log(`${logPrefix} Updated ${scoreDataRes.rowCount} entries for ${gameKey}/${period}/${scoreType}.`); // Can be noisy
                         }
                         await client.query('COMMIT');
                     } catch (innerError) {
                         console.error(`❌ ${logPrefix} Error updating specific leaderboard ${gameKey}/${period}/${scoreType}: ${innerError.message}`);
                         await client.query('ROLLBACK');
                     }
-                } // end scoreType loop
-            } // end period loop
-        } // end gameKey loop
+                }
+            }
+        }
     } catch (error) {
         console.error(`❌ ${logPrefix} Major error in leaderboard update cycle: ${error.message}`, error.stack);
-        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 Error during leaderboard update cycle: ${escapeMarkdownV2(String(error.message || error))}`);
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 Error updating leaderboards: ${escapeMarkdownV2(String(error.message || error))}`);
     } finally {
         if (client) client.release();
         console.log(`🏆 ${logPrefix} Leaderboard update cycle finished.`);
@@ -6856,7 +6821,7 @@ function startLeaderboardManager() {
         console.log(`🔄 ${logPrefix} Restarting leaderboard manager...`);
     }
 
-    const initialDelayMs = (parseInt(process.env.INIT_DELAY_MS, 10) || 5000) + 7000; // Delay a bit more
+    const initialDelayMs = (parseInt(process.env.INIT_DELAY_MS, 10) || 5000) + 7000;
     console.log(`⚙️ ${logPrefix} Scheduling first leaderboard update run in ${initialDelayMs / 1000}s...`);
 
     setTimeout(() => {
@@ -6867,8 +6832,6 @@ function startLeaderboardManager() {
     }, initialDelayMs);
 }
 
-
-// --- Payout Processing --- (Identical to previous correct version)
 async function addPayoutJob(jobData) {
     const jobType = jobData?.type || 'unknown_job';
     const jobId = jobData?.withdrawalId || jobData?.payoutId || 'N/A_ID';
@@ -7125,8 +7088,8 @@ async function startPollingFallback() {
     try {
         await bot.deleteWebHook({ drop_pending_updates: true }).catch(() => {});
         await bot.startPolling({
-            timeout: 10, // Long polling timeout in seconds
-            allowed_updates: JSON.stringify(['message', 'callback_query']) // Must be JSON string array
+            timeout: 10,
+            allowed_updates: JSON.stringify(['message', 'callback_query'])
         });
         console.log('✅ [Startup] Telegram Polling started successfully.');
     } catch (err) {
@@ -7338,8 +7301,8 @@ function setupTelegramListeners() {
     });
 
     try {
-        console.log("⚙️ [Startup Step 1/8] Initializing Database (this will also set up listeners internally if needed by notifyAdmin)...");
-        await initializeDatabase(); // Contains the DDL fixes now
+        console.log("⚙️ [Startup Step 1/8] Initializing Database...");
+        await initializeDatabase(); // Uses simplified approach now
 
         console.log("⚙️ [Startup Step 2/8] Loading Active Deposits Cache...");
         await loadActiveDepositsCache();
@@ -7379,7 +7342,7 @@ function setupTelegramListeners() {
 
                 console.log("✅ [Startup Final Phase] Background Tasks scheduled/started.");
                 
-                await pool.query('SELECT NOW()'); // Final check of DB pool
+                await pool.query('SELECT NOW()');
                 console.log("✅ [Startup Final Phase] Database pool confirmed operational post-init.");
 
                 console.log("⚙️ [Startup Final Phase] Setting isFullyInitialized to true...");
