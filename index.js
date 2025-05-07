@@ -5999,7 +5999,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
 
 // --- End of Part 5b ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
-// --- VERSION: 3.2.1 --- (Adjusted based on discussions for correctness)
+// --- VERSION: 3.2.1 --- (Corrected DB Init Syntax)
 
 // --- Assuming functions & constants from Parts 1, 2, 3, 5a, 5b are available ---
 // Global variables like 'server', 'isFullyInitialized', 'depositMonitorIntervalId', 'sweepIntervalId',
@@ -6008,6 +6008,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
 // DB ops: queryDatabase, ensureJackpotExists, getJackpotAmount, etc. (from Part 2)
 // Utils: notifyAdmin, safeSendMessage, escapeMarkdownV2, sleep, formatSol, etc. (from Part 1/3)
 // Handlers: handleMessage, handleCallbackQuery (from Part 5a)
+// Solana specific imports like Keypair, bs58 from Part 1 imports.
 
 // --- Database Initialization ---
 async function initializeDatabase() {
@@ -6059,7 +6060,7 @@ async function initializeDatabase() {
                 user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
                 deposit_address VARCHAR(44) NOT NULL UNIQUE,
                 derivation_path VARCHAR(255) NOT NULL,
-                status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, used, expired, swept
+                status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, used, expired, swept, sweep_error, sweep_error_key_mismatch, sweep_error_processing, swept_low_balance
                 expires_at TIMESTAMPTZ NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 last_checked_at TIMESTAMPTZ -- For deposit monitor optimization
@@ -6138,25 +6139,25 @@ async function initializeDatabase() {
 
 
         // Referral Payouts Table
-        console.log('⚙️ [DB Init] Ensuring referral_payouts table...');
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS referral_payouts (
-                id SERIAL PRIMARY KEY,
-                referrer_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                referee_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE, -- The user who generated the reward
-                payout_type VARCHAR(20) NOT NULL, -- 'initial_bet', 'milestone'
-                payout_amount_lamports BIGINT NOT NULL,
-                triggering_bet_id INTEGER REFERENCES bets(id) ON DELETE SET NULL, -- For 'initial_bet' type
-                milestone_reached_lamports BIGINT, -- For 'milestone' type, stores the wager threshold achieved
-                status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, processing, paid, failed
-                payout_tx_signature VARCHAR(88) UNIQUE,
-                error_message TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                processed_at TIMESTAMPTZ,
-                paid_at TIMESTAMPTZ
-                -- Removed incorrect inline: CONSTRAINT idx_refpayout_unique_milestone UNIQUE (referrer_user_id, referee_user_id, payout_type, milestone_reached_lamports) WHERE (payout_type = 'milestone')
-            );
-        `);
+        console.log('⚙️ [DB Init] Ensuring referral_payouts table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS referral_payouts (
+                id SERIAL PRIMARY KEY,
+                referrer_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
+                referee_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE, -- The user who generated the reward
+                payout_type VARCHAR(20) NOT NULL, -- 'initial_bet', 'milestone'
+                payout_amount_lamports BIGINT NOT NULL,
+                triggering_bet_id INTEGER REFERENCES bets(id) ON DELETE SET NULL, -- For 'initial_bet' type
+                milestone_reached_lamports BIGINT, -- For 'milestone' type, stores the wager threshold achieved
+                status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, processing, paid, failed
+                payout_tx_signature VARCHAR(88) UNIQUE,
+                error_message TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                processed_at TIMESTAMPTZ,
+                paid_at TIMESTAMPTZ
+                -- REMOVED incorrect inline constraint: CONSTRAINT idx_refpayout_unique_milestone UNIQUE (...) WHERE ...
+            );
+        `);
         // Correctly define the partial unique index separately:
         console.log('⚙️ [DB Init] Ensuring referral_payouts unique partial index for milestones...');
         await client.query(`
@@ -6164,34 +6165,36 @@ async function initializeDatabase() {
             (referrer_user_id, referee_user_id, payout_type, milestone_reached_lamports)
             WHERE (payout_type = 'milestone');
         `);
-        console.log('⚙️ [DB Init] Ensuring other referral_payouts indexes...'); // Changed log slightly
-        await client.query('CREATE INDEX IF NOT EXISTS idx_refpayout_referrer_status ON referral_payouts (referrer_user_id, status);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_refpayout_referee ON referral_payouts (referee_user_id);');
+        console.log('⚙️ [DB Init] Ensuring other referral_payouts indexes...');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_refpayout_referrer_status ON referral_payouts (referrer_user_id, status);');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_refpayout_referee ON referral_payouts (referee_user_id);');
 
 
-        // Ledger Table
-        console.log('⚙️ [DB Init] Ensuring ledger table...');
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS ledger (
-                id BIGSERIAL PRIMARY KEY,
-                user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                transaction_type VARCHAR(50) NOT NULL, -- e.g., 'deposit', 'bet_placed:coinflip', 'bet_win:slots', 'withdrawal_fee', 'withdrawal_request', 'withdrawal_refund', 'referral_bonus_credit' (though bonuses are external payouts)
-                amount_lamports BIGINT NOT NULL, -- Positive for credit, negative for debit to user's internal balance
-                balance_before BIGINT NOT NULL,
-                balance_after BIGINT NOT NULL,
-                related_bet_id INTEGER REFERENCES bets(id) ON DELETE SET NULL,
-                related_deposit_id INTEGER REFERENCES deposits(id) ON DELETE SET NULL,
-                related_withdrawal_id INTEGER REFERENCES withdrawals(id) ON DELETE SET NULL,
-                related_ref_payout_id INTEGER REFERENCES referral_payouts(id) ON DELETE SET NULL, -- If internal balance was used for ref payout (not typical for this bot's external payout model)
-                notes TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-        `);
-        console.log('⚙️ [DB Init] Ensuring ledger indexes...');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_desc ON ledger (user_id, created_at DESC);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger (transaction_type);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_related_bet_id ON ledger (related_bet_id) WHERE related_bet_id IS NOT NULL;');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_related_withdrawal_id ON ledger (related_withdrawal_id) WHERE related_withdrawal_id IS NOT NULL;');
+        // Ledger Table
+        console.log('⚙️ [DB Init] Ensuring ledger table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS ledger (
+                id BIGSERIAL PRIMARY KEY,
+                user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
+                transaction_type VARCHAR(50) NOT NULL,
+                amount_lamports BIGINT NOT NULL,
+                balance_before BIGINT NOT NULL,
+                balance_after BIGINT NOT NULL,
+                related_bet_id INTEGER REFERENCES bets(id) ON DELETE SET NULL,
+                related_deposit_id INTEGER REFERENCES deposits(id) ON DELETE SET NULL,
+                related_withdrawal_id INTEGER REFERENCES withdrawals(id) ON DELETE SET NULL,
+                related_ref_payout_id INTEGER REFERENCES referral_payouts(id) ON DELETE SET NULL,
+                notes TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        `);
+        console.log('⚙️ [DB Init] Ensuring ledger indexes...');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_desc ON ledger (user_id, created_at DESC);');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger (transaction_type);');
+        // Corrected conditional indexes: WHERE clause outside parentheses
+        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_related_bet_id ON ledger (related_bet_id) WHERE related_bet_id IS NOT NULL;');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_related_withdrawal_id ON ledger (related_withdrawal_id) WHERE related_withdrawal_id IS NOT NULL;');
+
 
         // Jackpots Table
         console.log('⚙️ [DB Init] Ensuring jackpots table...');
@@ -6220,9 +6223,7 @@ async function initializeDatabase() {
             );
         `);
         console.log('⚙️ [DB Init] Ensuring game_leaderboards indexes...');
-        // Index for efficiently querying leaderboards: sort by score
         await client.query('CREATE INDEX IF NOT EXISTS idx_leaderboards_lookup ON game_leaderboards (game_key, score_type, period_type, period_identifier, score DESC);');
-        // Index for fetching a user's specific leaderboard entries
         await client.query('CREATE INDEX IF NOT EXISTS idx_leaderboards_user ON game_leaderboards (user_id, game_key, period_type);');
 
         await client.query('COMMIT');
@@ -6232,8 +6233,10 @@ async function initializeDatabase() {
         if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error('Rollback failed:', rbErr); } }
         if (typeof notifyAdmin === "function") {
             try { await notifyAdmin(`🚨 CRITICAL DB INIT FAILED: ${escapeMarkdownV2(err.message)}\\. Bot cannot start\\. Check logs immediately\\.`).catch(()=>{}); } catch {}
+        } else {
+            console.error(`[ADMIN ALERT during DB Init Error] DB Init failed: ${err.message}`)
         }
-        process.exit(2); // Exit with specific code for DB init failure
+        process.exit(2);
     } finally {
         if (client) client.release();
     }
@@ -6244,16 +6247,15 @@ async function loadActiveDepositsCache() {
     console.log(`⚙️ ${logPrefix} Loading active deposit addresses from DB into cache...`);
     let count = 0; let expiredCount = 0;
     try {
-        const res = await queryDatabase(`SELECT deposit_address, user_id, expires_at FROM deposit_addresses WHERE status = 'pending'`); // queryDatabase from Part 2
+        const res = await queryDatabase(`SELECT deposit_address, user_id, expires_at FROM deposit_addresses WHERE status = 'pending'`);
         const now = Date.now();
         for (const row of res.rows) {
             const expiresAtTime = new Date(row.expires_at).getTime();
             if (now < expiresAtTime) {
-                addActiveDepositAddressCache(row.deposit_address, row.user_id, expiresAtTime); // from Part 3
+                addActiveDepositAddressCache(row.deposit_address, row.user_id, expiresAtTime);
                 count++;
-            } else { // Address found in DB as 'pending' but is already expired
+            } else {
                 expiredCount++;
-                // Update DB status to 'expired' for these
                 queryDatabase("UPDATE deposit_addresses SET status = 'expired' WHERE deposit_address = $1 AND status = 'pending'", [row.deposit_address])
                     .catch(e => console.error(`${logPrefix} Failed to mark old address ${row.deposit_address} as expired during cache load: ${e.message}`));
             }
@@ -6269,24 +6271,24 @@ async function loadSlotsJackpot() {
     const logPrefix = '[LoadSlotsJackpot]';
     console.log(`⚙️ ${logPrefix} Loading/Ensuring slots jackpot...`);
     let client = null;
-    let loadedJackpotAmount = SLOTS_JACKPOT_SEED_LAMPORTS; // Default to seed from Part 1
+    let loadedJackpotAmount = SLOTS_JACKPOT_SEED_LAMPORTS;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
-        const ensured = await ensureJackpotExists('slots', SLOTS_JACKPOT_SEED_LAMPORTS, client); // from Part 2
+        const ensured = await ensureJackpotExists('slots', SLOTS_JACKPOT_SEED_LAMPORTS, client);
         if (!ensured) {
             console.warn(`${logPrefix} Failed to ensure slots jackpot exists in DB. Will use seed value ${formatSol(SLOTS_JACKPOT_SEED_LAMPORTS)} SOL.`);
         } else {
-            loadedJackpotAmount = await getJackpotAmount('slots', client); // from Part 2
+            loadedJackpotAmount = await getJackpotAmount('slots', client);
         }
         await client.query('COMMIT');
-        console.log(`✅ ${logPrefix} Slots jackpot in DB is ${formatSol(loadedJackpotAmount)} SOL.`); // formatSol from Part 3
+        console.log(`✅ ${logPrefix} Slots jackpot in DB is ${formatSol(loadedJackpotAmount)} SOL.`);
         return loadedJackpotAmount;
     } catch (error) {
         if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error(`${logPrefix} Rollback error on jackpot load: ${rbErr.message}`);} }
         console.error(`❌ ${logPrefix} Error loading slots jackpot: ${error.message}. Using seed value ${formatSol(SLOTS_JACKPOT_SEED_LAMPORTS)} SOL.`);
         if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 ERROR Loading slots jackpot: ${escapeMarkdownV2(error.message)}. Using seed value.`);
-        return SLOTS_JACKPOT_SEED_LAMPORTS; // Fallback to seed
+        return SLOTS_JACKPOT_SEED_LAMPORTS;
     } finally {
         if (client) client.release();
     }
@@ -6295,25 +6297,25 @@ async function loadSlotsJackpot() {
 // --- Background Task: Deposit Monitor ---
 function startDepositMonitor() {
     let intervalMs = parseInt(process.env.DEPOSIT_MONITOR_INTERVAL_MS, 10);
-    if (isNaN(intervalMs) || intervalMs < 5000) { // Minimum 5 seconds
-        intervalMs = 20000; // Default to 20 seconds
+    if (isNaN(intervalMs) || intervalMs < 5000) {
+        intervalMs = 20000;
         console.warn(`[DepositMonitor] Invalid DEPOSIT_MONITOR_INTERVAL_MS, using default ${intervalMs}ms.`);
     }
-    if (depositMonitorIntervalId) { // global var from Part 1
+    if (depositMonitorIntervalId) {
         clearInterval(depositMonitorIntervalId);
         console.log('🔄 [DepositMonitor] Restarting deposit monitor...');
     } else {
         console.log(`⚙️ [DepositMonitor] Starting Deposit Monitor (Polling Interval: ${intervalMs / 1000}s)...`);
     }
-    const initialDelay = parseInt(process.env.INIT_DELAY_MS, 10) || 3000; // from Part 1
+    const initialDelay = parseInt(process.env.INIT_DELAY_MS, 10) || 3000;
     console.log(`[DepositMonitor] Scheduling first monitor run in ${initialDelay/1000}s...`);
 
     setTimeout(() => {
         try {
             console.log(`[DepositMonitor] Executing first monitor run...`);
-            monitorDepositsPolling().catch(err => console.error("❌ [Initial Deposit Monitor Run] Error:", err.message, err.stack)); // Initial run
+            monitorDepositsPolling().catch(err => console.error("❌ [Initial Deposit Monitor Run] Error:", err.message, err.stack));
             depositMonitorIntervalId = setInterval(monitorDepositsPolling, intervalMs);
-            if (depositMonitorIntervalId.unref) depositMonitorIntervalId.unref(); // Allow Node to exit if this is the only task
+            if (depositMonitorIntervalId.unref) depositMonitorIntervalId.unref();
             console.log(`✅ [DepositMonitor] Recurring monitor interval set.`);
         } catch (initialRunError) {
             console.error("❌ [DepositMonitor] CRITICAL ERROR during initial monitor setup/run:", initialRunError);
@@ -6322,12 +6324,10 @@ function startDepositMonitor() {
     }, initialDelay);
 }
 
-// Static property to prevent overlapping runs
 monitorDepositsPolling.isRunning = false;
 async function monitorDepositsPolling() {
     const logPrefix = '[DepositMonitor Polling]';
     if (monitorDepositsPolling.isRunning) {
-        // console.log(`${logPrefix} Skipping new run, previous one still active.`);
         return;
     }
     monitorDepositsPolling.isRunning = true;
@@ -6337,7 +6337,6 @@ async function monitorDepositsPolling() {
         const batchSize = parseInt(process.env.DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE, 10) || 50;
         const sigFetchLimit = parseInt(process.env.DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT, 10) || 5;
 
-        // Fetch addresses that are 'pending', not expired, ordered by when they were last checked (nulls first, then oldest)
         const pendingAddressesRes = await queryDatabase(
             `SELECT id, deposit_address, user_id, derivation_path, expires_at
              FROM deposit_addresses
@@ -6351,9 +6350,8 @@ async function monitorDepositsPolling() {
             monitorDepositsPolling.isRunning = false;
             return;
         }
-        console.log(`${logPrefix} Found ${pendingAddressesRes.rowCount} active pending addresses to check.`);
+        // console.log(`${logPrefix} Found ${pendingAddressesRes.rowCount} active pending addresses to check.`); // Less noisy log
 
-        // Batch update last_checked_at for these addresses
         batchUpdateClient = await pool.connect();
         await batchUpdateClient.query('BEGIN');
         const addressIdsToCheck = pendingAddressesRes.rows.map(r => r.id);
@@ -6369,46 +6367,48 @@ async function monitorDepositsPolling() {
             const addrLogPrefix = `[Monitor Addr:${address.slice(0,6)}.. ID:${addressId} User:${userId}]`;
 
             try {
-                const pubKey = new PublicKey(address); // PublicKey from Part 1
-                const signatures = await solanaConnection.getSignaturesForAddress( // solanaConnection from Part 1
-                    pubKey, { limit: sigFetchLimit }, DEPOSIT_CONFIRMATION_LEVEL // DEPOSIT_CONFIRMATION_LEVEL from Part 1
+                const pubKey = new PublicKey(address);
+                const signatures = await solanaConnection.getSignaturesForAddress(
+                    pubKey, { limit: sigFetchLimit }, DEPOSIT_CONFIRMATION_LEVEL
                 );
 
                 if (signatures && signatures.length > 0) {
-                    console.log(`${addrLogPrefix} Found ${signatures.length} signatures. Processing oldest relevant first...`);
-                    for (const sigInfo of signatures.reverse()) { // Process oldest first
-                        if (sigInfo?.signature && !hasProcessedDepositTx(sigInfo.signature)) { // hasProcessedDepositTx from Part 3
-                            if (!sigInfo.err && (sigInfo.confirmationStatus === DEPOSIT_CONFIRMATION_LEVEL || sigInfo.confirmationStatus === 'finalized' || sigInfo.confirmationStatus === 'processed')) {
-                                console.log(`${addrLogPrefix} Found new confirmed/processed TX: ${sigInfo.signature}. Queuing for processing.`);
-                                // Add to depositProcessorQueue (from Part 1)
+                    // console.log(`${addrLogPrefix} Found ${signatures.length} signatures. Processing oldest relevant first...`); // Can be noisy
+                    for (const sigInfo of signatures.reverse()) {
+                        if (sigInfo?.signature && !hasProcessedDepositTx(sigInfo.signature)) {
+                             // Check confirmationStatus against the configured level, also accept 'finalized' as confirmed.
+                            const isConfirmed = sigInfo.confirmationStatus === DEPOSIT_CONFIRMATION_LEVEL || sigInfo.confirmationStatus === 'finalized';
+                            // Include 'processed' if that's acceptable based on RPC node behavior (less secure than confirmed/finalized)
+                            // const isConfirmed = isConfirmed || (DEPOSIT_CONFIRMATION_LEVEL === 'processed' && sigInfo.confirmationStatus === 'processed');
+
+                            if (!sigInfo.err && isConfirmed) {
+                                console.log(`${addrLogPrefix} Found new confirmed/finalized TX: ${sigInfo.signature}. Queuing for processing.`);
                                 depositProcessorQueue.add(() => processDepositTransaction(sigInfo.signature, address, addressId, userId))
                                     .catch(queueError => console.error(`❌ ${addrLogPrefix} Error adding TX ${sigInfo.signature} to deposit queue: ${queueError.message}`));
-                                addProcessedDepositTx(sigInfo.signature); // Mark for this polling cycle to avoid re-queueing immediately
+                                addProcessedDepositTx(sigInfo.signature);
                             } else if (sigInfo.err) {
-                                // console.log(`${addrLogPrefix} Ignoring failed TX on-chain: ${sigInfo.signature}`);
-                                addProcessedDepositTx(sigInfo.signature); // Mark failed as processed too, no need to re-check constantly
+                                addProcessedDepositTx(sigInfo.signature);
                             }
                         }
                     }
                 }
             } catch (error) {
                 console.error(`❌ ${addrLogPrefix} Error checking signatures: ${error.message}`);
-                if (isRetryableSolanaError(error) && (error?.status === 429 || String(error?.message).toLowerCase().includes('rate limit'))) { // isRetryableSolanaError from Part 3
+                if (isRetryableSolanaError(error) && (error?.status === 429 || String(error?.message).toLowerCase().includes('rate limit'))) {
                     console.warn(`🚦 ${addrLogPrefix} Rate limit detected while fetching signatures. Pausing briefly...`);
-                    await sleep(2000 + Math.random() * 1000); // sleep from Part 1
+                    await sleep(2000 + Math.random() * 1000);
                 }
-                // Continue to next address even if one fails
             }
         }
     } catch (error) {
         console.error(`❌ ${logPrefix} Error in main polling loop: ${error.message}`, error.stack);
-        if (batchUpdateClient) { // If error occurred after client connect but before release
+        if (batchUpdateClient) {
             try { await batchUpdateClient.query('ROLLBACK'); } catch (rbErr) { console.error(`${logPrefix} Rollback failed for last_checked_at update: ${rbErr.message}`); }
             batchUpdateClient.release();
         }
         if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 ERROR in Deposit Monitor loop: ${escapeMarkdownV2(error.message)}`);
     } finally {
-        if (batchUpdateClient) batchUpdateClient.release(); // Ensure release if loop completes or errors after acquiring
+        if (batchUpdateClient) batchUpdateClient.release();
         monitorDepositsPolling.isRunning = false;
     }
 }
@@ -6416,7 +6416,7 @@ async function monitorDepositsPolling() {
 async function processDepositTransaction(signature, depositAddress, depositAddressId, userId) {
     const logPrefix = `[ProcessDeposit TX:${signature.slice(0,6)}.. AddrID:${depositAddressId} User:${userId}]`;
     console.log(`${logPrefix} Processing transaction...`);
-    let client = null; // DB client for this specific transaction processing
+    let client = null;
 
     try {
         const tx = await solanaConnection.getTransaction(signature, {
@@ -6424,22 +6424,21 @@ async function processDepositTransaction(signature, depositAddress, depositAddre
         });
 
         if (!tx) {
-            console.warn(`⚠️ ${logPrefix} Transaction details not found via getTransaction for ${signature}. RPC lag or invalid/unconfirmed signature? Will retry on next monitor cycle if not yet processed.`);
-            // Do NOT add to processedDepositTx here if tx is null, as it might be temporary RPC issue.
+            console.warn(`⚠️ ${logPrefix} Transaction details not found via getTransaction for ${signature}. RPC lag or invalid/unconfirmed signature? Will retry on next monitor cycle.`);
             return;
         }
 
         if (tx.meta?.err) {
             console.log(`ℹ️ ${logPrefix} Transaction ${signature} has failed on-chain (meta.err: ${JSON.stringify(tx.meta.err)}). Ignoring.`);
-            addProcessedDepositTx(signature); // from Part 3 - Mark this specific failed tx as processed by us
+            addProcessedDepositTx(signature);
             return;
         }
 
-        const { transferAmount, payerAddress } = analyzeTransactionAmounts(tx, depositAddress); // from Part 3
+        const { transferAmount, payerAddress } = analyzeTransactionAmounts(tx, depositAddress);
 
         if (transferAmount <= 0n) {
             // console.log(`ℹ️ ${logPrefix} No positive SOL transfer to ${depositAddress} found in TX ${signature}. Ignoring.`);
-            addProcessedDepositTx(signature); // Mark as processed, nothing to credit.
+            addProcessedDepositTx(signature);
             return;
         }
         const depositAmountSOL = formatSol(transferAmount);
@@ -6449,11 +6448,11 @@ async function processDepositTransaction(signature, depositAddress, depositAddre
         await client.query('BEGIN');
         console.log(`${logPrefix} DB transaction started for ${signature}.`);
 
-        const depositRecordResult = await recordConfirmedDeposit(client, userId, depositAddressId, signature, transferAmount); // from Part 2
+        const depositRecordResult = await recordConfirmedDeposit(client, userId, depositAddressId, signature, transferAmount);
         if (depositRecordResult.alreadyProcessed) {
             console.warn(`⚠️ ${logPrefix} TX ${signature} already processed by DB (ID: ${depositRecordResult.depositId}). Rolling back this attempt.`);
             await client.query('ROLLBACK');
-            addProcessedDepositTx(signature); // Ensure cache is aligned if DB caught it first.
+            addProcessedDepositTx(signature);
             return;
         }
         if (!depositRecordResult.success || !depositRecordResult.depositId) {
@@ -6462,44 +6461,42 @@ async function processDepositTransaction(signature, depositAddress, depositAddre
         const depositId = depositRecordResult.depositId;
         console.log(`${logPrefix} Deposit ID ${depositId} recorded for TX ${signature}.`);
 
-        const markedUsed = await markDepositAddressUsed(client, depositAddressId); // from Part 2
+        const markedUsed = await markDepositAddressUsed(client, depositAddressId);
         if (!markedUsed) {
-            console.warn(`⚠️ ${logPrefix} Could not mark deposit address ID ${depositAddressId} as 'used'. Status might not be 'pending' or another issue occurred. Proceeding with balance update anyway if deposit recorded.`);
+            console.warn(`⚠️ ${logPrefix} Could not mark deposit address ID ${depositAddressId} as 'used' (status might not have been 'pending'). Proceeding with balance update.`);
         } else {
             console.log(`${logPrefix} Marked deposit address ID ${depositAddressId} as 'used'.`);
         }
 
         const ledgerNote = `Deposit from ${payerAddress ? payerAddress.slice(0,6)+'..' : 'Unknown'} TX:${signature.slice(0,6)}..`;
-        const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, transferAmount, 'deposit', { depositId }, ledgerNote); // from Part 2
+        const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, transferAmount, 'deposit', { depositId }, ledgerNote);
         if (!balanceUpdateResult.success || balanceUpdateResult.newBalance === undefined) {
             throw new Error(`Failed to update user ${userId} balance/ledger for TX ${signature}: ${balanceUpdateResult.error}`);
         }
         const newBalanceSOL = formatSol(balanceUpdateResult.newBalance);
         console.log(`${logPrefix} User ${userId} balance updated. New balance: ${newBalanceSOL} SOL after TX ${signature}.`);
 
-        // Handle referral linking on first deposit (transactional)
-        const pendingRef = pendingReferrals.get(userId); // pendingReferrals Map from Part 1
-        if (pendingRef && pendingRef.referrerUserId && (Date.now() - pendingRef.timestamp < PENDING_REFERRAL_TTL_MS)) { // PENDING_REFERRAL_TTL_MS from Part 1
+        const pendingRef = pendingReferrals.get(userId);
+        if (pendingRef && pendingRef.referrerUserId && (Date.now() - pendingRef.timestamp < PENDING_REFERRAL_TTL_MS)) {
             console.log(`${logPrefix} Found pending referral for User ${userId} from ${pendingRef.referrerUserId}. Attempting link for TX ${signature}.`);
-            // Check if referee is already referred, inside the transaction
-            const refereeWalletCheck = await queryDatabase('SELECT referred_by_user_id FROM wallets WHERE user_id = $1 FOR UPDATE', [userId], client); // Lock referee row
+            const refereeWalletCheck = await queryDatabase('SELECT referred_by_user_id FROM wallets WHERE user_id = $1 FOR UPDATE', [userId], client);
             if (refereeWalletCheck.rowCount > 0 && !refereeWalletCheck.rows[0].referred_by_user_id) {
-                if (await linkReferral(userId, pendingRef.referrerUserId, client)) { // linkReferral from Part 2
+                if (await linkReferral(userId, pendingRef.referrerUserId, client)) {
                     console.log(`✅ ${logPrefix} Referral link successful: ${pendingRef.referrerUserId} -> ${userId} (TX ${signature}).`);
-                    pendingReferrals.delete(userId); // Remove from in-memory map after successful DB link
+                    pendingReferrals.delete(userId);
                     try {
-                        const refereeDisplayName = await getUserDisplayName(pendingRef.referrerUserId, userId); // from Part 3
+                        const refereeDisplayName = await getUserDisplayName(pendingRef.referrerUserId, userId);
                         safeSendMessage(pendingRef.referrerUserId, `🤝 Your referral ${escapeMarkdownV2(refereeDisplayName || `User ${userId.slice(-4)}`)} just made their first deposit and is now linked\\! Thanks\\!`, { parse_mode: 'MarkdownV2' });
                     } catch (notifyError) { console.warn(`${logPrefix} Failed to send referral link notification to ${pendingRef.referrerUserId}: ${notifyError.message}`); }
                 } else {
                     console.warn(`⚠️ ${logPrefix} linkReferral function failed (maybe already linked concurrently by another process for TX ${signature}?). This attempt won't link.`);
-                    pendingReferrals.delete(userId); // Still remove, as it was either linked or can't be now.
+                    pendingReferrals.delete(userId);
                 }
             } else {
                 console.log(`${logPrefix} User ${userId} was already referred by ${refereeWalletCheck.rows[0]?.referred_by_user_id || 'N/A'} or wallet not found during referral link attempt. Removing pending referral.`);
                 pendingReferrals.delete(userId);
             }
-        } else if (pendingRef) { // Pending referral existed but timed out
+        } else if (pendingRef) {
             pendingReferrals.delete(userId);
             console.log(`${logPrefix} Expired pending referral removed for user ${userId}.`);
         }
@@ -6515,7 +6512,7 @@ async function processDepositTransaction(signature, depositAddress, depositAddre
             `You can now use /start to play\\!`,
             { parse_mode: 'MarkdownV2' }
         );
-        addProcessedDepositTx(signature); // Add to cache AFTER successful processing and notification.
+        addProcessedDepositTx(signature);
 
     } catch (error) {
         console.error(`❌ ${logPrefix} CRITICAL ERROR processing deposit ${signature}: ${error.message}`, error.stack);
@@ -6524,7 +6521,7 @@ async function processDepositTransaction(signature, depositAddress, depositAddre
             catch (rbErr) { console.error(`❌ ${logPrefix} Rollback failed for TX ${signature}:`, rbErr); }
         }
         if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL Error Processing Deposit TX \`${escapeMarkdownV2(signature)}\` Addr \`${escapeMarkdownV2(depositAddress)}\` User \`${escapeMarkdownV2(userId)}\`:\n${escapeMarkdownV2(error.message)}`);
-        addProcessedDepositTx(signature); // Mark as processed even on critical error to prevent retry loops if error is persistent for this TX.
+        addProcessedDepositTx(signature);
     } finally {
         if (client) client.release();
     }
@@ -6537,19 +6534,19 @@ function startDepositSweeper() {
         console.warn("⚠️ [DepositSweeper] Sweeping is disabled (SWEEP_INTERVAL_MS not set or zero).");
         return;
     }
-    if (intervalMs < 60000) { // Enforce minimum interval
-        intervalMs = 60000; // 1 minute
+    if (intervalMs < 60000) {
+        intervalMs = 60000;
         console.warn(`⚠️ [DepositSweeper] SWEEP_INTERVAL_MS too low, enforcing minimum ${intervalMs}ms.`);
     }
 
-    if (sweepIntervalId) { // global var from Part 1
+    if (sweepIntervalId) {
         clearInterval(sweepIntervalId);
         console.log('🔄 [DepositSweeper] Restarting deposit sweeper...');
     } else {
         console.log(`⚙️ [DepositSweeper] Starting Deposit Sweeper (Interval: ${intervalMs / 1000}s)...`);
     }
 
-    const initialDelay = parseInt(process.env.INIT_DELAY_MS, 10) || 15000; // Delay first run
+    const initialDelay = parseInt(process.env.INIT_DELAY_MS, 10) || 15000;
     console.log(`⚙️ [DepositSweeper] Scheduling first sweep run in ${initialDelay/1000}s...`);
     setTimeout(() => {
         try {
@@ -6565,7 +6562,6 @@ function startDepositSweeper() {
     }, initialDelay);
 }
 
-// Static property to prevent overlapping runs
 sweepDepositAddresses.isRunning = false;
 async function sweepDepositAddresses() {
     const logPrefix = '[DepositSweeper]';
@@ -6585,17 +6581,16 @@ async function sweepDepositAddresses() {
             if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 [DepositSweeper] MAIN_BOT_PRIVATE_KEY not set. Sweeping disabled.`);
             return;
         }
-        const sweepTargetKeypair = Keypair.fromSecretKey(bs58.decode(mainBotPrivateKeyBase58)); // Keypair, bs58 from Part 1
+        const sweepTargetKeypair = Keypair.fromSecretKey(bs58.decode(mainBotPrivateKeyBase58));
         const sweepTargetAddress = sweepTargetKeypair.publicKey;
 
         const delayBetweenAddressesMs = parseInt(process.env.SWEEP_ADDRESS_DELAY_MS, 10) || 750;
-        const maxRetryAttemptsPerAddress = (parseInt(process.env.SWEEP_RETRY_ATTEMPTS, 10) || 1) + 1; // Total attempts = 1 initial + X retries
+        const maxRetryAttemptsPerAddress = (parseInt(process.env.SWEEP_RETRY_ATTEMPTS, 10) || 1) + 1;
         const retryDelayBaseMs = parseInt(process.env.SWEEP_RETRY_DELAY_MS, 10) || 3000;
-        const rentLamports = BigInt(await solanaConnection.getMinimumBalanceForRentExemption(0)); // For empty account
-        const feeBufferLamports = SWEEP_FEE_BUFFER_LAMPORTS; // From Part 1, includes tx fee estimate
-        const minimumLamportsToLeaveAfterSweep = rentLamports + feeBufferLamports; // Leave enough for account to exist + one tx fee roughly
+        const rentLamports = BigInt(await solanaConnection.getMinimumBalanceForRentExemption(0));
+        const feeBufferLamports = SWEEP_FEE_BUFFER_LAMPORTS;
+        const minimumLamportsToLeaveAfterSweep = rentLamports + feeBufferLamports;
 
-        // Fetch 'used' addresses that haven't been swept yet
         const addressesRes = await queryDatabase(
             `SELECT id, deposit_address, derivation_path
              FROM deposit_addresses WHERE status = 'used' ORDER BY created_at ASC LIMIT $1`,
@@ -6603,7 +6598,6 @@ async function sweepDepositAddresses() {
         );
 
         if (addressesRes.rowCount === 0) {
-            // console.log(`${logPrefix} No 'used' addresses found needing sweep in this cycle.`);
             sweepDepositAddresses.isRunning = false;
             return;
         }
@@ -6625,9 +6619,9 @@ async function sweepDepositAddresses() {
             }
 
             try {
-                const depositKeypair = getKeypairFromPath(derivationPath); // from Part 3
+                const depositKeypair = getKeypairFromPath(derivationPath);
                 if (!depositKeypair) {
-                    throw new Error("Failed to derive keypair from path. Check master seed phrase and path integrity.");
+                    throw new Error("Failed to derive keypair from path.");
                 }
                 if (depositKeypair.publicKey.toBase58() !== addressString) {
                     console.error(`❌ CRITICAL ${addrLogPrefix} Derived public key mismatch! DB: ${addressString}, Derived: ${depositKeypair.publicKey.toBase58()}. Skipping sweep & marking error.`);
@@ -6640,7 +6634,6 @@ async function sweepDepositAddresses() {
                 const balanceLamports = BigInt(await solanaConnection.getBalance(depositKeypair.publicKey, DEPOSIT_CONFIRMATION_LEVEL));
 
                 if (balanceLamports <= minimumLamportsToLeaveAfterSweep) {
-                    // console.log(`ℹ️ ${addrLogPrefix} Balance (${formatSol(balanceLamports)} SOL) too low to sweep (needs > ${formatSol(minimumLamportsToLeaveAfterSweep)} SOL). Marking as swept.`);
                     lowBalanceSkipped++;
                     await queryDatabase("UPDATE deposit_addresses SET status = 'swept_low_balance' WHERE id = $1 AND status = 'used'", [addressId]);
                     continue;
@@ -6656,14 +6649,14 @@ async function sweepDepositAddresses() {
                 for (let attempt = 1; attempt <= maxRetryAttemptsPerAddress; attempt++) {
                     try {
                         const { blockhash, lastValidBlockHeight } = await solanaConnection.getLatestBlockhash(DEPOSIT_CONFIRMATION_LEVEL);
-                        const transaction = new Transaction({ recentBlockhash: blockhash, feePayer: depositKeypair.publicKey }) // Transaction from Part 1
-                            .add( SystemProgram.transfer({ // SystemProgram from Part 1
+                        const transaction = new Transaction({ recentBlockhash: blockhash, feePayer: depositKeypair.publicKey })
+                            .add( SystemProgram.transfer({
                                 fromPubkey: depositKeypair.publicKey,
                                 toPubkey: sweepTargetAddress,
                                 lamports: amountToSweep
                             }));
                         
-                        sweepTxSignature = await sendAndConfirmTransaction( // from Part 1
+                        sweepTxSignature = await sendAndConfirmTransaction(
                             solanaConnection, transaction, [depositKeypair],
                             { commitment: DEPOSIT_CONFIRMATION_LEVEL, skipPreflight: false, preflightCommitment: DEPOSIT_CONFIRMATION_LEVEL, lastValidBlockHeight }
                         );
@@ -6673,10 +6666,10 @@ async function sweepDepositAddresses() {
                     } catch (error) {
                         lastSweepError = error;
                         console.warn(`⚠️ ${addrLogPrefix} Sweep Attempt ${attempt}/${maxRetryAttemptsPerAddress} FAILED: ${error.message}`);
-                        if (isRetryableSolanaError(error) && attempt < maxRetryAttemptsPerAddress) { // isRetryableSolanaError from Part 3
+                        if (isRetryableSolanaError(error) && attempt < maxRetryAttemptsPerAddress) {
                             const jitterDelay = retryDelayBaseMs * Math.pow(1.5, attempt - 1) * (0.8 + Math.random() * 0.4);
                             console.log(`⏳ ${addrLogPrefix} Retrying sweep in ~${Math.round(jitterDelay / 1000)}s...`);
-                            await sleep(jitterDelay); // sleep from Part 1
+                            await sleep(jitterDelay);
                         } else {
                             console.error(`❌ ${addrLogPrefix} Sweep failed permanently for this address after ${attempt} attempts.`);
                             break; 
@@ -6694,7 +6687,7 @@ async function sweepDepositAddresses() {
                     await queryDatabase("UPDATE deposit_addresses SET status = 'sweep_error' WHERE id = $1 AND status = 'used'", [addressId]);
                     if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 SWEEP FAILED (Permanent) Addr \`${escapeMarkdownV2(addressString)}\` (ID: ${addressId}): ${escapeMarkdownV2(finalErrorMsg)}. Manual check needed.`);
                 }
-            } catch (processAddrError) { // Error in deriving key, getting balance, or other logic before send attempt loop
+            } catch (processAddrError) {
                 sweepErrors++;
                 console.error(`❌ ${addrLogPrefix} Error processing address ${addressString} for sweep: ${processAddrError.message}`, processAddrError.stack);
                 await queryDatabase("UPDATE deposit_addresses SET status = 'sweep_error_processing' WHERE id = $1 AND status = 'used'", [addressId]);
@@ -6713,92 +6706,123 @@ async function sweepDepositAddresses() {
     }
 }
 
-// --- Background Task: Leaderboard Manager (Full Definition) ---
+// --- Background Task: Leaderboard Manager ---
 async function updateLeaderboardsCycle() {
     const logPrefix = '[LeaderboardManager Cycle]';
     console.log(`🏆 ${logPrefix} Starting leaderboard update cycle...`);
-    // This is a placeholder for the actual leaderboard logic.
-    // You would typically:
-    // 1. Define periods (daily, weekly, all_time).
-    // 2. For each game and period:
-    //    a. Query 'bets' table for relevant bets within the period.
-    //    b. Aggregate scores (e.g., total profit, total wagered, win streaks).
-    //    c. Fetch user display names.
-    //    d. Insert or update records in the 'game_leaderboards' table.
-    //    e. Handle potential race conditions or use upserts carefully.
+    // Define leaderboard criteria
+    const periods = ['daily', 'weekly', 'all_time'];
+    const scoreTypes = ['total_profit', 'total_wagered']; // Add more types as needed
+    const games = Object.keys(GAME_CONFIG);
 
-    // Example: Updating "all_time" "total_wagered" for "slots"
-    const gameKey = 'slots';
-    const scoreType = 'total_wagered_all_time';
-    const periodType = 'all_time';
-    const periodIdentifier = 'all'; // A single identifier for all-time
+    const now = new Date();
+    const today = now.toISOString().split('T')[0]; // YYYY-MM-DD
+    const weekStart = new Date(now.setDate(now.getDate() - now.getDay() + (now.getDay() === 0 ? -6 : 1))).toISOString().split('T')[0]; // Monday of current week
+    const currentWeekIdentifier = `${now.getFullYear()}-W${String(Math.ceil((new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - new Date(now.getFullYear(), 0, 1).getTime()) / (24 * 60 * 60 * 1000 * 7))).padStart(2, '0')}`;
 
+    let client = null;
     try {
-        const client = await pool.connect();
-        await client.query('BEGIN');
+        client = await pool.connect();
 
-        // Fetch aggregated wager data (example)
-        const wagerDataRes = await client.query(`
-            SELECT user_id, SUM(wager_amount_lamports) as total_wager
-            FROM bets
-            WHERE game_type = $1 AND status LIKE 'completed_%'
-            GROUP BY user_id
-            HAVING SUM(wager_amount_lamports) > 0;
-        `, [gameKey]);
+        for (const gameKey of games) {
+            for (const period of periods) {
+                let startDate;
+                let periodId;
 
-        if (wagerDataRes.rowCount > 0) {
-            for (const row of wagerDataRes.rows) {
-                const userDetails = await getUserWalletDetails(row.user_id, client); // from Part 2
-                const displayName = userDetails?.referral_code || `User ${row.user_id.slice(-4)}`; // Use ref code or partial ID as placeholder display name
+                switch (period) {
+                    case 'daily':
+                        startDate = new Date(today);
+                        periodId = today;
+                        break;
+                    case 'weekly':
+                        startDate = new Date(weekStart);
+                        periodId = currentWeekIdentifier;
+                        break;
+                    case 'all_time':
+                        startDate = new Date(0); // Beginning of time for SQL
+                        periodId = 'all';
+                        break;
+                    default: continue; // Skip unknown periods
+                }
 
-                // Upsert into leaderboards
-                await client.query(`
-                    INSERT INTO game_leaderboards (game_key, user_id, score_type, period_type, period_identifier, score, player_display_name, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-                    ON CONFLICT (game_key, user_id, score_type, period_type, period_identifier)
-                    DO UPDATE SET score = EXCLUDED.score, player_display_name = EXCLUDED.player_display_name, updated_at = NOW()
-                    WHERE game_leaderboards.score <> EXCLUDED.score OR game_leaderboards.player_display_name <> EXCLUDED.player_display_name;
-                `, [gameKey, row.user_id, scoreType, periodType, periodIdentifier, BigInt(row.total_wager), displayName]);
-            }
-            console.log(`${logPrefix} Updated ${wagerDataRes.rowCount} entries for ${gameKey} - ${scoreType}.`);
-        } else {
-            console.log(`${logPrefix} No new wager data to update for ${gameKey} - ${scoreType}.`);
-        }
+                for (const scoreType of scoreTypes) {
+                    console.log(`${logPrefix} Processing: Game=${gameKey}, Period=${period}, Score=${scoreType}...`);
+                    let scoreQuery = '';
+                    let scoreColumnAlias = 'calculated_score';
 
-        await client.query('COMMIT');
-        client.release();
+                    if (scoreType === 'total_wagered') {
+                        scoreQuery = `
+                            SELECT user_id, SUM(wager_amount_lamports) as ${scoreColumnAlias}
+                            FROM bets
+                            WHERE game_type = $1 AND status LIKE 'completed_%' AND created_at >= $2
+                            GROUP BY user_id
+                            HAVING SUM(wager_amount_lamports) > 0;
+                        `;
+                    } else if (scoreType === 'total_profit') {
+                        scoreQuery = `
+                            SELECT user_id, SUM(COALESCE(payout_amount_lamports, 0) - wager_amount_lamports) as ${scoreColumnAlias}
+                            FROM bets
+                            WHERE game_type = $1 AND status LIKE 'completed_%' AND created_at >= $2
+                            GROUP BY user_id
+                            HAVING SUM(COALESCE(payout_amount_lamports, 0) - wager_amount_lamports) > 0; -- Only positive profit leaderboards? Or allow negative? Let's allow all for now.
+                        `;
+                         // Modify HAVING if only positive profit needed: HAVING SUM(...) > 0
+                    } else {
+                        continue; // Skip unsupported score types
+                    }
+
+                    await client.query('BEGIN'); // Transaction per score type update
+                    try {
+                        const scoreDataRes = await client.query(scoreQuery, [gameKey, startDate]);
+                        if (scoreDataRes.rowCount > 0) {
+                            for (const row of scoreDataRes.rows) {
+                                const userDetails = await getUserWalletDetails(row.user_id, client);
+                                const displayName = userDetails?.referral_code || `User...${row.user_id.slice(-4)}`;
+
+                                await client.query(`
+                                    INSERT INTO game_leaderboards (game_key, user_id, score_type, period_type, period_identifier, score, player_display_name, updated_at)
+                                    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                                    ON CONFLICT (game_key, user_id, score_type, period_type, period_identifier)
+                                    DO UPDATE SET score = EXCLUDED.score, player_display_name = EXCLUDED.player_display_name, updated_at = NOW()
+                                    WHERE game_leaderboards.score <> EXCLUDED.score OR game_leaderboards.player_display_name <> EXCLUDED.player_display_name;
+                                `, [gameKey, row.user_id, scoreType, period, periodId, BigInt(row[scoreColumnAlias]), displayName]);
+                            }
+                            console.log(`${logPrefix} Updated ${scoreDataRes.rowCount} entries for ${gameKey}/${period}/${scoreType}.`);
+                        }
+                        await client.query('COMMIT');
+                    } catch (innerError) {
+                        console.error(`❌ ${logPrefix} Error updating ${gameKey}/${period}/${scoreType}: ${innerError.message}`);
+                        await client.query('ROLLBACK');
+                        // Optionally notify admin on inner error
+                    }
+                } // end scoreType loop
+            } // end period loop
+        } // end gameKey loop
     } catch (error) {
-        console.error(`❌ ${logPrefix} Error updating leaderboards for ${gameKey} - ${scoreType}: ${error.message}`, error.stack);
-        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 Error updating ${gameKey} leaderboards: ${escapeMarkdownV2(error.message)}`);
-        if (client) {
-            try { await client.query('ROLLBACK'); client.release(); } catch(e) {console.error("Rollback failed", e)}
-        }
+        console.error(`❌ ${logPrefix} Error in leaderboard update cycle: ${error.message}`, error.stack);
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 Error updating leaderboards: ${escapeMarkdownV2(error.message)}`);
+    } finally {
+        if (client) client.release();
+        console.log(`🏆 ${logPrefix} Leaderboard update cycle finished.`);
     }
-    console.log(`🏆 ${logPrefix} Leaderboard update cycle finished.`);
 }
 
 function startLeaderboardManager() {
     const logPrefix = '[LeaderboardManager Start]';
     console.log(`⚙️ ${logPrefix} Initializing Leaderboard Manager...`);
-    const intervalMs = parseInt(process.env.LEADERBOARD_UPDATE_INTERVAL_MS, 10);
+    const intervalMs = parseInt(process.env.LEADERBOARD_UPDATE_INTERVAL_MS, 10); // From OPTIONAL_ENV_DEFAULTS in Part 1
 
     if (isNaN(intervalMs) || intervalMs <= 0) {
         console.warn(`⚠️ ${logPrefix} Leaderboard updates are disabled (LEADERBOARD_UPDATE_INTERVAL_MS not set or invalid).`);
         return;
     }
-    if (intervalMs < 60000 * 5) { // Minimum 5 minutes for sanity
-         console.warn(`⚠️ ${logPrefix} LEADERBOARD_UPDATE_INTERVAL_MS (${intervalMs}ms) is very short. Consider increasing it. Setting to 5 mins minimum for safety.`);
-         // intervalMs = 60000 * 5;
-    }
 
-
-    if (leaderboardManagerIntervalId) { // leaderboardManagerIntervalId from Part 1
+    if (leaderboardManagerIntervalId) {
         clearInterval(leaderboardManagerIntervalId);
         console.log(`🔄 ${logPrefix} Restarting leaderboard manager...`);
     }
 
-    // Initial run after a short delay, then set interval
-    const initialDelayMs = parseInt(process.env.INIT_DELAY_MS, 10) + 5000 || 10000; // Delay a bit more than other tasks
+    const initialDelayMs = (parseInt(process.env.INIT_DELAY_MS, 10) || 5000) + 5000; // Delay first run
     console.log(`⚙️ ${logPrefix} Scheduling first leaderboard update run in ${initialDelayMs / 1000}s...`);
 
     setTimeout(() => {
@@ -6809,17 +6833,16 @@ function startLeaderboardManager() {
     }, initialDelayMs);
 }
 
-
 // --- Payout Processing ---
-async function addPayoutJob(jobData) { // For withdrawals or referral payouts
+async function addPayoutJob(jobData) {
     const jobType = jobData?.type || 'unknown_job';
     const jobId = jobData?.withdrawalId || jobData?.payoutId || 'N/A_ID';
     const logPrefix = `[AddPayoutJob Type:${jobType} ID:${jobId}]`;
     console.log(`⚙️ ${logPrefix} Adding job to payout queue for user ${jobData.userId || 'N/A'}.`);
 
-    return payoutProcessorQueue.add(async () => { // payoutProcessorQueue from Part 1
+    return payoutProcessorQueue.add(async () => {
         let attempts = 0;
-        const maxAttempts = (parseInt(process.env.PAYOUT_JOB_RETRIES, 10) || 3) + 1; // Total attempts
+        const maxAttempts = (parseInt(process.env.PAYOUT_JOB_RETRIES, 10) || 3) + 1;
         const baseDelayMs = parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10) || 5000;
 
         while(attempts < maxAttempts) {
@@ -6835,26 +6858,23 @@ async function addPayoutJob(jobData) { // For withdrawals or referral payouts
                     throw new Error(`Unknown payout job type: ${jobData.type}`);
                 }
                 console.log(`✅ ${attemptLogPrefix} Job completed successfully.`);
-                return; // Success, exit the job's processing loop
+                return;
             } catch(error) {
                 console.warn(`⚠️ ${attemptLogPrefix} Attempt failed: ${error.message}`);
-                const isRetryableFlag = error.isRetryable === true; // Error from handlers should have this flag
+                const isRetryableFlag = error.isRetryable === true;
 
                 if (!isRetryableFlag || attempts >= maxAttempts) {
                     console.error(`❌ ${attemptLogPrefix} Job failed permanently after ${attempts} attempts. Error: ${error.message}`);
-                    // The individual handler (handleWithdrawalPayoutJob/handleReferralPayoutJob)
-                    // should have updated the DB status to 'failed' and notified admin/user as appropriate.
-                    return; // Exit job after permanent failure
+                    return;
                 }
 
                 const delayWithJitter = baseDelayMs * Math.pow(2, attempts - 1) * (0.8 + Math.random() * 0.4);
                 console.log(`⏳ ${attemptLogPrefix} Retrying in ~${Math.round(delayWithJitter / 1000)}s...`);
-                await sleep(delayWithJitter); // sleep from Part 1
-                // Loop will continue for the next attempt
+                await sleep(delayWithJitter);
             }
         }
-    }).catch(queueError => { // Error from PQueue itself (e.g. if task promise was mismanaged, or onTimeout if configured)
-        console.error(`❌ ${logPrefix} CRITICAL Error processing job in Payout Queue (or adding to it): ${queueError.message}`);
+    }).catch(queueError => {
+        console.error(`❌ ${logPrefix} CRITICAL Error processing job in Payout Queue: ${queueError.message}`);
         if (typeof notifyAdmin === "function") notifyAdmin(`🚨 CRITICAL Payout Queue Error. Type: ${jobType}, ID: ${jobId}. Error: ${escapeMarkdownV2(queueError.message)}`).catch(()=>{});
     });
 }
@@ -6865,67 +6885,58 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
     let clientForRefund = null;
     let sendSolResult = { success: false, error: "Send SOL not initiated", isRetryable: false };
 
-    const details = await getWithdrawalDetails(withdrawalId); // from Part 2
+    const details = await getWithdrawalDetails(withdrawalId);
     if (!details) {
         console.error(`❌ ${logPrefix} Withdrawal details not found for ID ${withdrawalId}. Cannot process.`);
         const error = new Error(`Withdrawal details not found for ID ${withdrawalId}. Job cannot proceed.`);
-        error.isRetryable = false; // No point retrying if details are missing
-        throw error;
+        error.isRetryable = false; throw error;
     }
 
     if (details.status === 'completed' || details.status === 'failed') {
         console.log(`ℹ️ ${logPrefix} Job skipped, withdrawal ID ${withdrawalId} already in terminal state '${details.status}'.`);
-        return; // Successfully "did nothing" as it's already terminal.
+        return;
     }
 
     const userId = details.user_id;
     const recipient = details.recipient_address;
-    const amountToActuallySend = details.final_send_amount_lamports; // This is what user gets
+    const amountToActuallySend = details.final_send_amount_lamports;
     const feeApplied = details.fee_lamports;
     const totalAmountDebitedFromBalance = amountToActuallySend + feeApplied;
 
     try {
-        // Update status to 'processing' in DB
-        const statusUpdatedToProcessing = await updateWithdrawalStatus(withdrawalId, 'processing'); // updateWithdrawalStatus from Part 2
+        const statusUpdatedToProcessing = await updateWithdrawalStatus(withdrawalId, 'processing');
         if (!statusUpdatedToProcessing) {
-            // Check current status again to see if it was already processed by another instance or became terminal
             const currentDetailsAfterAttempt = await getWithdrawalDetails(withdrawalId);
             if (currentDetailsAfterAttempt && (currentDetailsAfterAttempt.status === 'completed' || currentDetailsAfterAttempt.status === 'failed')) {
                 console.warn(`⚠️ ${logPrefix} Failed to update status to 'processing' for ID ${withdrawalId}, but it's already '${currentDetailsAfterAttempt.status}'. Exiting job as no-op.`);
                 return;
             }
-            // If still pending or another non-terminal state, this is an issue.
             const error = new Error(`Failed to update withdrawal ${withdrawalId} status to 'processing' and it's not yet terminal. Current status: ${currentDetailsAfterAttempt?.status}`);
-            error.isRetryable = true; // May resolve if DB issue is temporary
-            throw error;
+            error.isRetryable = true; throw error;
         }
         console.log(`${logPrefix} Status updated to 'processing'. Attempting to send ${formatSol(amountToActuallySend)} SOL.`);
 
-        // Balance was already deducted when the user confirmed the withdrawal request (in Part 5b handler via placeBet like flow).
-        // If sendSol fails here, we must refund `totalAmountDebitedFromBalance` to their internal balance.
-        sendSolResult = await sendSol(recipient, amountToActuallySend, 'withdrawal'); // sendSol from Part 3
+        sendSolResult = await sendSol(recipient, amountToActuallySend, 'withdrawal');
 
         if (sendSolResult.success && sendSolResult.signature) {
             console.log(`✅ ${logPrefix} sendSol successful for withdrawal ID ${withdrawalId}. TX: ${sendSolResult.signature}. Marking 'completed'.`);
             await updateWithdrawalStatus(withdrawalId, 'completed', null, sendSolResult.signature);
-            await safeSendMessage(userId, // safeSendMessage from Part 3
+            await safeSendMessage(userId,
                 `✅ *Withdrawal Completed\\!* ✅\n\n` +
                 `Amount: *${escapeMarkdownV2(formatSol(amountToActuallySend))} SOL* sent to \`${escapeMarkdownV2(recipient)}\`\\.\n` +
                 `TX: \`${escapeMarkdownV2(sendSolResult.signature)}\``,
                 { parse_mode: 'MarkdownV2' }
             );
-            return; // Successful completion of job
+            return;
         } else {
-            // sendSol failed. Error message is in sendSolResult.error
             const sendErrorMsg = sendSolResult.error || 'Unknown sendSol failure.';
             console.error(`❌ ${logPrefix} sendSol FAILED for withdrawal ID ${withdrawalId}. Reason: ${sendErrorMsg}. Attempting to mark 'failed' and refund user.`);
             await updateWithdrawalStatus(withdrawalId, 'failed', null, null, sendErrorMsg.substring(0, 500));
 
-            // Attempt to refund the user's internal balance
             clientForRefund = await pool.connect();
             await clientForRefund.query('BEGIN');
-            const refundUpdateResult = await updateUserBalanceAndLedger( // from Part 2
-                clientForRefund, userId, totalAmountDebitedFromBalance, // Credit back the full amount
+            const refundUpdateResult = await updateUserBalanceAndLedger(
+                clientForRefund, userId, totalAmountDebitedFromBalance,
                 'withdrawal_refund', { withdrawalId }, `Refund for failed withdrawal ID ${withdrawalId}`
             );
             if (refundUpdateResult.success) {
@@ -6941,21 +6952,18 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
 
             const errorToThrowForRetry = new Error(sendErrorMsg);
             errorToThrowForRetry.isRetryable = sendSolResult.isRetryable === true;
-            throw errorToThrowForRetry; // Propagate error for PQueue retry logic based on sendSolResult's retry flag
+            throw errorToThrowForRetry;
         }
     } catch (jobError) {
         console.error(`❌ ${logPrefix} Error during withdrawal job ID ${withdrawalId}: ${jobError.message}`, jobError.stack);
-        // Ensure isRetryable is set on the error object for PQueue.
-        // If not already set by a specific failure (like sendSolResult), determine it.
         if (jobError.isRetryable === undefined) {
             jobError.isRetryable = isRetryableSolanaError(jobError) || sendSolResult.isRetryable === true;
         }
-        // Ensure final DB status is 'failed' if not already 'completed'
         const currentDetailsAfterJobError = await getWithdrawalDetails(withdrawalId);
         if (currentDetailsAfterJobError && currentDetailsAfterJobError.status !== 'completed' && currentDetailsAfterJobError.status !== 'failed') {
             await updateWithdrawalStatus(withdrawalId, 'failed', null, null, `Job error: ${jobError.message}`.substring(0,500));
         }
-        throw jobError; // Re-throw for PQueue to handle retry based on isRetryable
+        throw jobError;
     } finally {
         if (clientForRefund) clientForRefund.release();
     }
@@ -6966,7 +6974,7 @@ async function handleReferralPayoutJob(payoutId) {
     console.log(`⚙️ ${logPrefix} Processing referral payout job...`);
     let sendSolResult = { success: false, error: "Send SOL not initiated for referral", isRetryable: false };
 
-    const details = await getReferralPayoutDetails(payoutId); // from Part 2
+    const details = await getReferralPayoutDetails(payoutId);
     if (!details) {
         console.error(`❌ ${logPrefix} Referral payout details not found for ID ${payoutId}.`);
         const error = new Error(`Referral payout details not found for ID ${payoutId}. Cannot proceed.`);
@@ -6981,11 +6989,11 @@ async function handleReferralPayoutJob(payoutId) {
     const amountToPaySOL = formatSol(amountToPay);
 
     try {
-        const referrerWalletDetails = await getUserWalletDetails(referrerUserId); // from Part 2
+        const referrerWalletDetails = await getUserWalletDetails(referrerUserId);
         if (!referrerWalletDetails?.external_withdrawal_address) {
             const noWalletMsg = `Referrer ${referrerUserId} has no linked external withdrawal address for referral payout ID ${payoutId}.`;
             console.error(`❌ ${logPrefix} ${noWalletMsg}`);
-            await updateReferralPayoutStatus(payoutId, 'failed', null, null, noWalletMsg.substring(0,500)); // updateReferralPayoutStatus from Part 2
+            await updateReferralPayoutStatus(payoutId, 'failed', null, null, noWalletMsg.substring(0,500));
             const error = new Error(noWalletMsg); error.isRetryable = false; throw error;
         }
         const recipientAddress = referrerWalletDetails.external_withdrawal_address;
@@ -6993,7 +7001,7 @@ async function handleReferralPayoutJob(payoutId) {
         await updateReferralPayoutStatus(payoutId, 'processing');
         console.log(`${logPrefix} Status updated to 'processing'. Attempting to send ${amountToPaySOL} SOL to ${recipientAddress}.`);
 
-        sendSolResult = await sendSol(recipientAddress, amountToPay, 'referral'); // sendSol from Part 3
+        sendSolResult = await sendSol(recipientAddress, amountToPay, 'referral');
 
         if (sendSolResult.success && sendSolResult.signature) {
             console.log(`✅ ${logPrefix} sendSol successful for referral payout ID ${payoutId}. TX: ${sendSolResult.signature}. Marking 'paid'.`);
@@ -7007,14 +7015,14 @@ async function handleReferralPayoutJob(payoutId) {
                 `TX: \`${escapeMarkdownV2(sendSolResult.signature)}\``,
                 { parse_mode: 'MarkdownV2' }
             );
-            return; // Successful completion
+            return;
         } else {
             const sendErrorMsg = sendSolResult.error || 'Unknown sendSol failure for referral payout.';
             console.error(`❌ ${logPrefix} sendSol FAILED for referral payout ID ${payoutId}. Reason: ${sendErrorMsg}.`);
             await updateReferralPayoutStatus(payoutId, 'failed', null, null, sendErrorMsg.substring(0, 500));
             await safeSendMessage(referrerUserId, `❌ Your Referral Reward of ${escapeMarkdownV2(amountToPaySOL)} SOL failed to send \\(Reason: ${escapeMarkdownV2(sendErrorMsg)}\\)\\. Please contact support if this issue persists\\.`, {parse_mode: 'MarkdownV2'});
             if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 REFERRAL PAYOUT FAILED (Referrer ${referrerUserId}, Payout ID ${payoutId}, Amount ${amountToPaySOL} SOL): ${escapeMarkdownV2(sendErrorMsg)}`);
-            
+
             const errorToThrowForRetry = new Error(sendErrorMsg);
             errorToThrowForRetry.isRetryable = sendSolResult.isRetryable === true;
             throw errorToThrowForRetry;
@@ -7028,10 +7036,9 @@ async function handleReferralPayoutJob(payoutId) {
         if (currentDetailsAfterJobError && currentDetailsAfterJobError.status !== 'paid' && currentDetailsAfterJobError.status !== 'failed') {
             await updateReferralPayoutStatus(payoutId, 'failed', null, null, `Job error: ${jobError.message}`.substring(0,500));
         }
-        throw jobError; // Re-throw for PQueue
+        throw jobError;
     }
 }
-
 
 // --- Telegram Connection & Server Setup ---
 async function setupTelegramConnection() {
@@ -7039,72 +7046,59 @@ async function setupTelegramConnection() {
     let webhookUrlBase = process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : process.env.WEBHOOK_URL;
 
     if (webhookUrlBase && process.env.BOT_TOKEN) {
-        const webhookPath = `/telegram/${process.env.BOT_TOKEN}`; // Unique path per bot token
-        const fullWebhookUrl = `${webhookUrlBase.replace(/\/$/, '')}${webhookPath}`; // Ensure single slash
+        const webhookPath = `/telegram/${process.env.BOT_TOKEN}`;
+        const fullWebhookUrl = `${webhookUrlBase.replace(/\/$/, '')}${webhookPath}`;
         console.log(`ℹ️ [Startup] Attempting to set webhook: ${fullWebhookUrl}`);
 
         try {
-            if (bot.isPolling()) { // bot from Part 1
+            if (bot.isPolling()) {
                 console.log("ℹ️ [Startup] Stopping existing polling before setting webhook...");
                 await bot.stopPolling({ cancel: true }).catch(e => console.warn("⚠️ [Startup] Error stopping polling:", e.message));
             }
-            // Try to delete any existing webhook to ensure a clean state, drop pending updates from old webhook.
             await bot.deleteWebHook({ drop_pending_updates: true }).catch((e) => console.warn(`⚠️ [Startup] Non-critical error deleting old webhook: ${e.message}`));
 
             const webhookMaxConn = parseInt(process.env.WEBHOOK_MAX_CONN, 10) || 40;
             const setResult = await bot.setWebHook(fullWebhookUrl, {
                 max_connections: webhookMaxConn,
-                allowed_updates: ['message', 'callback_query'] // Only listen for relevant updates
+                allowed_updates: ['message', 'callback_query']
             });
 
-            if (!setResult) { // setWebHook returns true on success according to docs
+            if (!setResult) {
                 throw new Error("setWebHook API call returned false or timed out, indicating failure.");
             }
 
             console.log(`✅ [Startup] Telegram Webhook set successfully to ${fullWebhookUrl} (Max Connections: ${webhookMaxConn})`);
-            bot.options.polling = false; // Ensure internal state reflects webhook mode
-            return true; // Indicate webhook mode is active
+            bot.options.polling = false;
+            return true;
         } catch (error) {
             console.error(`❌ [Startup] Failed to set Telegram Webhook: ${error.message}. Falling back to polling.`, error.response?.body ? JSON.stringify(error.response.body) : '');
             if (typeof notifyAdmin === "function") await notifyAdmin(`⚠️ WARNING: Webhook setup failed for ${escapeMarkdownV2(fullWebhookUrl)}\nError: ${escapeMarkdownV2(error.message)}\nFalling back to polling.`).catch(()=>{});
-            bot.options.polling = true; // Explicitly set to true for fallback polling mode
-            return false; // Indicate polling mode fallback
+            bot.options.polling = true;
+            return false;
         }
     } else {
         console.log('ℹ️ [Startup] Webhook URL not configured (RAILWAY_PUBLIC_DOMAIN or WEBHOOK_URL) or BOT_TOKEN missing. Using Polling mode.');
-        bot.options.polling = true; // Explicitly set to true for polling mode
-        return false; // Indicate polling mode
+        bot.options.polling = true;
+        return false;
     }
 }
 
 async function startPollingFallback() {
     if (!bot.options.polling) {
-        // console.log("ℹ️ [Startup] Skipping polling start, webhook mode is active or polling explicitly disabled in options.");
         return;
     }
     console.log('⚙️ [Startup] Starting Polling for Telegram updates...');
     try {
-        // Ensure no webhook is set if we are going to poll
-        await bot.deleteWebHook({ drop_pending_updates: true }).catch(() => {}); // Ignore error if no webhook was set
-        // Start polling
-        await bot.startPolling({ // Options for startPolling
-            // These are polling options for node-telegram-bot-api itself, not request options
-            // polling: { // This nested structure was from old docs, usually direct options are fine
-            //    interval: 300, // How often to poll (ms) - library default is 300
-            //    params: { timeout: 10, allowed_updates: ['message', 'callback_query'] } // Long polling timeout
-            // }
-            // Simpler:
-            // autoStart: true, // default
-            // interval: 300 // default
-            // params for getUpdates:
-            timeout: 10, // Long polling timeout in seconds
-            allowed_updates: JSON.stringify(['message', 'callback_query']) // Must be JSON string array
+        await bot.deleteWebHook({ drop_pending_updates: true }).catch(() => {});
+        await bot.startPolling({
+            timeout: 10,
+            allowed_updates: JSON.stringify(['message', 'callback_query'])
         });
         console.log('✅ [Startup] Telegram Polling started successfully.');
     } catch (err) {
         console.error(`❌ CRITICAL: Telegram Polling failed to start: ${err.message}`, err.stack);
         if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL POLLING FAILED TO START: ${escapeMarkdownV2(err.message)}. Bot cannot receive updates. Exiting.`).catch(()=>{});
-        process.exit(3); // Specific exit code for polling failure
+        process.exit(3);
     }
 }
 
@@ -7112,29 +7106,26 @@ function setupExpressServer() {
     console.log('⚙️ [Startup] Setting up Express server...');
     const port = process.env.PORT || 3000;
 
-    app.get('/', (req, res) => { // app from Part 1
-        res.status(200).send(`Solana Gambles Bot v${BOT_VERSION} is running.`); // BOT_VERSION from Part 1
+    app.get('/', (req, res) => {
+        res.status(200).send(`Solana Gambles Bot v${BOT_VERSION} is running.`);
     });
 
     app.get('/health', (req, res) => {
-        const status = isFullyInitialized ? 'OK' : 'INITIALIZING'; // isFullyInitialized global from Part 1
-        const httpStatus = isFullyInitialized ? 200 : 503; // Service Unavailable if not ready
+        const status = isFullyInitialized ? 'OK' : 'INITIALIZING';
+        const httpStatus = isFullyInitialized ? 200 : 503;
         res.status(httpStatus).json({ status: status, version: BOT_VERSION, timestamp: new Date().toISOString() });
     });
 
-    // Setup webhook endpoint only if bot is NOT in polling mode and token is available
     if (!bot.options.polling && process.env.BOT_TOKEN) {
-        const webhookPath = `/telegram/${process.env.BOT_TOKEN}`; // Same path used in setupTelegramConnection
+        const webhookPath = `/telegram/${process.env.BOT_TOKEN}`;
         console.log(`⚙️ [Startup] Configuring Express webhook endpoint at ${webhookPath}`);
         app.post(webhookPath, (req, res) => {
-            // console.log(`[Webhook POST ${new Date().toISOString()}] Received update:`, JSON.stringify(req.body).substring(0, 200)); // Verbose log, careful with PII
             try {
                 if (req.body.message) {
-                    messageQueue.add(() => handleMessage(req.body.message)).catch(e => console.error(`[MsgQueueErr Webhook]: ${e.message}`)); // messageQueue from Part 1, handleMessage from Part 5a
+                    messageQueue.add(() => handleMessage(req.body.message)).catch(e => console.error(`[MsgQueueErr Webhook]: ${e.message}`));
                 } else if (req.body.callback_query) {
-                    callbackQueue.add(() => handleCallbackQuery(req.body.callback_query)).catch(e => { // callbackQueue from Part 1, handleCallbackQuery from Part 5a
+                    callbackQueue.add(() => handleCallbackQuery(req.body.callback_query)).catch(e => {
                         console.error(`[CBQueueErr Webhook]: ${e.message}`);
-                        // Attempt to answer callback query even if processing fails, to clear loading state on user's client
                         bot.answerCallbackQuery(req.body.callback_query.id, {text: "⚠️ Error processing request."}).catch(()=>{});
                     });
                 } else {
@@ -7142,32 +7133,29 @@ function setupExpressServer() {
                 }
             } catch (processError) {
                 console.error(`❌ [Webhook Handler] Error processing update: ${processError.message}`, processError.stack);
-                // Do not crash the server for a single bad update. Telegram will retry for a while.
             }
-            res.sendStatus(200); // Acknowledge receipt to Telegram quickly
+            res.sendStatus(200);
         });
     } else {
          console.log("ℹ️ [Startup] Skipping Express webhook endpoint setup (Polling mode or no BOT_TOKEN).");
     }
 
-    // Assign to the global 'server' variable declared in Part 1
-    server = app.listen(port, '0.0.0.0', () => { // server global from Part 1
+    server = app.listen(port, '0.0.0.0', () => {
         console.log(`✅ [Startup] Express server listening on 0.0.0.0:${port}`);
     });
 
     server.on('error', async (error) => {
         console.error(`❌ Express Server Error: ${error.message}`, error.stack);
         if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL Express Server Error: ${escapeMarkdownV2(error.message)}. Bot may not function. Restart advised.`).catch(()=>{});
-        // If address is already in use, it's a fatal startup error.
-        if (error.code === 'EADDRINUSE' && !isShuttingDown) { // isShuttingDown global
+        if (error.code === 'EADDRINUSE' && !isShuttingDown) {
             console.error("Address in use, shutting down...");
-            await shutdown('EADDRINUSE_SERVER_ERROR').catch(() => process.exit(4)); // Specific exit code
+            await shutdown('EADDRINUSE_SERVER_ERROR').catch(() => process.exit(4));
         }
     });
 }
 
 // --- Shutdown Logic ---
-let isShuttingDown = false; // Ensure this is declared (could be in Part 1, but here is fine too if not)
+let isShuttingDown = false;
 async function shutdown(signal) {
     if (isShuttingDown) {
         console.warn("🚦 Shutdown already in progress, ignoring duplicate signal:", signal);
@@ -7175,30 +7163,27 @@ async function shutdown(signal) {
     }
     isShuttingDown = true;
     console.warn(`\n🚦 Received signal: ${signal}. Initiating graceful shutdown... (PID: ${process.pid})`);
-    isFullyInitialized = false; // Mark as not ready
+    isFullyInitialized = false;
 
     if (typeof notifyAdmin === "function") {
         await notifyAdmin(`ℹ️ Bot instance v${BOT_VERSION} shutting down (Signal: ${escapeMarkdownV2(String(signal))})...`).catch(()=>{});
     }
 
-
     console.log("🚦 [Shutdown] Stopping Telegram updates...");
     if (bot?.isPolling?.()) {
         await bot.stopPolling({ cancel: true }).then(() => console.log("✅ [Shutdown] Polling stopped.")).catch(e => console.error("❌ [Shutdown] Error stopping polling:", e.message));
-    } else if (bot && !bot.options.polling) { // Webhook mode
-        // Optionally delete webhook on shutdown if desired, though often not necessary for quick restarts
-        // await bot.deleteWebHook({ drop_pending_updates: false }).then(() => console.log("✅ [Shutdown] Webhook deleted.")).catch(e => console.warn("⚠️ [Shutdown] Error deleting webhook:", e.message));
+    } else if (bot && !bot.options.polling) {
         console.log("ℹ️ [Shutdown] In webhook mode or polling was not active.");
     } else {
         console.log("ℹ️ [Shutdown] Telegram bot instance not available or polling already off.");
     }
 
     console.log("🚦 [Shutdown] Closing HTTP server...");
-    if (server) { // server global from Part 1
+    if (server) {
         await new Promise(resolve => server.close(err => {
             if(err) console.error("❌ [Shutdown] Error closing HTTP server:", err);
             else console.log("✅ [Shutdown] HTTP server closed.");
-            resolve(); // Resolve regardless of error to continue shutdown
+            resolve();
         }));
     } else { console.log("ℹ️ [Shutdown] HTTP server was not running or already closed."); }
 
@@ -7210,20 +7195,20 @@ async function shutdown(signal) {
 
     console.log("🚦 [Shutdown] Waiting for processing queues to idle...");
     const queueShutdownTimeout = parseInt(process.env.SHUTDOWN_QUEUE_TIMEOUT_MS, 10) || 20000;
-    const allQueues = [messageQueue, callbackQueue, payoutProcessorQueue, depositProcessorQueue, telegramSendQueue]; // All from Part 1
+    const allQueues = [messageQueue, callbackQueue, payoutProcessorQueue, depositProcessorQueue, telegramSendQueue];
     try {
         await Promise.race([
             Promise.all(allQueues.map(q => q.onIdle())),
-            sleep(queueShutdownTimeout).then(() => Promise.reject(new Error(`Queue idle timeout (${queueShutdownTimeout}ms) exceeded during shutdown.`))) // sleep from Part 1
+            sleep(queueShutdownTimeout).then(() => Promise.reject(new Error(`Queue idle timeout (${queueShutdownTimeout}ms) exceeded during shutdown.`)))
         ]);
         console.log("✅ [Shutdown] All processing queues are idle.");
     } catch (queueError) {
         console.warn(`⚠️ [Shutdown] Queues did not idle within timeout or errored: ${queueError.message}`);
-        allQueues.forEach(q => q.pause()); // Pause queues to prevent new items if they didn't idle
+        allQueues.forEach(q => q.pause());
     }
 
     console.log("🚦 [Shutdown] Closing Database pool...");
-    if (pool) { // pool from Part 1
+    if (pool) {
         await pool.end()
             .then(() => console.log("✅ [Shutdown] Database pool closed."))
             .catch(e => console.error("❌ [Shutdown] Error closing Database pool:", e.message));
@@ -7232,7 +7217,6 @@ async function shutdown(signal) {
     }
 
     console.log(`🏁 [Shutdown] Graceful shutdown complete (Signal: ${signal}). Exiting.`);
-    // Determine exit code based on signal
     const exitCode = (typeof signal === 'number' && signal !==0) ? signal : (signal === 'SIGINT' || signal === 'SIGTERM' ? 0 : 1);
     process.exit(exitCode);
 }
@@ -7240,55 +7224,40 @@ async function shutdown(signal) {
 function setupTelegramListeners() {
     console.log("⚙️ [Listeners] Setting up Telegram event listeners...");
     if (bot.listeners('message').length > 0 || bot.listeners('callback_query').length > 0) {
-        console.warn("⚠️ [Listeners] Listeners already seem to be attached. Clearing them to prevent duplicates.");
-        bot.removeAllListeners(); // Clear all previous listeners
+        console.warn("⚠️ [Listeners] Listeners already attached. Clearing them first.");
+        bot.removeAllListeners();
     }
 
     bot.on('message', (msg) => {
-        // Filter out non-private messages or messages from other bots if necessary
-        // if (msg.chat.type !== 'private') return; // Example: only allow private messages
-
-        // Only allow admin commands via `/admin` if bot is not fully initialized.
-        // Otherwise, process all messages if fully initialized.
         const adminUserIdsArray = (process.env.ADMIN_USER_IDS || '').split(',').map(id => id.trim());
         if (!isFullyInitialized && !(msg.from && adminUserIdsArray.includes(String(msg.from.id)) && msg.text?.startsWith('/admin'))) {
-            // console.warn(`[Message Listener] Bot not fully initialized. Ignoring msg from ${msg.from.id} (unless it's an admin command).`);
-            // Optionally send a "bot initializing" message, but be careful not to spam.
-            // safeSendMessage(msg.chat.id, "🛠️ Bot is still starting up. Please wait a few moments.").catch(()=>{});
             return;
         }
-        messageQueue.add(() => handleMessage(msg)).catch(e => console.error(`[MsgQueueErr Listener Processing]: ${e.message}`)); // handleMessage from Part 5a
+        messageQueue.add(() => handleMessage(msg)).catch(e => console.error(`[MsgQueueErr Listener Processing]: ${e.message}`));
     });
 
     bot.on('callback_query', (cb) => {
         if (!isFullyInitialized) {
-            // console.warn(`[Callback Listener] Bot not fully initialized. Ignoring cb from ${cb.from.id}`);
             bot.answerCallbackQuery(cb.id, {text: "🛠️ Bot is still starting up. Please wait a moment and try again.", show_alert: true}).catch(()=>{});
             return;
         }
-        callbackQueue.add(() => handleCallbackQuery(cb)).catch(e => { // handleCallbackQuery from Part 5a
+        callbackQueue.add(() => handleCallbackQuery(cb)).catch(e => {
             console.error(`[CBQueueErr Listener Processing]: ${e.message}`);
-            // Attempt to answer callback even on error to clear loading state for user
             bot.answerCallbackQuery(cb.id, { text: "⚠️ Error processing your request." }).catch(()=>{});
         });
     });
 
-    // Polling and Webhook error listeners
     bot.on('polling_error', (error) => {
         console.error(`❌ TG Polling Error: Code ${error.code || 'N/A'} | ${error.message}`, error.stack);
-        // Certain polling errors are fatal (e.g., 409 Conflict means another instance is polling with the same token)
         if (String(error.message).includes('409') || String(error.code).includes('EFATAL') || String(error.message).toLowerCase().includes('conflict')) {
             if (typeof notifyAdmin === "function") notifyAdmin(`🚨 POLLING CONFLICT (409) or EFATAL detected. Another instance running? Shutting down. Error: ${escapeMarkdownV2(error.message)}`).catch(()=>{});
-            if (!isShuttingDown) shutdown('POLLING_FATAL_ERROR').catch(() => process.exit(1)); // Initiate shutdown
+            if (!isShuttingDown) shutdown('POLLING_FATAL_ERROR').catch(() => process.exit(1));
         }
-        // Other errors might be transient and handled by the library's retry mechanism.
     });
     bot.on('webhook_error', (error) => {
         console.error(`❌ TG Webhook Error: Code ${error.code || 'N/A'} | ${error.message}`, error.stack);
         if (typeof notifyAdmin === "function") notifyAdmin(`🚨 Telegram Webhook Error: ${error.code || 'N/A'} - ${escapeMarkdownV2(error.message)}`).catch(()=>{});
-        // These might require manual intervention (e.g., re-setting webhook with Telegram API if it's consistently failing)
     });
-    // Generic error listener for other types of errors from the library
     bot.on('error', (error) => {
         console.error('❌ General node-telegram-bot-api Library Error:', error);
         if (typeof notifyAdmin === "function") notifyAdmin(`🚨 General TG Bot Library Error:\n${escapeMarkdownV2(error.message)}`).catch(()=>{});
@@ -7303,33 +7272,32 @@ function setupTelegramListeners() {
     console.log(`Current Date/Time: ${new Date().toISOString()}`);
 
     console.log("⚙️ [Startup] Setting up process signal & error handlers...");
-    process.on('SIGINT', () => shutdown('SIGINT')); // Ctrl+C
-    process.on('SIGTERM', () => shutdown('SIGTERM')); // kill command
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('uncaughtException', async (error, origin) => {
         console.error(`\n🚨🚨🚨 UNCAUGHT EXCEPTION [Origin: ${origin}] 🚨🚨🚨\n`, error);
-        isFullyInitialized = false; // Mark as unstable
+        isFullyInitialized = false;
         if (!isShuttingDown) {
             console.error("Initiating emergency shutdown due to uncaught exception...");
             try {
                 if (typeof notifyAdmin === "function") await notifyAdmin(`🚨🚨🚨 UNCAUGHT EXCEPTION (${escapeMarkdownV2(String(origin))})\n${escapeMarkdownV2(error.message)}\nAttempting emergency shutdown...`).catch(e => console.error("Admin notify fail (uncaught):", e));
-                await shutdown('uncaughtException'); // This will call process.exit
+                await shutdown('uncaughtException');
             } catch (shutdownErr) {
                 console.error("❌ Emergency shutdown attempt itself FAILED:", shutdownErr);
                 if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 Emergency shutdown itself FAILED after uncaught exception. Forcing exit.`).catch(e => console.error("Admin notify fail (uncaught shutdown fail):", e));
-                setTimeout(() => process.exit(1), 1000).unref(); // Force exit after short delay
+                setTimeout(() => process.exit(1), 1000).unref();
             }
         } else {
             console.warn("Uncaught exception occurred during an ongoing shutdown sequence. Forcing exit.");
-            setTimeout(() => process.exit(1), 1000).unref(); // Force exit if already shutting down
+            setTimeout(() => process.exit(1), 1000).unref();
         }
-        // Fallback force exit if shutdown hangs for too long
         const failTimeout = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10) || 8000;
         setTimeout(() => { console.error(`🚨 Forcing exit after ${failTimeout}ms due to uncaught exception (watchdog).`); process.exit(1); }, failTimeout).unref();
     });
     process.on('unhandledRejection', async (reason, promise) => {
         console.error('\n🔥🔥🔥 UNHANDLED PROMISE REJECTION 🔥🔥🔥');
-        console.error('Promise:', promise); // Log the promise that was rejected
-        console.error('Reason:', reason);   // Log the reason for rejection (could be an Error object or any other value)
+        console.error('Promise:', promise);
+        console.error('Reason:', reason);
         if (typeof notifyAdmin === "function") {
              const reasonMsg = reason instanceof Error ? reason.message : String(reason);
              await notifyAdmin(`🔥🔥🔥 UNHANDLED REJECTION\nReason: ${escapeMarkdownV2(reasonMsg)}`).catch(()=>{});
@@ -7338,31 +7306,31 @@ function setupTelegramListeners() {
 
     try {
         console.log("⚙️ [Startup Step 1/8] Setting up Telegram Listeners (will attach after init)...");
-        // Listeners are setup but only become fully active when isFullyInitialized is true for non-admin commands.
+        // Listeners setup logic is called later now.
 
         console.log("⚙️ [Startup Step 2/8] Initializing Database...");
-        await initializeDatabase();
+        await initializeDatabase(); // Contains the DDL fixes now
 
         console.log("⚙️ [Startup Step 3/8] Loading Active Deposits Cache...");
         await loadActiveDepositsCache();
 
         console.log("⚙️ [Startup Step 4/8] Loading Slots Jackpot...");
         const loadedJackpot = await loadSlotsJackpot();
-        currentSlotsJackpotLamports = loadedJackpot; // Assign to global var from Part 1
+        currentSlotsJackpotLamports = loadedJackpot;
         console.log(`⚙️ [Startup] Global slots jackpot variable set to: ${formatSol(currentSlotsJackpotLamports)} SOL`);
 
         console.log("⚙️ [Startup Step 5/8] Setting up Telegram Connection (Webhook/Polling)...");
         const useWebhook = await setupTelegramConnection();
 
         console.log("⚙️ [Startup Step 6/8] Setting up Express Server...");
-        setupExpressServer(); // This assigns to the global 'server' variable
+        setupExpressServer();
 
         console.log("⚙️ [Startup Step 7/8] Attaching Telegram Listeners & Starting Polling (if applicable)...");
-        setupTelegramListeners(); // Now that core components are ready, attach listeners.
+        setupTelegramListeners(); // Attach listeners now
         if (!useWebhook && bot.options.polling) {
             await startPollingFallback();
         } else if (!useWebhook && !bot.options.polling && (process.env.WEBHOOK_URL || process.env.RAILWAY_PUBLIC_DOMAIN)) {
-            console.warn("⚠️ [Startup] Webhook setup failed, and polling was also not enabled (bot.options.polling is false). Bot might not receive updates.");
+            console.warn("⚠️ [Startup] Webhook setup failed, and polling was also not enabled. Bot might not receive updates.");
         } else if (useWebhook) {
             console.log("ℹ️ [Startup] Webhook mode active. Polling not started.");
         } else {
@@ -7378,16 +7346,15 @@ function setupTelegramListeners() {
                 console.log("⚙️ [Startup Final Phase] Starting Background Tasks now...");
                 startDepositMonitor();
                 startDepositSweeper();
-                startLeaderboardManager(); // Start the new leaderboard manager
+                startLeaderboardManager(); // Added full function earlier
 
                 console.log("✅ [Startup Final Phase] Background Tasks scheduled/started.");
-                
-                // Test a DB query to ensure pool is working after all init.
+
                 await pool.query('SELECT NOW()');
                 console.log("✅ [Startup Final Phase] Database pool confirmed operational.");
 
                 console.log("⚙️ [Startup Final Phase] Setting isFullyInitialized to true...");
-                isFullyInitialized = true; // This uses the global var from Part 1
+                isFullyInitialized = true;
                 console.log("✅ [Startup Final Phase] isFullyInitialized flag is now true. Bot is ready for full operation.");
 
                 const me = await bot.getMe();
@@ -7398,30 +7365,28 @@ function setupTelegramListeners() {
                 console.log(`\n🎉🎉🎉 Solana Gambles Bot is fully operational! (${new Date().toISOString()}) 🎉🎉🎉`);
             } catch (finalPhaseError) {
                 console.error("❌ FATAL ERROR DURING FINAL STARTUP PHASE (after initial delay):", finalPhaseError);
-                isFullyInitialized = false; // Ensure it's marked as not ready
+                isFullyInitialized = false;
                 if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 BOT STARTUP FAILED (Final Phase): ${escapeMarkdownV2(finalPhaseError.message)}. Bot may not be operational.`).catch(()=>{});
-                // Consider if a shutdown is needed here or if some parts might still be limping along.
-                // If this phase is critical for operation, a shutdown might be best.
-                if (!isShuttingDown) await shutdown('STARTUP_FINAL_PHASE_ERROR').catch(() => process.exit(5)); // Specific exit code
+                if (!isShuttingDown) await shutdown('STARTUP_FINAL_PHASE_ERROR').catch(() => process.exit(5));
             }
         }, initDelay);
 
     } catch (error) { // Catch errors from the main startup sequence (steps 1-7)
         console.error("❌❌❌ FATAL ERROR DURING MAIN STARTUP SEQUENCE:", error);
         isFullyInitialized = false;
-        if (pool) { pool.end().catch(() => {});} // Attempt to close pool if it was initialized
+        if (pool) { pool.end().catch(() => {});}
         try {
-            // Try to notify admin even if other parts of notifyAdmin's dependencies aren't ready.
-            // This direct call is a last resort.
             if (process.env.BOT_TOKEN && process.env.ADMIN_USER_IDS) {
                  const tempBotForError = new TelegramBot(process.env.BOT_TOKEN, {polling: false});
                  const adminIdsForError = process.env.ADMIN_USER_IDS.split(',');
                  for (const adminId of adminIdsForError) {
-                     tempBotForError.sendMessage(adminId.trim(), `🚨 BOT STARTUP FAILED (Main Sequence): ${error.message}. Check logs & DB. Exiting.`).catch(e => console.error("Fallback admin notify failed:", e));
+                     if(adminId.trim()) {
+                         tempBotForError.sendMessage(adminId.trim(), `🚨 BOT STARTUP FAILED (Main Sequence): ${error.message}. Check logs & DB. Exiting.`).catch(e => console.error("Fallback admin notify failed:", e));
+                     }
                  }
             }
         } catch (finalNotifyError) {console.error("Could not send final admin error notification:", finalNotifyError);}
-        process.exit(1); // General failure exit code
+        process.exit(1);
     }
 })();
 // --- End of Part 6 / End of File index.js ---
