@@ -6130,27 +6130,55 @@ async function initializeDatabase() {
         await client.query('CREATE INDEX IF NOT EXISTS idx_bets_created_at_desc ON bets (created_at DESC);');
 
 
-        // Withdrawals Table
-        console.log('⚙️ [DB Init] Ensuring withdrawals table...');
+        // Inside initializeDatabase function in Part 6:
+
+        // Wallets Table
+        console.log('⚙️ [DB Init] Ensuring wallets table...');
         await client.query(`
-            CREATE TABLE IF NOT EXISTS withdrawals (
-                id SERIAL PRIMARY KEY,
-                user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                requested_amount_lamports BIGINT NOT NULL,
-                fee_lamports BIGINT NOT NULL DEFAULT 0,
-                final_send_amount_lamports BIGINT NOT NULL,
-                recipient_address VARCHAR(44) NOT NULL,
-                status VARCHAR(20) NOT NULL DEFAULT 'pending',
-                payout_tx_signature VARCHAR(88) UNIQUE,
-                error_message TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                processed_at TIMESTAMPTZ,
-                completed_at TIMESTAMPTZ
+            CREATE TABLE IF NOT EXISTS wallets (
+                user_id VARCHAR(255) PRIMARY KEY,
+                external_withdrawal_address VARCHAR(44), 
+                linked_at TIMESTAMPTZ,
+                last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                referral_code VARCHAR(12) UNIQUE, 
+                referred_by_user_id VARCHAR(255) REFERENCES wallets(user_id) ON DELETE SET NULL,
+                referral_count INTEGER NOT NULL DEFAULT 0,
+                total_wagered BIGINT NOT NULL DEFAULT 0,
+                last_milestone_paid_lamports BIGINT NOT NULL DEFAULT 0,
+                last_bet_amounts JSONB DEFAULT '{}'::jsonb, 
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         `);
-        console.log('⚙️ [DB Init] Ensuring withdrawals indexes...');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id_status ON withdrawals (user_id, status);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals (status);');
+
+        // --- UPDATED SECTION USING SAVEPOINT ---
+        // Ensure 'last_bet_amounts' column exists, handling potential failure without aborting the main transaction
+        console.log('⚙️ [DB Init] Ensuring wallets.last_bet_amounts column exists using savepoint...');
+        await client.query('SAVEPOINT check_column_wallets_last_bet;'); // Create a savepoint
+        try {
+            // Attempt to add the column
+            await client.query(`ALTER TABLE wallets ADD COLUMN last_bet_amounts JSONB DEFAULT '{}'::jsonb;`);
+            console.log('✅ [DB Init] Column wallets.last_bet_amounts added.');
+            await client.query('RELEASE SAVEPOINT check_column_wallets_last_bet;'); // Release savepoint if successful
+        } catch (e) {
+            await client.query('ROLLBACK TO SAVEPOINT check_column_wallets_last_bet;'); // Rollback ALTER TABLE attempt
+            if (e.code === '42701') { // 42701 is 'duplicate_column'
+                console.log('ℹ️ [DB Init] Column wallets.last_bet_amounts already exists (handled via savepoint).');
+                // Ignore the error specifically for duplicate column, transaction continues
+            } else {
+                // If it's another unexpected error, re-throw it to fail the whole initialization
+                console.error(`❌ [DB Init] Unexpected error trying to add wallets.last_bet_amounts: ${e.message} (Code: ${e.code})`);
+                throw e; 
+            }
+            // Note: We might not need to explicitly release the savepoint after rolling back to it, 
+            // but it doesn't hurt and keeps pairing consistent conceptually.
+            // Some resources say ROLLBACK TO SAVEPOINT implicitly destroys the savepoint.
+        }
+        // --- END OF UPDATED SECTION ---
+
+        console.log('⚙️ [DB Init] Ensuring wallets indexes...'); // This should now execute in the active transaction
+        await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referral_code ON wallets (referral_code);');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referred_by ON wallets (referred_by_user_id);');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_total_wagered ON wallets (total_wagered DESC);');
 
 
         // Referral Payouts Table
