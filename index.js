@@ -2030,7 +2030,7 @@ async function incrementJackpotAmount(gameKey, contributionLamports, client) {
 
 // --- End of Part 2 ---
 // index.js - Part 3: Solana Utilities & Telegram Helpers
-// --- VERSION: 3.2.1 --- (Adjusted based on discussions for correctness)
+// --- VERSION: 3.2.1 --- (Adjusted based on discussions for correctness & MarkdownV2 Safety)
 
 // --- Assuming imports from Part 1 are available ---
 // (PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL, sendAndConfirmTransaction, ComputeBudgetProgram, TransactionExpiredBlockheightExceededError, SendTransactionError, Connection)
@@ -2046,32 +2046,33 @@ async function incrementJackpotAmount(gameKey, contributionLamports, client) {
  * @param {number} [maxDecimals=SOL_DECIMALS] Maximum decimals to initially format to before trimming. SOL_DECIMALS is from Part 1.
  * @returns {string} Formatted SOL string (e.g., "0.01", "1.2345", "1").
  */
-function formatSol(lamports, maxDecimals = SOL_DECIMALS) {
+function formatSol(lamports, maxDecimals = SOL_DECIMALS) { // SOL_DECIMALS is from Part 1
     if (typeof lamports === 'undefined' || lamports === null) return '0';
     try {
         // Convert input to BigInt safely
         const lamportsBigInt = BigInt(lamports);
-        // Convert to SOL number
+        // Convert to SOL number using floating point for formatting
         const solNumber = Number(lamportsBigInt) / Number(LAMPORTS_PER_SOL); // LAMPORTS_PER_SOL from Part 1
 
         // Use toFixed for initial rounding to avoid floating point issues with many decimals
         // Ensure maxDecimals is reasonable
         const effectiveMaxDecimals = Math.min(Math.max(0, maxDecimals), SOL_DECIMALS + 2); // Cap reasonably
-        const fixedString = solNumber.toFixed(effectiveMaxDecimals);
+        let fixedString = solNumber.toFixed(effectiveMaxDecimals);
 
-        // parseFloat will strip trailing zeros after the decimal point.
-        // toString() converts back (handles integers correctly, e.g., 1.00 -> "1")
-        // If the number is very small (e.g. 0.000000001), toFixed might give "0.00000000", parseFloat makes it "0".
-        // We want to preserve precision for small numbers if they are non-zero.
-        const parsedNum = parseFloat(fixedString);
-        if (parsedNum === 0 && solNumber !== 0) { // Avoid converting small non-zero to "0"
-            // For very small numbers that parse to 0, try to find the first significant digit.
-            // This is a simple attempt; a more robust solution might use a library for arbitrary-precision arithmetic display.
-            if (fixedString.match(/^0\.0*[1-9]/)) {
-                return fixedString.replace(/0+$/, ''); // Remove only trailing zeros after decimal part
-            }
+        // Improve trailing zero removal for cleaner output, especially for integers
+        if (fixedString.includes('.')) {
+           fixedString = fixedString.replace(/0+$/, ''); // Remove trailing zeros after decimal
+           fixedString = fixedString.replace(/\.$/, ''); // Remove trailing decimal point if it exists
         }
-        return parsedNum.toString();
+
+        // Handle very small non-zero numbers that might become "0" after parseFloat/toString
+        if (parseFloat(fixedString) === 0 && solNumber !== 0 && fixedString.includes('.')) {
+             // If it parsed to 0 but wasn't truly 0, return the toFixed version (trimmed)
+             // This preserves small values like 0.000000001
+             return fixedString;
+        }
+
+        return parseFloat(fixedString).toString(); // Use parseFloat to handle cases like "1.0" -> "1"
 
     } catch (e) {
         console.error(`[formatSol] Error formatting lamports: ${lamports}`, e);
@@ -2095,7 +2096,6 @@ function createSafeIndex(userId) {
     const index = hash.readUInt32BE(hash.length - 4);
 
     // Ensure it's below hardening threshold (2^31 - 1 for hardened, or just ensure it's a valid non-hardened index part if we add 2^31 later)
-    // For SLIP-10, hardened indices are >= 0x80000000 (2^31).
     // The path `m/44'/501'/${safeIndex}'/0'/${addressIndex}'` uses hardened `safeIndex`.
     // So, `safeIndex` itself should be a value that, when added to 0x80000000, doesn't overflow.
     // More simply, `safeIndex` should be < 2^31. The apostrophe denotes hardening.
@@ -2120,11 +2120,9 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
         if (typeof seedPhrase !== 'string' || seedPhrase.length < 20 || !bip39.validateMnemonic(seedPhrase)) { // bip39 from Part 1
             console.error(`${logPrefix} CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is invalid or empty/invalid at runtime!`);
             // notifyAdmin is defined later in this Part.
-            // We should use a try-catch or ensure it's available if called here.
-            // For now, just log, as this function itself might be called before notifyAdmin is fully usable during very early startup errors.
-            // If called later, notifyAdmin should work.
+            // MarkdownV2 Safety: Escape user ID, index, and static text
             if (typeof notifyAdmin === "function") {
-                 await notifyAdmin(`🚨 CRITICAL: DEPOSIT\\_MASTER\\_SEED\\_PHRASE is missing or invalid\\. Cannot generate deposit addresses\\. (User: ${escapeMarkdownV2(userId)}, Index: ${addressIndex})`);
+                 await notifyAdmin(`🚨 CRITICAL: DEPOSIT\\_MASTER\\_SEED\\_PHRASE is missing or invalid\\. Cannot generate deposit addresses\\. \\(User: ${escapeMarkdownV2(userId)}, Index: ${addressIndex}\\)`);
             } else {
                 console.error(`[ADMIN ALERT during generateUniqueDepositAddress] DEPOSIT_MASTER_SEED_PHRASE missing/invalid.`);
             }
@@ -2138,15 +2136,14 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
 
         const masterSeedBuffer = bip39.mnemonicToSeedSync(seedPhrase);
         if (!masterSeedBuffer || masterSeedBuffer.length === 0) {
-            throw new Error("Failed to generate seed buffer from mnemonic.");
+            throw new Error("Failed to generate seed buffer from mnemonic\\."); // Escaped .
         }
 
         const safeUserIndex = createSafeIndex(userId); // This is the account index in BIP44
         // Path: m / purpose' / coin_type' / account' / change / address_index'
         // Solana SLIP-0010 uses m/44'/501'/account'/0'/address_index' (note: address_index is also hardened here)
         // Or sometimes m/44'/501'/account'/0'/address_index (non-hardened address_index)
-        // The original code used: `m/44'/501'/${safeIndex}'/0'/${addressIndex}'` where safeIndex is based on userId.
-        // Let's stick to the user's path convention. safeIndex is the "account" derived from userId.
+        // Sticking to the user's path convention: `m/44'/501'/${safeIndex}'/0'/${addressIndex}'` where safeIndex is based on userId.
         const derivationPath = `m/44'/501'/${safeUserIndex}'/0'/${addressIndex}'`;
 
 
@@ -2154,7 +2151,7 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
         const privateKeyBytes = derivedSeedNode.key; // This should be the 32-byte seed for the Keypair
 
         if (!privateKeyBytes || privateKeyBytes.length !== 32) {
-            throw new Error(`Derived private key (seed bytes) are invalid (length: ${privateKeyBytes?.length}) using ed25519-hd-key for path ${derivationPath}`);
+            throw new Error(`Derived private key \\(seed bytes\\) are invalid \\(length: ${privateKeyBytes?.length}\\) using ed25519\\-hd\\-key for path ${derivationPath}`); // Escaped () -
         }
 
         // For Solana, the derived key from ed25519-hd-key is the *seed* for Keypair.fromSeed().
@@ -2163,17 +2160,16 @@ async function generateUniqueDepositAddress(userId, addressIndex) {
 
         return {
             publicKey: publicKey,
-            privateKeyBytes: privateKeyBytes, // This is the seed, not the expanded secret key. Keypair.secretKey would be the 64-byte version.
-                                            // For consistency, if other parts expect the 64-byte secret, adjust here or there.
-                                            // However, Keypair.fromSeed() is the standard.
+            privateKeyBytes: privateKeyBytes, // This is the seed, not the expanded secret key.
             derivationPath: derivationPath
         };
 
     } catch (error) {
         console.error(`${logPrefix} Error during address generation: ${error.message}`);
         console.error(`${logPrefix} Error Stack: ${error.stack}`);
+         // MarkdownV2 Safety: Escape user ID, index, prefix, error message
         if (typeof notifyAdmin === "function") {
-            await notifyAdmin(`🚨 ERROR generating deposit address for User ${escapeMarkdownV2(userId)} Index ${addressIndex} (${escapeMarkdownV2(logPrefix)}): ${escapeMarkdownV2(error.message)}`);
+            await notifyAdmin(`🚨 ERROR generating deposit address for User ${escapeMarkdownV2(userId)} Index ${addressIndex} \\(${escapeMarkdownV2(logPrefix)}\\): ${escapeMarkdownV2(error.message)}`);
         } else {
             console.error(`[ADMIN ALERT during generateUniqueDepositAddress] Error: ${error.message}`);
         }
@@ -2200,20 +2196,20 @@ function getKeypairFromPath(derivationPath) {
         const seedPhrase = process.env.DEPOSIT_MASTER_SEED_PHRASE;
         if (typeof seedPhrase !== 'string' || seedPhrase.length < 20 || !bip39.validateMnemonic(seedPhrase)) { // bip39 from Part 1
             console.error(`${logPrefix} CRITICAL: DEPOSIT_MASTER_SEED_PHRASE is missing or invalid when trying to re-derive key!`);
-            // No async notifyAdmin here as this is synchronous.
+            // No async notifyAdmin here as this is synchronous. Log critical error.
             return null;
         }
 
         const masterSeedBuffer = bip39.mnemonicToSeedSync(seedPhrase);
         if (!masterSeedBuffer || masterSeedBuffer.length === 0) {
-            throw new Error("Failed to generate seed buffer from mnemonic for path derivation.");
+            throw new Error("Failed to generate seed buffer from mnemonic for path derivation\\."); // Escaped .
         }
 
         const derivedSeedNode = derivePath(derivationPath, masterSeedBuffer.toString('hex')); // derivePath from ed25519-hd-key (Part 1)
         const privateKeySeedBytes = derivedSeedNode.key; // This is the 32-byte seed
 
         if (!privateKeySeedBytes || privateKeySeedBytes.length !== 32) {
-            throw new Error(`Derived private key seed bytes are invalid (length: ${privateKeySeedBytes?.length}) for path ${derivationPath}`);
+            throw new Error(`Derived private key seed bytes are invalid \\(length: ${privateKeySeedBytes?.length}\\) for path ${derivationPath}`); // Escaped ()
         }
 
         const keypair = Keypair.fromSeed(privateKeySeedBytes); // Keypair from @solana/web3.js (Part 1)
@@ -2223,7 +2219,8 @@ function getKeypairFromPath(derivationPath) {
         console.error(`${logPrefix} Error re-deriving keypair from path ${derivationPath}: ${error.message}`);
         // Avoid logging seed phrase related errors to admin unless absolutely necessary and secured.
         if (!error.message.toLowerCase().includes('deposit_master_seed_phrase')) {
-            console.error(`[ADMIN ALERT POTENTIAL] ${logPrefix} Unexpected error re-deriving key: ${error.message}. Path: ${derivationPath}`);
+            // MarkdownV2 Safety: Escape prefix, error message, path
+            console.error(`[ADMIN ALERT POTENTIAL] ${escapeMarkdownV2(logPrefix)} Unexpected error re-deriving key: ${escapeMarkdownV2(error.message)}\\. Path: ${escapeMarkdownV2(derivationPath)}`);
         }
         return null;
     }
@@ -2263,6 +2260,7 @@ function isRetryableSolanaError(error) {
         'rate limit exceeded', 'unknown block', 'leader not ready', 'heavily throttled',
         'failed to query long-term storage', 'rpc node error', 'temporarily unavailable',
         'service unavailable'
+        // Add more known retryable error substrings if needed
     ];
     if (retryableMessages.some(m => message.includes(m))) return true;
 
@@ -2279,9 +2277,11 @@ function isRetryableSolanaError(error) {
         'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
         'UND_ERR_BODY_TIMEOUT', 'FETCH_TIMEOUT', 'FETCH_ERROR',
         'SLOT_LEADER_NOT_READY', // Some RPCs might return this as a string code
+        // Add more known retryable string codes
     ];
     const retryableErrorCodesNumbers = [ // Numeric codes (often RPC specific, e.g. JSON RPC errors)
         -32000, -32001, -32002, -32003, -32004, -32005, // Common JSON-RPC server error range
+        // Add more known retryable numeric codes
     ];
 
     if (typeof code === 'string' && retryableErrorCodesStrings.includes(code.toUpperCase())) return true;
@@ -2299,6 +2299,7 @@ function isRetryableSolanaError(error) {
         return true;
     }
 
+    // Default to not retryable if none of the above conditions match
     return false;
 }
 
@@ -2317,7 +2318,7 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
         recipientPubKey = (typeof recipientPublicKey === 'string') ? new PublicKey(recipientPublicKey) : recipientPublicKey; // PublicKey from Part 1
         if (!(recipientPubKey instanceof PublicKey)) throw new Error("Invalid recipient public key type");
     } catch (e) {
-        const errorMsg = `Invalid recipient address format: "${recipientPublicKey}". Error: ${e.message}`;
+        const errorMsg = `Invalid recipient address format: "${recipientPublicKey}"\\. Error: ${e.message}`; // Escaped .
         console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`);
         return { success: false, error: errorMsg, isRetryable: false };
     }
@@ -2325,9 +2326,9 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     let amountToSend;
     try {
         amountToSend = BigInt(amountLamports);
-        if (amountToSend <= 0n) throw new Error('Amount to send must be positive.');
+        if (amountToSend <= 0n) throw new Error('Amount to send must be positive\\.'); // Escaped .
     } catch (e) {
-        const errorMsg = `Invalid amountLamports value: '${amountLamports}'. Error: ${e.message}`;
+        const errorMsg = `Invalid amountLamports value: '${amountLamports}'\\. Error: ${e.message}`; // Escaped .
         console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`);
         return { success: false, error: errorMsg, isRetryable: false };
     }
@@ -2347,10 +2348,11 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
 
     const privateKeyBase58 = process.env[privateKeyEnvVar];
     if (!privateKeyBase58) {
-        const errorMsg = `Missing or empty private key environment variable ${privateKeyEnvVar} for payout source ${payoutSource} (Key Type: ${keyTypeForLog}).`;
+        const errorMsg = `Missing or empty private key environment variable ${privateKeyEnvVar} for payout source ${payoutSource} \\(Key Type: ${keyTypeForLog}\\)\\.`; // Escaped . ()
         console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`);
+        // MarkdownV2 Safety: Escape env var, payout source, op ID
         if (typeof notifyAdmin === "function") {
-             await notifyAdmin(`🚨 CRITICAL: Missing private key env var ${escapeMarkdownV2(privateKeyEnvVar)} for payout source ${payoutSource}\\. Payout failed\\. Operation ID: ${escapeMarkdownV2(operationId)}`);
+             await notifyAdmin(`🚨 CRITICAL: Missing private key env var ${escapeMarkdownV2(privateKeyEnvVar)} for payout source ${escapeMarkdownV2(payoutSource)}\\. Payout failed\\. Operation ID: ${escapeMarkdownV2(operationId)}`);
         }
         return { success: false, error: errorMsg, isRetryable: false };
     }
@@ -2359,10 +2361,11 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     try {
         payerWallet = Keypair.fromSecretKey(bs58.decode(privateKeyBase58)); // Keypair, bs58 from Part 1
     } catch (e) {
-        const errorMsg = `Failed to decode private key ${keyTypeForLog} (from env var ${privateKeyEnvVar}): ${e.message}`;
+        const errorMsg = `Failed to decode private key ${keyTypeForLog} \\(from env var ${privateKeyEnvVar}\\): ${e.message}`; // Escaped ()
         console.error(`[${operationId}] ❌ ERROR: ${errorMsg}`);
+        // MarkdownV2 Safety: Escape key type, env var, error message, op ID
         if (typeof notifyAdmin === "function") {
-            await notifyAdmin(`🚨 CRITICAL: Failed to decode private key ${escapeMarkdownV2(keyTypeForLog)} (${escapeMarkdownV2(privateKeyEnvVar)}): ${escapeMarkdownV2(e.message)}\\. Payout failed\\. Operation ID: ${escapeMarkdownV2(operationId)}`);
+            await notifyAdmin(`🚨 CRITICAL: Failed to decode private key ${escapeMarkdownV2(keyTypeForLog)} \\(${escapeMarkdownV2(privateKeyEnvVar)}\\): ${escapeMarkdownV2(e.message)}\\. Payout failed\\. Operation ID: ${escapeMarkdownV2(operationId)}`);
         }
         return { success: false, error: errorMsg, isRetryable: false };
     }
@@ -2373,7 +2376,7 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
     try {
         const { blockhash, lastValidBlockHeight } = await solanaConnection.getLatestBlockhash(DEPOSIT_CONFIRMATION_LEVEL); // solanaConnection, DEPOSIT_CONFIRMATION_LEVEL from Part 1
         if (!blockhash || !lastValidBlockHeight) {
-            throw new Error('Failed to get valid latest blockhash object from RPC.');
+            throw new Error('Failed to get valid latest blockhash object from RPC\\.'); // Escaped .
         }
 
         const basePriorityFee = parseInt(process.env.PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS, 10);
@@ -2406,7 +2409,7 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
         const signature = await sendAndConfirmTransaction( // from Part 1
             solanaConnection,
             transaction,
-            [payerWallet],
+            [payerWallet], // Signer
             {
                 commitment: DEPOSIT_CONFIRMATION_LEVEL,
                 skipPreflight: false, // Recommended to keep preflight for most cases
@@ -2422,28 +2425,35 @@ async function sendSol(recipientPublicKey, amountLamports, payoutSource) {
         console.error(`[${operationId}] ❌ SEND FAILED using ${keyTypeForLog} key. Error: ${error.message}`);
         if (error instanceof SendTransactionError && error.logs) { // SendTransactionError from Part 1
             console.error(`[${operationId}] Simulation Logs (if available, last 10):`);
-            error.logs.slice(-10).forEach(log => console.error(`   -> ${log}`));
+            error.logs.slice(-10).forEach(log => console.error(`   -> ${log}`)); // Note: Logs themselves might contain special chars, careful if displaying to user.
         }
 
         const isRetryable = isRetryableSolanaError(error); // Defined in this Part
-        let userFriendlyError = `Send/Confirm error: ${error.message}`; // Default error
+        // Generate user-friendly error message, ensuring it's escaped for potential display later
+        let userFriendlyError = `Send/Confirm error: ${escapeMarkdownV2(error.message)}`; // Default error, escaped
         const errorMsgLower = String(error.message || '').toLowerCase();
 
         if (errorMsgLower.includes('insufficient lamports') || errorMsgLower.includes('insufficient funds')) {
-            userFriendlyError = `Insufficient funds in the ${keyTypeForLog} payout wallet (${payerWallet.publicKey.toBase58()}). Please check its balance.`;
+            // MarkdownV2 Safety: Escape key type, address, punctuation
+            userFriendlyError = `Insufficient funds in the ${escapeMarkdownV2(keyTypeForLog)} payout wallet \\(${escapeMarkdownV2(payerWallet.publicKey.toBase58())}\\)\\. Please check its balance\\.`;
+            // MarkdownV2 Safety: Escape key type, address, op ID
             if (typeof notifyAdmin === "function") {
-                await notifyAdmin(`🚨 CRITICAL: Insufficient funds in ${escapeMarkdownV2(keyTypeForLog)} wallet (${escapeMarkdownV2(payerWallet.publicKey.toBase58())}) for payout. Operation ID: ${escapeMarkdownV2(operationId)}`);
+                 await notifyAdmin(`🚨 CRITICAL: Insufficient funds in ${escapeMarkdownV2(keyTypeForLog)} wallet \\(${escapeMarkdownV2(payerWallet.publicKey.toBase58())}\\) for payout\\. Operation ID: ${escapeMarkdownV2(operationId)}`);
             }
         } else if (error instanceof TransactionExpiredBlockheightExceededError || errorMsgLower.includes('blockhash not found') || errorMsgLower.includes('block height exceeded')) {
-            userFriendlyError = 'Transaction expired (blockhash invalid). Retrying may be required.';
+             // MarkdownV2 Safety: Escape punctuation
+            userFriendlyError = 'Transaction expired \\(blockhash invalid\\)\\. Retrying may be required\\.';
         } else if (errorMsgLower.includes('transaction was not confirmed') || errorMsgLower.includes('timed out waiting')) {
-            userFriendlyError = `Transaction confirmation timeout. Status unclear, may succeed later. Manual check advised for TX to ${recipientPubKey.toBase58()}.`;
+            // MarkdownV2 Safety: Escape address, punctuation
+            userFriendlyError = `Transaction confirmation timeout\\. Status unclear, may succeed later\\. Manual check advised for TX to ${escapeMarkdownV2(recipientPubKey.toBase58())}\\.`;
         } else if (isRetryable) {
-            userFriendlyError = `Temporary network/RPC error during send/confirm: ${error.message}`;
+             // MarkdownV2 Safety: Escape error message
+            userFriendlyError = `Temporary network/RPC error during send/confirm: ${escapeMarkdownV2(error.message)}`;
         }
-        // If no specific user-friendly message was set, the default one with error.message stands.
+        // If no specific user-friendly message was set, the default one with escaped error.message stands.
 
         console.error(`[${operationId}] Failure details - Retryable: ${isRetryable}, User Friendly Error: "${userFriendlyError}"`);
+        // Return the *already escaped* user-friendly error message
         return { success: false, error: userFriendlyError, isRetryable: isRetryable };
     }
 }
@@ -2479,69 +2489,61 @@ function analyzeTransactionAmounts(tx, targetAddress) {
         return { transferAmount: 0n, payerAddress: null };
     }
 
+    // Analyze balance changes (primary method)
     if (tx.meta?.preBalances && tx.meta?.postBalances && tx.transaction?.message) {
         try {
             let accountKeysList = [];
             const message = tx.transaction.message;
 
-            // Construct the full list of account keys involved in the transaction
-            // Versioned transactions (v0) store static keys in `message.accountKeys` and LUT addresses in `meta.loadedAddresses`
-            // Legacy transactions store all keys in `message.accountKeys` (older versions) or `message.staticAccountKeys` (newer legacy).
-            if (message.staticAccountKeys && message.staticAccountKeys.length > 0) { // Newer legacy or specific v0 cases without LUTs
-                accountKeysList = message.staticAccountKeys.map(k => k.toBase58());
-            } else if (message.accountKeys && message.accountKeys.length > 0) { // v0 transactions or older legacy
-                accountKeysList = message.accountKeys.map(k => k.toBase58());
-                 // For v0 transactions with LUTs, combine static keys with keys from loaded LUTs
+            // Correctly determine the list of accounts corresponding to pre/postBalances
+            // This depends on transaction version (legacy vs v0) and presence of LUTs.
+            // The `TransactionMessage` object provides methods to get keys in the correct order.
+            let keysForBalanceLookup = [];
+            if (message.getAccountKeys) { // Check if method exists (newer @solana/web3.js)
+                const accountKeysParams = tx.meta.loadedAddresses ? { accountKeys: message.accountKeys, addressLookupTableAccounts: tx.meta.loadedAddresses } : undefined;
+                 // If getAccountKeys needs loadedAddresses, you might need to fetch them if not present in meta for older RPC responses
+                keysForBalanceLookup = message.getAccountKeys(accountKeysParams).staticAccountKeys.map(k => k.toBase58());
+                // For v0 with LUTs, the full list includes loaded addresses
                 if (tx.meta.loadedAddresses) {
-                    const writableLut = tx.meta.loadedAddresses.writable || [];
-                    const readonlyLut = tx.meta.loadedAddresses.readonly || [];
-                    accountKeysList = [...accountKeysList, ...writableLut.map(k => k.toBase58()), ...readonlyLut.map(k => k.toBase58())];
+                    keysForBalanceLookup = [
+                        ...keysForBalanceLookup, // Static keys first
+                        ...(tx.meta.loadedAddresses.writable || []).map(k => k.toBase58()),
+                        ...(tx.meta.loadedAddresses.readonly || []).map(k => k.toBase58())
+                    ];
                 }
+            } else { // Fallback for older structures or libraries (less robust)
+                keysForBalanceLookup = (message.staticAccountKeys || message.accountKeys || []).map(k => k.toBase58());
+                 if (tx.meta.loadedAddresses) { // Combine if LUTs present
+                    keysForBalanceLookup = [
+                         ...keysForBalanceLookup,
+                         ...(tx.meta.loadedAddresses.writable || []).map(k => k.toBase58()),
+                         ...(tx.meta.loadedAddresses.readonly || []).map(k => k.toBase58())
+                    ];
+                 }
+            }
+
+            if (keysForBalanceLookup.length !== tx.meta.preBalances.length || keysForBalanceLookup.length !== tx.meta.postBalances.length) {
+                 console.warn(`${logPrefix} Account key length mismatch with balance arrays. Keys: ${keysForBalanceLookup.length}, Pre: ${tx.meta.preBalances.length}, Post: ${tx.meta.postBalances.length}. Cannot reliably determine balance change.`);
             } else {
-                throw new Error("Could not determine account keys from transaction message structure.");
-            }
+                const targetIndex = keysForBalanceLookup.indexOf(targetAddress);
 
+                if (targetIndex !== -1) {
+                    const preBalance = BigInt(tx.meta.preBalances[targetIndex]);
+                    const postBalance = BigInt(tx.meta.postBalances[targetIndex]);
+                    const balanceChange = postBalance - preBalance;
 
-            // The preBalances and postBalances arrays correspond to the order of accountKeys
-            // (static first, then loaded writable, then loaded readonly for v0 with LUTs).
-            // For simplicity and broader compatibility, we'll use the accountKeysList derived above
-            // and find the targetAddress index within it. This assumes pre/postBalances align with this constructed list.
-            // Note: The @solana/web3.js library's `TransactionMessage`'s `accountKeys` (if versioned)
-            // or `staticAccountKeys` (if legacy) should provide the correct mapping for pre/postBalances.
-            // The most robust way is to use `tx.transaction.message.getAccountKeys()` if available and it resolves LUTs.
-            // However, `getAccountKeys()` might need `meta.loadedAddresses` passed to it for v0.
-            // For now, using the constructed uniqueAccountKeys.
-
-            const uniqueAccountKeys = [...new Set(accountKeysList)]; // Ensure uniqueness, though order matters for balance arrays.
-                                                                  // Sticking to tx.transaction.message.accountKeys for indexing if possible for direct alignment.
-            let keysForBalanceLookup = message.accountKeys.map(k => k.toBase58());
-            if (tx.meta.loadedAddresses) { // If LUTs are involved, the balance arrays are longer
-                 keysForBalanceLookup = [
-                    ...message.accountKeys.map(k => k.toBase58()),
-                    ...(tx.meta.loadedAddresses.writable || []).map(k => k.toBase58()),
-                    ...(tx.meta.loadedAddresses.readonly || []).map(k => k.toBase58())
-                ];
-            }
-
-
-            const targetIndex = keysForBalanceLookup.indexOf(targetAddress);
-
-            if (targetIndex !== -1 &&
-                tx.meta.preBalances.length > targetIndex &&
-                tx.meta.postBalances.length > targetIndex) {
-                const preBalance = BigInt(tx.meta.preBalances[targetIndex]);
-                const postBalance = BigInt(tx.meta.postBalances[targetIndex]);
-                const balanceChange = postBalance - preBalance;
-
-                if (balanceChange > 0n) {
-                    transferAmount = balanceChange;
-                    // Determine payer: typically the first signer if not explicitly known otherwise
-                    if (message.header && message.header.numRequiredSignatures > 0 && message.accountKeys.length > 0) {
-                        payerAddress = message.accountKeys[0].toBase58(); // First account is usually the fee payer
+                    if (balanceChange > 0n) {
+                        transferAmount = balanceChange;
+                        // Determine payer: typically the first signer (fee payer)
+                         // Accessing message.accountKeys directly might be needed for signer info
+                        const signerKeys = (message.staticAccountKeys || message.accountKeys || []);
+                        if (message.header && message.header.numRequiredSignatures > 0 && signerKeys.length > 0) {
+                            payerAddress = signerKeys[0].toBase58(); // First account is usually the fee payer/first signer
+                        }
                     }
+                } else {
+                    console.log(`${logPrefix} Target address ${targetAddress} not found in transaction account keys used for balance lookup.`);
                 }
-            } else {
-                console.warn(`${logPrefix} Target address ${targetAddress} not found in transaction account keys, or balance arrays too short. Keys: ${keysForBalanceLookup.join(', ')}`);
             }
         } catch (e) {
             console.warn(`${logPrefix} Error analyzing balance changes for TX: ${e.message}. TX structure might be unexpected.`);
@@ -2555,35 +2557,23 @@ function analyzeTransactionAmounts(tx, targetAddress) {
     // Fallback: Check Log Messages (Less reliable, but can sometimes catch simple transfers if balance analysis fails)
     // This is a very basic check and might misinterpret complex interactions.
     if (transferAmount === 0n && tx.meta?.logMessages) {
+        // Regex for SystemProgram transfers (more specific)
         const sysTransferRegex = /Program(?:.*System Program|.*11111111111111111111111111111111) invoke \[\d+\]\s+Program log: Transfer: src=([1-9A-HJ-NP-Za-km-z]{32,44}) dst=([1-9A-HJ-NP-Za-km-z]{32,44}) lamports=(\d+)/;
-        // A more generic check for any instruction logging a transfer to the targetAddress.
-        const generalTransferToTargetRegex = new RegExp(`Transfer(?:.*)to ${targetAddress}(?:.*)lamports=(\\d+)`, 'i');
-
+        // A more generic check for any instruction logging a transfer *to* the targetAddress. Be careful with this one.
+        // Example: "Program log: Instruction: Transfer", followed by logs indicating source/dest/amount
+        // This requires more complex log parsing and is less reliable than balance changes.
+        // Sticking to the SystemProgram regex as a simple fallback.
 
         for (const log of tx.meta.logMessages) {
             const match = log.match(sysTransferRegex);
-            if (match && match[2] === targetAddress) {
+            if (match && match[2] === targetAddress) { // Check if destination matches target
                 const potentialAmount = BigInt(match[3]);
                 if (potentialAmount > 0n) {
                     console.log(`${logPrefix} Found potential transfer via SystemProgram log message: ${formatSol(potentialAmount)} SOL from ${match[1]}`);
                     transferAmount = potentialAmount;
                     payerAddress = match[1]; // Source from the log
-                    break; // Take the first such explicit transfer found
+                    break; // Take the first such explicit SystemProgram transfer found
                 }
-            } else {
-                 const generalMatch = log.match(generalTransferToTargetRegex);
-                 if (generalMatch) {
-                    const potentialAmount = BigInt(generalMatch[1]);
-                    if (potentialAmount > 0n && transferAmount === 0n) { // Only if not already found by specific regex
-                         console.log(`${logPrefix} Found potential transfer via general log message: ${formatSol(potentialAmount)} SOL.`);
-                         transferAmount = potentialAmount;
-                         // Payer might be harder to determine from this generic log.
-                         if (tx.transaction.message.header && tx.transaction.message.accountKeys.length > 0) {
-                            payerAddress = tx.transaction.message.accountKeys[0].toBase58();
-                         }
-                         // Don't break here, sysTransferRegex is more precise.
-                    }
-                 }
             }
         }
     }
@@ -2617,8 +2607,9 @@ async function notifyAdmin(message) {
     }
 
     const timestamp = new Date().toISOString();
-    // escapeMarkdownV2 is defined in Part 1
+    // escapeMarkdownV2 is defined in Part 1 - Escapes the user-provided message content
     const escapedMessage = escapeMarkdownV2(message);
+    // MarkdownV2 Safety: Manually escape the wrapper text's special characters
     const fullMessage = `🚨 *BOT ALERT* 🚨\n\\[${escapeMarkdownV2(timestamp)}\\]\n\n${escapedMessage}`;
 
     console.log(`[NotifyAdmin] Sending alert: "${message.substring(0, 100)}..." to ${adminIds.length} admin(s).`);
@@ -2626,7 +2617,8 @@ async function notifyAdmin(message) {
     // Use Promise.allSettled to attempt sending to all admins and log individual failures
     const results = await Promise.allSettled(
         adminIds.map(adminId =>
-            safeSendMessage(adminId, fullMessage, { parse_mode: 'MarkdownV2' }) // safeSendMessage defined below
+            // safeSendMessage itself handles internal queuing and API errors
+            safeSendMessage(adminId, fullMessage, { parse_mode: 'MarkdownV2' }) // Pass the fully constructed and escaped message
         )
     );
 
@@ -2642,7 +2634,7 @@ async function notifyAdmin(message) {
  * Safely sends a Telegram message using the dedicated queue for rate limiting.
  * Handles potential errors and message length limits.
  * @param {string | number} chatId Target chat ID.
- * @param {string} text Message text.
+ * @param {string} text Message text. **Should already be escaped if using MarkdownV2 parse_mode**.
  * @param {import('node-telegram-bot-api').SendMessageOptions} [options={}] Additional send options (e.g., parse_mode, reply_markup).
  * @returns {Promise<import('node-telegram-bot-api').Message | undefined>} The sent message object or undefined on failure.
  */
@@ -2655,16 +2647,20 @@ async function safeSendMessage(chatId, text, options = {}) {
     const MAX_LENGTH = 4096; // Telegram API message length limit
     let messageToSend = text;
 
+    // Truncate if necessary BEFORE adding to queue
     if (messageToSend.length > MAX_LENGTH) {
         console.warn(`[safeSendMessage] Message for chat ${chatId} too long (${messageToSend.length} chars), truncating to ${MAX_LENGTH}.`);
+        // Ensure ellipsis is also escaped if needed for the specified parse mode
         const ellipsis = "... (truncated)";
-        // Adjust truncation length based on parse mode to ensure ellipsis itself doesn't cause parse error
-        const ellipsisLength = (options.parse_mode === 'MarkdownV2' || options.parse_mode === 'Markdown')
-                             ? escapeMarkdownV2(ellipsis).length
-                             : ellipsis.length;
+        const escapedEllipsis = (options.parse_mode === 'MarkdownV2' || options.parse_mode === 'Markdown')
+                                ? escapeMarkdownV2(ellipsis)
+                                : ellipsis;
+        const ellipsisLength = escapedEllipsis.length;
         const truncateAt = MAX_LENGTH - ellipsisLength;
-        messageToSend = messageToSend.substring(0, truncateAt) +
-                        ((options.parse_mode === 'MarkdownV2' || options.parse_mode === 'Markdown') ? escapeMarkdownV2(ellipsis) : ellipsis);
+        // Ensure truncation happens at a valid point (avoid cutting multi-byte chars or Markdown entities)
+        // This simple substring is often okay but can break complex Markdown or unicode.
+        // A more robust solution would parse/tokenize or use character counts carefully.
+        messageToSend = messageToSend.substring(0, truncateAt) + escapedEllipsis;
     }
 
     // telegramSendQueue is from Part 1
@@ -2679,18 +2675,20 @@ async function safeSendMessage(chatId, text, options = {}) {
                 const errorCode = error.response.body.error_code;
                 const description = error.response.body.description?.toLowerCase() || '';
 
-                if (errorCode === 403 || description.includes('blocked by the user') || description.includes('user is deactivated') || description.includes('bot was kicked') || description.includes('chat not found')) {
+                // Handle specific errors like user blocking the bot
+                if (errorCode === 403 || description.includes('blocked by the user') || description.includes('user is deactivated') || description.includes('bot was kicked') || description.includes('chat not found') || description.includes("bots can't send messages to bots")) {
                     console.warn(`[TG Send] Bot interaction issue with chat ${chatId}: ${description}. Further messages might fail.`);
                     // Consider marking user/chat as inactive in DB to prevent further send attempts.
-                } else if (errorCode === 400 && (description.includes('parse error') || description.includes('can\'t parse entities') || description.includes('wrong file identifier'))) {
-                    console.error(`❌❌❌ Telegram Parse Error or Bad Request! Message for chat ${chatId}. Description: ${description}`);
-                    console.error(`   -> Original Text (first 200 chars): ${text.substring(0,200)}`);
-                    console.error(`   -> Sent Text (first 200 chars): ${messageToSend.substring(0,200)}`);
+                } else if (errorCode === 400 && (description.includes('parse error') || description.includes('can\'t parse entities') || description.includes('wrong file identifier') || description.includes("character") || description.includes("tag"))) {
+                    // Log parse errors more verbosely for debugging
+                    console.error(`❌❌❌ Telegram Parse Error or Bad Request! Chat: ${chatId}. Description: ${description}`);
+                    console.error(`   -> Sent Text (first 200 chars): ${messageToSend.substring(0,200)}`); // Log the exact text that failed
                     console.error(`   -> Options: ${JSON.stringify(options)}`);
                     // Notify admin about persistent parse errors
                     if (typeof notifyAdmin === "function") {
-                         await notifyAdmin(`🚨 Telegram Parse Error in \`safeSendMessage\`\nChatID: ${chatId}\nOptions: ${JSON.stringify(options)}\nError: ${escapeMarkdownV2(description)}\nOriginal Text (Truncated):\n\`\`\`\n${escapeMarkdownV2(text.substring(0, 300))}\n\`\`\``)
-                             .catch(e => console.error("Failed to send admin notification about parse error:", e));
+                         // MarkdownV2 Safety: Escape chat ID, options, description, text preview
+                         await notifyAdmin(`🚨 Telegram Parse Error in \`safeSendMessage\`\nChatID: ${escapeMarkdownV2(String(chatId))}\nOptions: ${escapeMarkdownV2(JSON.stringify(options))}\nError: ${escapeMarkdownV2(description)}\nText Preview (Truncated):\n\`\`\`\n${escapeMarkdownV2(messageToSend.substring(0, 300))}\n\`\`\``)
+                               .catch(e => console.error("Failed to send admin notification about parse error:", e));
                     }
                 } else if (errorCode === 429) { // Too Many Requests - Should be handled by queue, but if API bursts, log it.
                      console.warn(`[TG Send] Received 429 (Too Many Requests) for chat ${chatId} despite queue. Queue interval might need adjustment or global limit hit. Error: ${description}`);
@@ -2699,10 +2697,11 @@ async function safeSendMessage(chatId, text, options = {}) {
             return undefined; // Indicate failure
         }
     }).catch(queueError => {
-        // This catch is for errors adding to the PQueue itself (e.g., queue timeout if throwOnTimeout was true, though typically it's for the promise from the task)
-        console.error(`❌ Error adding job to telegramSendQueue for chat ${chatId}:`, queueError.message);
+        // This catch is for errors adding to the PQueue itself or task promise rejections not caught inside
+        console.error(`❌ Error adding/executing job in telegramSendQueue for chat ${chatId}:`, queueError.message);
+        // MarkdownV2 Safety: Escape chat ID and error message
         if (typeof notifyAdmin === "function") {
-            notifyAdmin(`🚨 ERROR adding job to telegramSendQueue for Chat ${chatId}: ${escapeMarkdownV2(queueError.message)}`).catch(()=>{});
+            notifyAdmin(`🚨 ERROR adding/executing job in telegramSendQueue for Chat ${escapeMarkdownV2(String(chatId))}: ${escapeMarkdownV2(queueError.message)}`).catch(()=>{});
         }
         return undefined;
     });
@@ -2719,11 +2718,12 @@ function escapeHtml(text) {
         return '';
     }
     const textString = String(text);
+    // Basic HTML escaping
     return textString.replace(/&/g, "&amp;")
                      .replace(/</g, "&lt;")
                      .replace(/>/g, "&gt;")
                      .replace(/"/g, "&quot;")
-                     .replace(/'/g, "&#039;"); // Or use &apos; if target supports it. &#039; is safer.
+                     .replace(/'/g, "&#039;"); // Use &#039; for broader compatibility than &apos;
 }
 
 /**
@@ -2737,12 +2737,18 @@ async function getUserDisplayName(chatId, userId) {
     const strUserId = String(userId);
     const strChatId = String(chatId);
     try {
+        // Use getChatMember to fetch user details within the context of a chat
         const member = await bot.getChatMember(strChatId, strUserId); // bot from Part 1
         const user = member.user;
         let name = '';
         if (user.username) {
+            // Usernames starting with @ are handled correctly by Telegram MarkdownV2, no escaping needed *if used as a mention*
+            // If used purely as text, the '@' might need consideration, but typically it's for mentions.
+             // Let's escape the username just in case it's used in a context where '@' isn't automatically a mention.
+             // Standard practice is usually NOT to escape @usernames. Let's stick to that.
             name = `@${user.username}`; // Usernames don't need MdV2 escaping when used as @username
         } else {
+            // Construct name from first/last, escape for MarkdownV2
             if (user.first_name) {
                 name = user.first_name;
                 if (user.last_name) {
@@ -2751,11 +2757,12 @@ async function getUserDisplayName(chatId, userId) {
             } else {
                 name = `User ${strUserId.slice(-4)}`; // Fallback if no name
             }
-            name = escapeMarkdownV2(name); // Escape first/last names or fallback
+            name = escapeMarkdownV2(name); // Escape first/last names or fallback ID
         }
         return name;
     } catch (error) {
         console.warn(`[getUserDisplayName] Failed to get chat member for user ${strUserId} in chat ${strChatId}: ${error.message}. Falling back to ID.`);
+        // MarkdownV2 Safety: Escape the fallback ID display
         return escapeMarkdownV2(`User ${strUserId.slice(-4)}`); // Fallback, escaped
     }
 }
@@ -2772,11 +2779,13 @@ function updateWalletCache(userId, data) {
     }
 
     const entryTimestamp = Date.now();
-    const newData = { ...(existingEntry || {}), ...data, timestamp: entryTimestamp }; // Merge with existing, update timestamp
+    // Merge new data with existing, ensuring timestamp is updated
+    const newData = { ...(existingEntry || {}), ...data, timestamp: entryTimestamp };
 
+    // Set TTL expiry
     const timeoutId = setTimeout(() => {
         const currentEntry = walletCache.get(userId);
-        // Only delete if it's the same entry we set the timeout for (check timestamp)
+        // Verify it's the same entry before deleting (prevent race condition deletion)
         if (currentEntry && currentEntry.timestamp === entryTimestamp) {
             walletCache.delete(userId);
             // console.log(`[Cache] Wallet cache expired and removed for user ${userId}`);
@@ -2784,7 +2793,8 @@ function updateWalletCache(userId, data) {
     }, WALLET_CACHE_TTL_MS); // WALLET_CACHE_TTL_MS from Part 1
 
     newData.timeoutId = timeoutId;
-    if (timeoutId.unref) { // Allows Node.js to exit if this is the only thing in event loop
+    // Allow Node.js to exit even if only cache timers remain
+    if (timeoutId.unref) {
         timeoutId.unref();
     }
     walletCache.set(userId, newData);
@@ -2795,14 +2805,15 @@ function getWalletCache(userId) {
     userId = String(userId);
     const entry = walletCache.get(userId);
     if (entry) { // Check if entry exists
+        // Check if TTL is still valid
         if (Date.now() - entry.timestamp < WALLET_CACHE_TTL_MS) {
             return entry; // Valid and not expired
         } else {
-            // Expired, remove it
-            if(entry.timeoutId) clearTimeout(entry.timeoutId);
+            // Entry found but expired, remove it
+            if(entry.timeoutId) clearTimeout(entry.timeoutId); // Clear the expiry timer
             walletCache.delete(userId);
             // console.log(`[Cache] Wallet cache for user ${userId} was expired upon access.`);
-            return undefined; // Expired
+            return undefined; // Return undefined for expired
         }
     }
     return undefined; // Not found
@@ -2812,29 +2823,30 @@ function getWalletCache(userId) {
 function addActiveDepositAddressCache(address, userId, expiresAtTimestamp) {
     const existingEntry = activeDepositAddresses.get(address); // activeDepositAddresses from Part 1
     if (existingEntry?.timeoutId) {
-        clearTimeout(existingEntry.timeoutId);
+        clearTimeout(existingEntry.timeoutId); // Clear previous timer if updating
     }
 
     const newEntry = { userId: String(userId), expiresAt: expiresAtTimestamp };
 
     const delay = expiresAtTimestamp - Date.now();
+    // Only set timeout and add to cache if it hasn't already expired
     if (delay > 0) {
         const timeoutId = setTimeout(() => {
             const currentEntry = activeDepositAddresses.get(address);
-            // Only delete if it's the same entry (check all relevant fields, or use a unique ID per entry if needed)
+            // Verify it's the exact entry we set the timer for before deleting
             if (currentEntry && currentEntry.userId === String(userId) && currentEntry.expiresAt === expiresAtTimestamp) {
                 activeDepositAddresses.delete(address);
                 // console.log(`[Cache] Active deposit address ${address} expired and removed from cache.`);
             }
         }, delay);
         newEntry.timeoutId = timeoutId;
-        if (timeoutId.unref) {
+        if (timeoutId.unref) { // Allow Node.js to exit if only timers remain
             timeoutId.unref();
         }
         activeDepositAddresses.set(address, newEntry);
     } else {
-        // Already expired, don't add or ensure it's removed if somehow present
-        activeDepositAddresses.delete(address); // Ensure it's not in cache if already expired
+        // Address provided is already expired, ensure it's not in the cache
+        activeDepositAddresses.delete(address);
         // console.log(`[Cache] Attempted to add already expired deposit address ${address} to cache. Not added/Ensured removed.`);
     }
 }
@@ -2846,7 +2858,7 @@ function getActiveDepositAddressCache(address) {
         if (Date.now() < entry.expiresAt) {
             return entry; // Valid and not expired
         } else {
-            // Expired, clear it from cache
+            // Entry found but is expired, remove it from cache
             if(entry.timeoutId) clearTimeout(entry.timeoutId);
             activeDepositAddresses.delete(address);
             // console.log(`[Cache] Active deposit address ${address} was expired upon access from cache.`);
@@ -2860,57 +2872,38 @@ function getActiveDepositAddressCache(address) {
 function removeActiveDepositAddressCache(address) {
     const entry = activeDepositAddresses.get(address);
     if (entry?.timeoutId) {
-        clearTimeout(entry.timeoutId);
+        clearTimeout(entry.timeoutId); // Clear associated timer
     }
-    const deleted = activeDepositAddresses.delete(address);
+    const deleted = activeDepositAddresses.delete(address); // Remove from map
     // if(deleted) console.log(`[Cache] Explicitly removed deposit address ${address} from cache.`);
-    return deleted;
+    return deleted; // Return true if an element was deleted, false otherwise
 }
 
 /** Adds a transaction signature to the processed deposit cache (Set acts like LRU by re-adding). */
 function addProcessedDepositTx(signature) {
-    // Set inherently handles uniqueness.
-    // For LRU behavior with a fixed size Set, we'd need to manage it manually:
-    // if size > MAX, remove oldest. But Set doesn't preserve insertion order directly for easy "oldest" removal.
-    // A simple Set will prevent re-processing recently seen TXs.
-    // For a strict LRU with size limit, an array + Set or a dedicated LRU cache library would be better.
-    // Given MAX_PROCESSED_TX_CACHE_SIZE, a more robust LRU might be needed if memory becomes an issue.
-    // For now, simple Set:
-    if (processedDepositTxSignatures.has(signature)) { // processedDepositTxSignatures from Part 1
-        // If it's already there, and we want to make it "newest" for some LRU strategies,
-        // we might delete and re-add. But for a simple "have I seen this?" Set, no action needed.
-        return;
+    // processedDepositTxSignatures is a Set from Part 1
+    // Sets automatically handle uniqueness.
+
+    // Simple approach: Just add. If memory becomes an issue, implement LRU.
+    // A Set doesn't guarantee order for easy LRU. Use an Array + Set or Map for LRU.
+    // Current implementation just prevents immediate re-processing.
+    // Check MAX_PROCESSED_TX_CACHE_SIZE (from Part 1)
+    if (processedDepositTxSignatures.size >= MAX_PROCESSED_TX_CACHE_SIZE && !processedDepositTxSignatures.has(signature)) {
+         // Basic FIFO-like eviction if size limit is reached: delete an arbitrary element.
+         // This is NOT true LRU. For true LRU, use a dedicated library or Map.
+         const firstElementIterator = processedDepositTxSignatures.values();
+         const elementToRemove = firstElementIterator.next().value;
+         if (elementToRemove) {
+             processedDepositTxSignatures.delete(elementToRemove);
+              console.warn(`[Cache] Processed deposit TX cache reached limit (${MAX_PROCESSED_TX_CACHE_SIZE}). Removed an element to make space.`);
+         }
     }
-
-    // Simple size management: if full, delete a random one (not true LRU) or just let it grow.
-    // The original code's LRU was: delete oldest if full, then add.
-    // With a Set, "oldest" is not trivial. We can convert to array, shift, then re-create set, or use a proper LRU.
-    // For simplicity here, if size exceeds, we'll just warn or implement a basic FIFO-like removal if critical.
-    // The current set just grows. If MAX_PROCESSED_TX_CACHE_SIZE is important, an actual LRU cache is better.
-    // Original had:
-    // if (processedDepositTxSignatures.size >= MAX_PROCESSED_TX_CACHE_SIZE) {
-    //     const oldestSig = processedDepositTxSignatures.values().next().value; // This gets an arbitrary value, not necessarily oldest for a Set
-    //     if (oldestSig) processedDepositTxSignatures.delete(oldestSig);
-    // }
-    // This "oldestSig" from a Set is not guaranteed. Using an array as a queue alongside the set is better for LRU.
-    // For now, just add to the set. The cache's primary goal is to prevent immediate re-processing.
     processedDepositTxSignatures.add(signature);
-
-    // If strict size limiting is critical:
-    // static processedTxArrayForLru = [];
-    // if (!processedDepositTxSignatures.has(signature)) {
-    //    if (processedTxArrayForLru.length >= MAX_PROCESSED_TX_CACHE_SIZE) {
-    //        const removedSig = processedTxArrayForLru.shift();
-    //        processedDepositTxSignatures.delete(removedSig);
-    //    }
-    //    processedTxArrayForLru.push(signature);
-    //    processedDepositTxSignatures.add(signature);
-    // }
 }
 
 /** Checks if a transaction signature exists in the processed deposit cache. */
 function hasProcessedDepositTx(signature) {
-    return processedDepositTxSignatures.has(signature);
+    return processedDepositTxSignatures.has(signature); // Check existence in the Set
 }
 
 
