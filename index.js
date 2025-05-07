@@ -6138,54 +6138,60 @@ async function initializeDatabase() {
 
 
         // Referral Payouts Table
-        console.log('⚙️ [DB Init] Ensuring referral_payouts table...');
+        console.log('⚙️ [DB Init] Ensuring referral_payouts table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS referral_payouts (
+                id SERIAL PRIMARY KEY,
+                referrer_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
+                referee_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE, -- The user who generated the reward
+                payout_type VARCHAR(20) NOT NULL, -- 'initial_bet', 'milestone'
+                payout_amount_lamports BIGINT NOT NULL,
+                triggering_bet_id INTEGER REFERENCES bets(id) ON DELETE SET NULL, -- For 'initial_bet' type
+                milestone_reached_lamports BIGINT, -- For 'milestone' type, stores the wager threshold achieved
+                status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, processing, paid, failed
+                payout_tx_signature VARCHAR(88) UNIQUE,
+                error_message TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                processed_at TIMESTAMPTZ,
+                paid_at TIMESTAMPTZ
+                -- Removed incorrect inline: CONSTRAINT idx_refpayout_unique_milestone UNIQUE (referrer_user_id, referee_user_id, payout_type, milestone_reached_lamports) WHERE (payout_type = 'milestone')
+            );
+        `);
+        // Correctly define the partial unique index separately:
+        console.log('⚙️ [DB Init] Ensuring referral_payouts unique partial index for milestones...');
         await client.query(`
-            CREATE TABLE IF NOT EXISTS referral_payouts (
-                id SERIAL PRIMARY KEY,
-                referrer_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                referee_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE, -- The user who generated the reward
-                payout_type VARCHAR(20) NOT NULL, -- 'initial_bet', 'milestone'
-                payout_amount_lamports BIGINT NOT NULL,
-                triggering_bet_id INTEGER REFERENCES bets(id) ON DELETE SET NULL, -- For 'initial_bet' type
-                milestone_reached_lamports BIGINT, -- For 'milestone' type, stores the wager threshold achieved
-                status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, processing, paid, failed
-                payout_tx_signature VARCHAR(88) UNIQUE,
-                error_message TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                processed_at TIMESTAMPTZ,
-                paid_at TIMESTAMPTZ,
-                CONSTRAINT idx_refpayout_unique_milestone UNIQUE (referrer_user_id, referee_user_id, payout_type, milestone_reached_lamports) WHERE (payout_type = 'milestone')
-            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_refpayout_unique_milestone ON referral_payouts
+            (referrer_user_id, referee_user_id, payout_type, milestone_reached_lamports)
+            WHERE (payout_type = 'milestone');
         `);
-        console.log('⚙️ [DB Init] Ensuring referral_payouts indexes...');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_refpayout_referrer_status ON referral_payouts (referrer_user_id, status);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_refpayout_referee ON referral_payouts (referee_user_id);');
+        console.log('⚙️ [DB Init] Ensuring other referral_payouts indexes...'); // Changed log slightly
+        await client.query('CREATE INDEX IF NOT EXISTS idx_refpayout_referrer_status ON referral_payouts (referrer_user_id, status);');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_refpayout_referee ON referral_payouts (referee_user_id);');
 
 
-        // Ledger Table
-        console.log('⚙️ [DB Init] Ensuring ledger table...');
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS ledger (
-                id BIGSERIAL PRIMARY KEY,
-                user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                transaction_type VARCHAR(50) NOT NULL, -- e.g., 'deposit', 'bet_placed:coinflip', 'bet_win:slots', 'withdrawal_fee', 'withdrawal_request', 'withdrawal_refund', 'referral_bonus_credit' (though bonuses are external payouts)
-                amount_lamports BIGINT NOT NULL, -- Positive for credit, negative for debit to user's internal balance
-                balance_before BIGINT NOT NULL,
-                balance_after BIGINT NOT NULL,
-                related_bet_id INTEGER REFERENCES bets(id) ON DELETE SET NULL,
-                related_deposit_id INTEGER REFERENCES deposits(id) ON DELETE SET NULL,
-                related_withdrawal_id INTEGER REFERENCES withdrawals(id) ON DELETE SET NULL,
-                related_ref_payout_id INTEGER REFERENCES referral_payouts(id) ON DELETE SET NULL, -- If internal balance was used for ref payout (not typical for this bot's external payout model)
-                notes TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-        `);
-        console.log('⚙️ [DB Init] Ensuring ledger indexes...');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_desc ON ledger (user_id, created_at DESC);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger (transaction_type);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_related_bet_id ON ledger (related_bet_id) WHERE related_bet_id IS NOT NULL;');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_related_withdrawal_id ON ledger (related_withdrawal_id) WHERE related_withdrawal_id IS NOT NULL;');
-
+        // Ledger Table
+        console.log('⚙️ [DB Init] Ensuring ledger table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS ledger (
+                id BIGSERIAL PRIMARY KEY,
+                user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
+                transaction_type VARCHAR(50) NOT NULL, -- e.g., 'deposit', 'bet_placed:coinflip', 'bet_win:slots', 'withdrawal_fee', 'withdrawal_request', 'withdrawal_refund', 'referral_bonus_credit' (though bonuses are external payouts)
+                amount_lamports BIGINT NOT NULL, -- Positive for credit, negative for debit to user's internal balance
+                balance_before BIGINT NOT NULL,
+                balance_after BIGINT NOT NULL,
+                related_bet_id INTEGER REFERENCES bets(id) ON DELETE SET NULL,
+                related_deposit_id INTEGER REFERENCES deposits(id) ON DELETE SET NULL,
+                related_withdrawal_id INTEGER REFERENCES withdrawals(id) ON DELETE SET NULL,
+                related_ref_payout_id INTEGER REFERENCES referral_payouts(id) ON DELETE SET NULL, -- If internal balance was used for ref payout (not typical for this bot's external payout model)
+                notes TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        `);
+        console.log('⚙️ [DB Init] Ensuring ledger indexes...');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_desc ON ledger (user_id, created_at DESC);');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger (transaction_type);');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_related_bet_id ON ledger (related_bet_id) WHERE related_bet_id IS NOT NULL;');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_ledger_related_withdrawal_id ON ledger (related_withdrawal_id) WHERE related_withdrawal_id IS NOT NULL;');
 
         // Jackpots Table
         console.log('⚙️ [DB Init] Ensuring jackpots table...');
