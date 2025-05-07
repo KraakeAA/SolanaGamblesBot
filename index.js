@@ -1,5 +1,5 @@
 // index.js - Part 1: Imports, Environment Configuration, Core Initializations
-// --- VERSION: 3.2.0 --- (Implement Crash, Blackjack, Slots Jackpot, Foundational UX Fixes/Adds)
+// --- VERSION: 3.2.1 --- (Fix RACE_HORSES export, other minor consistency)
 
 // --- All Imports MUST come first ---
 import 'dotenv/config'; // Keep for local development via .env file
@@ -7,7 +7,7 @@ import { Pool } from 'pg';
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import {
-    Connection, // Use Connection directly or RateLimitedConnection if preferred
+    Connection,
     PublicKey,
     LAMPORTS_PER_SOL,
     Keypair,
@@ -16,63 +16,49 @@ import {
     sendAndConfirmTransaction,
     ComputeBudgetProgram,
     SendTransactionError,
-    TransactionExpiredBlockheightExceededError // Import specific error type if needed for retries
+    TransactionExpiredBlockheightExceededError
 } from '@solana/web3.js';
 import bs58 from 'bs58';
-import * as crypto from 'crypto'; // Keep for other crypto uses if any
-import { createHash } from 'crypto'; // *** Ensure this import is present ***
+import * as crypto from 'crypto';
+import { createHash } from 'crypto';
 import PQueue from 'p-queue';
 import { Buffer } from 'buffer';
-import bip39 from 'bip39'; // For mnemonic seed phrase generation/validation
-// ---- Library Change ----
-import { derivePath } from 'ed25519-hd-key'; // <-- RESTORED OLD LIBRARY IMPORT (with workaround now)
-// ------------------------
-import nacl from 'tweetnacl'; // Keep for keypair generation from derived seed
+import bip39 from 'bip39';
+import { derivePath } from 'ed25519-hd-key';
+import nacl from 'tweetnacl';
 
-// Assuming RateLimitedConnection exists and works as intended
-import RateLimitedConnection from './lib/solana-connection.js'; // Ensure this path is correct
+import RateLimitedConnection from './lib/solana-connection.js';
 
-// --- Deployment Check Log ---
-const BOT_VERSION = process.env.npm_package_version || '3.2.0'; // Use package version or fallback - Updated version
+const BOT_VERSION = process.env.npm_package_version || '3.2.1'; // Updated version
 console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} --- v${BOT_VERSION} ---`);
-// --- END DEPLOYMENT CHECK ---
-
 
 console.log(`⏳ Starting Solana Gambles Bot (Custodial, Buttons, v${BOT_VERSION})... Checking environment variables...`);
 
-// --- Environment Variable Configuration ---
 const REQUIRED_ENV_VARS = [
     'BOT_TOKEN',
     'DATABASE_URL',
-    'DEPOSIT_MASTER_SEED_PHRASE', // Expect BIP39 Mnemonic Seed Phrase (SECRET)
-    'MAIN_BOT_PRIVATE_KEY',       // Used for general payouts (Withdrawals) AND sweep target (SECRET)
-    'REFERRAL_PAYOUT_PRIVATE_KEY',// (SECRET) - Presence checked, but allowed to be empty (falls back to MAIN)
-    'RPC_URLS',                   // Comma-separated list of RPC URLs
-    'ADMIN_USER_IDS',             // *** ADDED REQUIREMENT for admin notifications *** Comma-separated Telegram User IDs
+    'DEPOSIT_MASTER_SEED_PHRASE',
+    'MAIN_BOT_PRIVATE_KEY',
+    'REFERRAL_PAYOUT_PRIVATE_KEY',
+    'RPC_URLS',
+    'ADMIN_USER_IDS',
 ];
 
-// Check for Railway-specific variables if deployed there
 if (process.env.RAILWAY_ENVIRONMENT) {
     REQUIRED_ENV_VARS.push('RAILWAY_PUBLIC_DOMAIN');
 }
 
-// Validate required environment variables
 let missingVars = false;
 REQUIRED_ENV_VARS.forEach((key) => {
-    // Allow REFERRAL_PAYOUT_PRIVATE_KEY to be optional (it falls back)
     if (key === 'REFERRAL_PAYOUT_PRIVATE_KEY') return;
-    // Check Railway var only if in Railway env
     if (key === 'RAILWAY_PUBLIC_DOMAIN' && !process.env.RAILWAY_ENVIRONMENT) return;
-
     if (!process.env[key]) {
         console.error(`❌ Environment variable ${key} is missing.`);
         missingVars = true;
     }
 });
-// Specific check for ADMIN_USER_IDS content
 if (!process.env.ADMIN_USER_IDS) {
-     // Already caught by missing check above, but double-check
-     if (!missingVars) { // Avoid duplicate message if already missing
+     if (!missingVars) {
          console.error(`❌ Environment variable ADMIN_USER_IDS is missing.`);
          missingVars = true;
      }
@@ -81,119 +67,98 @@ if (!process.env.ADMIN_USER_IDS) {
      missingVars = true;
 }
 
-
-// Specific check for valid Seed Phrase
 console.log(`[Env Check] Checking DEPOSIT_MASTER_SEED_PHRASE... Present: ${!!process.env.DEPOSIT_MASTER_SEED_PHRASE}`);
 if (process.env.DEPOSIT_MASTER_SEED_PHRASE && !bip39.validateMnemonic(process.env.DEPOSIT_MASTER_SEED_PHRASE)) {
     console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is set but is not a valid BIP39 mnemonic.`);
     missingVars = true;
 } else if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) {
-     if (!REQUIRED_ENV_VARS.includes('DEPOSIT_MASTER_SEED_PHRASE')) REQUIRED_ENV_VARS.push('DEPOSIT_MASTER_SEED_PHRASE'); // Ensure it's checked
-     if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) {
+     if (!REQUIRED_ENV_VARS.includes('DEPOSIT_MASTER_SEED_PHRASE')) REQUIRED_ENV_VARS.push('DEPOSIT_MASTER_SEED_PHRASE');
+     if (!process.env.DEPOSIT_MASTER_SEED_PHRASE) { // Double check after push, though push won't affect this run's REQUIRED_ENV_VARS loop
       console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is missing.`);
       missingVars = true;
      }
 }
 
-
-// Specific check for RPC_URLS content
 const parsedRpcUrls = (process.env.RPC_URLS || '').split(',').map(u => u.trim()).filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
 if (parsedRpcUrls.length === 0) {
     console.error(`❌ Environment variable RPC_URLS is missing or contains no valid URLs.`);
     missingVars = true;
 } else if (parsedRpcUrls.length === 1) {
-    console.warn(`⚠️ Environment variable RPC_URLS only contains one URL. Multi-RPC features may not be fully utilized.`);
+    console.warn(`⚠️ Environment variable RPC_URLS only contains one URL.`);
 }
 
-// Validate private keys format (basic check for base58)
 const validateBase58Key = (keyName, isRequired) => {
     const key = process.env[keyName];
-    if (key) { // If key is present, validate it
+    if (key) {
         try {
             const decoded = bs58.decode(key);
-            // Keypair.fromSecretKey expects 64 bytes for the secret key.
             if (decoded.length !== 64) {
-                console.error(`❌ Environment variable ${keyName} has incorrect length after base58 decoding (Expected 64 bytes for Secret Key, Got ${decoded.length}).`);
+                console.error(`❌ Env var ${keyName} has incorrect length (Expected 64 bytes, Got ${decoded.length}).`);
                 return false;
             }
-            console.log(`[Env Check] Private Key ${keyName} validated (Length: 64).`);
+            console.log(`[Env Check] Private Key ${keyName} validated.`);
         } catch (e) {
-            console.error(`❌ Failed to decode environment variable ${keyName} as base58: ${e.message}`);
+            console.error(`❌ Failed to decode env var ${keyName} as base58: ${e.message}`);
             return false;
         }
-    } else if (isRequired) { // If key is required but not present
-        console.error(`❌ Required environment variable ${keyName} is missing (key is not present).`); // Added specific log
+    } else if (isRequired) {
+        console.error(`❌ Required env var ${keyName} is missing.`);
         return false;
-    } else {
-         console.log(`[Env Check] Optional Private Key ${keyName} not set.`); // Log if optional key is missing
     }
-    return true; // Valid format, or optional and not set
+    return true;
 };
 
-// MAIN_BOT_PRIVATE_KEY is required
 if (!validateBase58Key('MAIN_BOT_PRIVATE_KEY', true)) missingVars = true;
-// REFERRAL_PAYOUT_PRIVATE_KEY is optional, only validate if present
 if (process.env.REFERRAL_PAYOUT_PRIVATE_KEY && !validateBase58Key('REFERRAL_PAYOUT_PRIVATE_KEY', false)) {
-    // This case means the key IS PRESENT but INVALID format
     missingVars = true;
 }
-
 
 if (missingVars) {
     console.error("⚠️ Please set all required environment variables correctly. Exiting.");
     process.exit(1);
 }
 
-// Optional vars with defaults (using BigInt where appropriate)
 const OPTIONAL_ENV_DEFAULTS = {
-    // --- Operational ---
     'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
     'DEPOSIT_CONFIRMATIONS': 'confirmed',
     'WITHDRAWAL_FEE_LAMPORTS': '5000',
-    'MIN_WITHDRAWAL_LAMPORTS': '10000000', // 0.01 SOL
-    // --- Payouts (Withdrawals, Referral Rewards) ---
+    'MIN_WITHDRAWAL_LAMPORTS': '10000000',
     'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '1000',
     'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
     'PAYOUT_COMPUTE_UNIT_LIMIT': '200000',
     'PAYOUT_JOB_RETRIES': '3',
     'PAYOUT_JOB_RETRY_DELAY_MS': '5000',
-    // --- Game Limits ---
-    'CF_MIN_BET_LAMPORTS': '10000000',       // 0.01 SOL
-    'CF_MAX_BET_LAMPORTS': '1000000000',     // 1 SOL
+    'CF_MIN_BET_LAMPORTS': '10000000',
+    'CF_MAX_BET_LAMPORTS': '1000000000',
     'RACE_MIN_BET_LAMPORTS': '10000000',
     'RACE_MAX_BET_LAMPORTS': '1000000000',
     'SLOTS_MIN_BET_LAMPORTS': '10000000',
-    'SLOTS_MAX_BET_LAMPORTS': '500000000',   // 0.5 SOL
+    'SLOTS_MAX_BET_LAMPORTS': '500000000',
     'ROULETTE_MIN_BET_LAMPORTS': '10000000',
     'ROULETTE_MAX_BET_LAMPORTS': '1000000000',
     'WAR_MIN_BET_LAMPORTS': '10000000',
     'WAR_MAX_BET_LAMPORTS': '1000000000',
-    'CRASH_MIN_BET_LAMPORTS': '10000000',     // NEW GAME
-    'CRASH_MAX_BET_LAMPORTS': '1000000000',   // NEW GAME
-    'BLACKJACK_MIN_BET_LAMPORTS': '10000000',// NEW GAME
-    'BLACKJACK_MAX_BET_LAMPORTS': '1000000000',// NEW GAME
-    // --- Game Logic Parameters ---
+    'CRASH_MIN_BET_LAMPORTS': '10000000',
+    'CRASH_MAX_BET_LAMPORTS': '1000000000',
+    'BLACKJACK_MIN_BET_LAMPORTS': '10000000',
+    'BLACKJACK_MAX_BET_LAMPORTS': '1000000000',
     'CF_HOUSE_EDGE': '0.03',
     'RACE_HOUSE_EDGE': '0.05',
     'SLOTS_HOUSE_EDGE': '0.10',
     'ROULETTE_HOUSE_EDGE': '0.05',
     'WAR_HOUSE_EDGE': '0.02',
-    'CRASH_HOUSE_EDGE': '0.03',              // NEW GAME (applied on cashout or if game defines specific crash points)
-    'BLACKJACK_HOUSE_EDGE': '0.015',         // NEW GAME (typically from rules like dealer BJ pays 3:2, dealer hits soft 17, etc.)
-    // --- Slots Jackpot ---
-    'SLOTS_JACKPOT_SEED_LAMPORTS': '100000000', // 0.1 SOL initial seed NEW
-    'SLOTS_JACKPOT_CONTRIBUTION_PERCENT': '0.001', // 0.1% of each bet goes to jackpot NEW
-    // --- Referral System ---
+    'CRASH_HOUSE_EDGE': '0.03',
+    'BLACKJACK_HOUSE_EDGE': '0.015',
+    'SLOTS_JACKPOT_SEED_LAMPORTS': '100000000',
+    'SLOTS_JACKPOT_CONTRIBUTION_PERCENT': '0.001',
     'REFERRAL_INITIAL_BET_MIN_LAMPORTS': '10000000',
     'REFERRAL_MILESTONE_REWARD_PERCENT': '0.005',
-    // --- Deposit Sweeping ---
-    'SWEEP_INTERVAL_MS': '900000', // Default 15 minutes
+    'SWEEP_INTERVAL_MS': '900000',
     'SWEEP_BATCH_SIZE': '20',
-    'SWEEP_FEE_BUFFER_LAMPORTS': '15000', // Buffer LEFT BEHIND (covers base 5k + 10k priority allowance)
+    'SWEEP_FEE_BUFFER_LAMPORTS': '15000',
     'SWEEP_ADDRESS_DELAY_MS': '750',
-    'SWEEP_RETRY_ATTEMPTS': '1', // Max *additional* attempts (1 means try twice total)
+    'SWEEP_RETRY_ATTEMPTS': '1',
     'SWEEP_RETRY_DELAY_MS': '3000',
-    // --- Technical / Performance ---
     'RPC_MAX_CONCURRENT': '8',
     'RPC_RETRY_BASE_DELAY': '600',
     'RPC_MAX_RETRIES': '3',
@@ -221,33 +186,31 @@ const OPTIONAL_ENV_DEFAULTS = {
     'DB_CONN_TIMEOUT': '5000',
     'DB_SSL': 'true',
     'DB_REJECT_UNAUTHORIZED': 'true',
-    'USER_STATE_CACHE_TTL_MS': '300000', // 5 minutes
-    'WALLET_CACHE_TTL_MS': '600000',     // 10 minutes
-    'DEPOSIT_ADDR_CACHE_TTL_MS': '3660000', // ~1 hour + buffer
+    'USER_STATE_CACHE_TTL_MS': '300000',
+    'WALLET_CACHE_TTL_MS': '600000',
+    'DEPOSIT_ADDR_CACHE_TTL_MS': '3660000',
     'MAX_PROCESSED_TX_CACHE': '5000',
-    'USER_COMMAND_COOLDOWN_MS': '1000', // 1 second
-    'INIT_DELAY_MS': '1000',
+    'USER_COMMAND_COOLDOWN_MS': '1000',
+    'INIT_DELAY_MS': '3000', // Slightly increased default
     'SHUTDOWN_QUEUE_TIMEOUT_MS': '20000',
     'SHUTDOWN_FAIL_TIMEOUT_MS': '8000',
-    'WEBHOOK_MAX_CONN': '10',
+    'WEBHOOK_MAX_CONN': '40', // Telegram default
+    'LEADERBOARD_UPDATE_INTERVAL_MS': '3600000' // New default: 1 hour
 };
 
-// Assign defaults for optional vars if they are missing
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
-    if (key === 'ADMIN_USER_IDS') return; // Skip handled required var
+    if (key === 'ADMIN_USER_IDS') return;
     if (process.env[key] === undefined) {
         process.env[key] = defaultValue;
     }
 });
 
 console.log("✅ Environment variables checked/defaults applied.");
-// --- END: Environment Variable Configuration ---
-
 
 // --- Global Constants & State ---
-const SOL_DECIMALS = 9; // Maximum precision for SOL amounts
+const SOL_DECIMALS = 9;
 const DEPOSIT_ADDRESS_EXPIRY_MS = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000;
-const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS === 'finalized' ? 'finalized' : 'confirmed';
+const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS === 'finalized' ? 'finalized' : (process.env.DEPOSIT_CONFIRMATIONS === 'confirmed' ? 'confirmed' : 'confirmed');
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
 const MAX_PROCESSED_TX_CACHE_SIZE = parseInt(process.env.MAX_PROCESSED_TX_CACHE, 10);
@@ -257,61 +220,60 @@ const WALLET_CACHE_TTL_MS = parseInt(process.env.WALLET_CACHE_TTL_MS, 10);
 const DEPOSIT_ADDR_CACHE_TTL_MS = parseInt(process.env.DEPOSIT_ADDR_CACHE_TTL_MS, 10);
 const REFERRAL_INITIAL_BET_MIN_LAMPORTS = BigInt(process.env.REFERRAL_INITIAL_BET_MIN_LAMPORTS);
 const REFERRAL_MILESTONE_REWARD_PERCENT = parseFloat(process.env.REFERRAL_MILESTONE_REWARD_PERCENT);
-// Referral Tiers
 const REFERRAL_INITIAL_BONUS_TIERS = [
-    { maxCount: 10, percent: 0.05 },   // 0-10 referrals -> 5%
-    { maxCount: 25, percent: 0.10 },  // 11-25 referrals -> 10%
-    { maxCount: 50, percent: 0.15 },  // 26-50 referrals -> 15%
-    { maxCount: 100, percent: 0.20 }, // 51-100 referrals -> 20%
-    { maxCount: Infinity, percent: 0.25 } // 101+ referrals -> 25%
+    { maxCount: 10, percent: 0.05 },
+    { maxCount: 25, percent: 0.10 },
+    { maxCount: 50, percent: 0.15 },
+    { maxCount: 100, percent: 0.20 },
+    { maxCount: Infinity, percent: 0.25 }
 ];
-// Milestone Thresholds
 const REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS = [
     BigInt(1 * LAMPORTS_PER_SOL), BigInt(5 * LAMPORTS_PER_SOL), BigInt(10 * LAMPORTS_PER_SOL),
     BigInt(25 * LAMPORTS_PER_SOL), BigInt(50 * LAMPORTS_PER_SOL), BigInt(100 * LAMPORTS_PER_SOL),
     BigInt(250 * LAMPORTS_PER_SOL), BigInt(500 * LAMPORTS_PER_SOL), BigInt(1000 * LAMPORTS_PER_SOL)
 ];
-// Sweeping Constants
 const SWEEP_FEE_BUFFER_LAMPORTS = BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS);
 const SWEEP_BATCH_SIZE = parseInt(process.env.SWEEP_BATCH_SIZE, 10);
 const SWEEP_ADDRESS_DELAY_MS = parseInt(process.env.SWEEP_ADDRESS_DELAY_MS, 10);
 const SWEEP_RETRY_ATTEMPTS = parseInt(process.env.SWEEP_RETRY_ATTEMPTS, 10);
 const SWEEP_RETRY_DELAY_MS = parseInt(process.env.SWEEP_RETRY_DELAY_MS, 10);
 
-// Slots Jackpot Constants
 const SLOTS_JACKPOT_SEED_LAMPORTS = BigInt(process.env.SLOTS_JACKPOT_SEED_LAMPORTS);
 const SLOTS_JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.SLOTS_JACKPOT_CONTRIBUTION_PERCENT);
-let currentSlotsJackpotLamports = SLOTS_JACKPOT_SEED_LAMPORTS; // Will be loaded from DB in Part 6
+let currentSlotsJackpotLamports = SLOTS_JACKPOT_SEED_LAMPORTS; // Loaded from DB in Part 6
 
-// Standard Bet Amounts
-const STANDARD_BET_AMOUNTS_SOL = [0.01, 0.05, 0.10, 0.25, 0.5, 1];
+const STANDARD_BET_AMOUNTS_SOL = [0.01, 0.05, 0.10, 0.25, 0.5, 1.0];
 const STANDARD_BET_AMOUNTS_LAMPORTS = STANDARD_BET_AMOUNTS_SOL.map(sol => BigInt(Math.round(sol * LAMPORTS_PER_SOL)));
 console.log(`[Config] Standard Bet Amounts (Lamports): ${STANDARD_BET_AMOUNTS_LAMPORTS.join(', ')}`);
 
+// Moved RACE_HORSES definition to Part 1 to be available for export
+const RACE_HORSES = [
+    { name: "Solar Sprint", emoji: "🐎₁", payoutMultiplier: 3.0 }, // Indicative
+    { name: "Comet Tail", emoji: "🏇₂", payoutMultiplier: 4.0 },
+    { name: "Galaxy Gallop", emoji: "🐴₃", payoutMultiplier: 5.0 },
+    { name: "Nebula Speed", emoji: "🎠₄", payoutMultiplier: 6.0 },
+];
+
 // In-memory Caches & State
-const userStateCache = new Map(); // Map<userId, { state: string, chatId: string, messageId?: number, data?: any, timestamp: number, previousState?: object }>
-const walletCache = new Map(); // Map<userId, { withdrawalAddress?: string, referralCode?: string, timestamp: number, timeoutId?: NodeJS.Timeout }>
-const activeDepositAddresses = new Map(); // Map<deposit_address, { userId: string, expiresAt: number, timeoutId?: NodeJS.Timeout }>
+const userStateCache = new Map();
+const walletCache = new Map();
+const activeDepositAddresses = new Map();
 const processedDepositTxSignatures = new Set();
 const commandCooldown = new Map();
 const pendingReferrals = new Map();
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const userLastBetAmounts = new Map(); // Map<userId, Map<gameKey, amountLamports>> - For "Bet Again" feature
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000;
+const userLastBetAmounts = new Map();
 
 let isFullyInitialized = false;
-let server; // Express server instance
+let server;
 let depositMonitorIntervalId = null;
 let sweepIntervalId = null;
-// --- End Global Constants & State ---
-
+// leaderboardManagerIntervalId will be declared in Part 6
 
 // --- Core Initializations ---
-
-// Express App
 const app = express();
 app.use(express.json({ limit: '10kb' }));
 
-// Solana Connection
 console.log("⚙️ Initializing Multi-RPC Solana connection...");
 console.log(`ℹ️ Using RPC Endpoints: ${parsedRpcUrls.join(', ')}`);
 const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
@@ -321,13 +283,12 @@ const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
     rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
     retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
     retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
-    commitment: process.env.RPC_COMMITMENT, // Ensure this is a valid Commitment level string
+    commitment: process.env.RPC_COMMITMENT,
     httpHeaders: { 'User-Agent': `SolanaGamblesBot/${BOT_VERSION}` },
     clientId: `SolanaGamblesBot/${BOT_VERSION}`
 });
 console.log("✅ Multi-RPC Solana connection instance created.");
 
-// Queues
 console.log("⚙️ Initializing Processing Queues...");
 const messageQueue = new PQueue({
     concurrency: parseInt(process.env.MSG_QUEUE_CONCURRENCY, 10),
@@ -356,7 +317,6 @@ const telegramSendQueue = new PQueue({
 });
 console.log("✅ Processing Queues initialized.");
 
-// PostgreSQL Pool
 console.log("⚙️ Setting up PostgreSQL Pool...");
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -368,14 +328,13 @@ const pool = new Pool({
 });
 pool.on('error', (err, client) => {
     console.error('❌ Unexpected error on idle PostgreSQL client', err);
-    notifyAdmin(`🚨 DB Pool Error (Idle Client): ${err.message}`).catch(()=>{});
+    notifyAdmin(`🚨 DB Pool Error (Idle Client): ${err.message}`).catch(()=>{}); // notifyAdmin will be defined in Part 3
 });
 console.log("✅ PostgreSQL Pool created.");
 
-// Telegram Bot Instance
 console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
-    polling: false, // Default to false, setupTelegramConnection will handle it
+    polling: false,
     request: {
         timeout: 15000,
         agentOptions: {
@@ -389,77 +348,60 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 });
 console.log("✅ Telegram Bot instance created.");
 
-// Game Configuration Loading
 console.log("⚙️ Loading Game Configuration...");
 const GAME_CONFIG = {
     coinflip: {
-        key: "coinflip",
-        name: "Coinflip",
-        minBetLamports: BigInt(process.env.CF_MIN_BET_LAMPORTS),
-        maxBetLamports: BigInt(process.env.CF_MAX_BET_LAMPORTS),
+        key: "coinflip", name: "Coinflip",
+        minBetLamports: BigInt(process.env.CF_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.CF_MAX_BET_LAMPORTS),
         houseEdge: parseFloat(process.env.CF_HOUSE_EDGE)
     },
     race: {
-        key: "race",
-        name: "Race",
-        minBetLamports: BigInt(process.env.RACE_MIN_BET_LAMPORTS),
-        maxBetLamports: BigInt(process.env.RACE_MAX_BET_LAMPORTS),
+        key: "race", name: "Race",
+        minBetLamports: BigInt(process.env.RACE_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.RACE_MAX_BET_LAMPORTS),
         houseEdge: parseFloat(process.env.RACE_HOUSE_EDGE)
     },
     slots: {
-        key: "slots",
-        name: "Slots",
-        minBetLamports: BigInt(process.env.SLOTS_MIN_BET_LAMPORTS),
-        maxBetLamports: BigInt(process.env.SLOTS_MAX_BET_LAMPORTS),
+        key: "slots", name: "Slots",
+        minBetLamports: BigInt(process.env.SLOTS_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.SLOTS_MAX_BET_LAMPORTS),
         houseEdge: parseFloat(process.env.SLOTS_HOUSE_EDGE),
-        jackpotContributionPercent: parseFloat(process.env.SLOTS_JACKPOT_CONTRIBUTION_PERCENT), // NEW
-        jackpotSeedLamports: BigInt(process.env.SLOTS_JACKPOT_SEED_LAMPORTS) // NEW
+        jackpotContributionPercent: parseFloat(process.env.SLOTS_JACKPOT_CONTRIBUTION_PERCENT),
+        jackpotSeedLamports: BigInt(process.env.SLOTS_JACKPOT_SEED_LAMPORTS)
     },
     roulette: {
-        key: "roulette",
-        name: "Roulette",
-        minBetLamports: BigInt(process.env.ROULETTE_MIN_BET_LAMPORTS),
-        maxBetLamports: BigInt(process.env.ROULETTE_MAX_BET_LAMPORTS),
+        key: "roulette", name: "Roulette",
+        minBetLamports: BigInt(process.env.ROULETTE_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.ROULETTE_MAX_BET_LAMPORTS),
         houseEdge: parseFloat(process.env.ROULETTE_HOUSE_EDGE)
     },
     war: {
-        key: "war",
-        name: "Casino War",
-        minBetLamports: BigInt(process.env.WAR_MIN_BET_LAMPORTS),
-        maxBetLamports: BigInt(process.env.WAR_MAX_BET_LAMPORTS),
+        key: "war", name: "Casino War",
+        minBetLamports: BigInt(process.env.WAR_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.WAR_MAX_BET_LAMPORTS),
         houseEdge: parseFloat(process.env.WAR_HOUSE_EDGE)
     },
-    crash: { // NEW GAME
-        key: "crash",
-        name: "Crash",
-        minBetLamports: BigInt(process.env.CRASH_MIN_BET_LAMPORTS),
-        maxBetLamports: BigInt(process.env.CRASH_MAX_BET_LAMPORTS),
-        houseEdge: parseFloat(process.env.CRASH_HOUSE_EDGE) // Applied when player cashes out
+    crash: {
+        key: "crash", name: "Crash",
+        minBetLamports: BigInt(process.env.CRASH_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.CRASH_MAX_BET_LAMPORTS),
+        houseEdge: parseFloat(process.env.CRASH_HOUSE_EDGE)
     },
-    blackjack: { // NEW GAME
-        key: "blackjack",
-        name: "Blackjack",
-        minBetLamports: BigInt(process.env.BLACKJACK_MIN_BET_LAMPORTS),
-        maxBetLamports: BigInt(process.env.BLACKJACK_MAX_BET_LAMPORTS),
-        houseEdge: parseFloat(process.env.BLACKJACK_HOUSE_EDGE) // Embedded in game rules (e.g., dealer peek, 3:2 payout)
+    blackjack: {
+        key: "blackjack", name: "Blackjack",
+        minBetLamports: BigInt(process.env.BLACKJACK_MIN_BET_LAMPORTS), maxBetLamports: BigInt(process.env.BLACKJACK_MAX_BET_LAMPORTS),
+        houseEdge: parseFloat(process.env.BLACKJACK_HOUSE_EDGE)
     }
 };
-// Basic validation function (can be expanded)
 function validateGameConfig(config) {
     const errors = [];
     for (const gameKey in config) {
         const gc = config[gameKey];
         if (!gc) { errors.push(`Config for game "${gameKey}" missing.`); continue; }
-        if (!gc.key || gc.key !== gameKey) errors.push(`${gameKey}.key missing or mismatch`);
+        if (gc.key !== gameKey) errors.push(`${gameKey}.key mismatch`);
         if (!gc.name) errors.push(`${gameKey}.name missing`);
-        if (typeof gc.minBetLamports !== 'bigint' || gc.minBetLamports <= 0n) errors.push(`${gameKey}.minBetLamports invalid (${gc.minBetLamports})`);
-        if (typeof gc.maxBetLamports !== 'bigint' || gc.maxBetLamports <= 0n) errors.push(`${gameKey}.maxBetLamports invalid (${gc.maxBetLamports})`);
+        if (typeof gc.minBetLamports !== 'bigint' || gc.minBetLamports <= 0n) errors.push(`${gameKey}.minBetLamports invalid`);
+        if (typeof gc.maxBetLamports !== 'bigint' || gc.maxBetLamports <= 0n) errors.push(`${gameKey}.maxBetLamports invalid`);
         if (gc.minBetLamports > gc.maxBetLamports) errors.push(`${gameKey} minBet > maxBet`);
-        if (isNaN(gc.houseEdge) || gc.houseEdge < 0 || gc.houseEdge > 1) errors.push(`${gameKey}.houseEdge invalid (${gc.houseEdge})`); // Allow 0 edge, but not >=1
-
+        if (isNaN(gc.houseEdge) || gc.houseEdge < 0 || gc.houseEdge >= 1) errors.push(`${gameKey}.houseEdge invalid`);
         if (gameKey === 'slots') {
-            if (isNaN(gc.jackpotContributionPercent) || gc.jackpotContributionPercent < 0 || gc.jackpotContributionPercent >= 1) errors.push(`${gameKey}.jackpotContributionPercent invalid (${gc.jackpotContributionPercent})`);
-            if (typeof gc.jackpotSeedLamports !== 'bigint' || gc.jackpotSeedLamports < 0n) errors.push(`${gameKey}.jackpotSeedLamports invalid (${gc.jackpotSeedLamports})`);
+            if (isNaN(gc.jackpotContributionPercent) || gc.jackpotContributionPercent < 0 || gc.jackpotContributionPercent >= 1) errors.push(`${gameKey}.jackpotContributionPercent invalid`);
+            if (typeof gc.jackpotSeedLamports !== 'bigint' || gc.jackpotSeedLamports < 0n) errors.push(`${gameKey}.jackpotSeedLamports invalid`);
         }
     }
     return errors;
@@ -470,44 +412,71 @@ if (configErrors.length > 0) {
     process.exit(1);
 }
 console.log("✅ Game Config Loaded and Validated.");
-// --- End Core Initializations ---
 
-// --- Export necessary variables/instances for other parts if splitting files physically ---
+// --- Export necessary variables/instances ---
 export {
-    pool, bot, solanaConnection, userStateCache, walletCache, activeDepositAddresses,
-    processedDepositTxSignatures, commandCooldown, pendingReferrals, GAME_CONFIG, userLastBetAmounts, // Added userLastBetAmounts
-    messageQueue, callbackQueue, payoutProcessorQueue, depositProcessorQueue, telegramSendQueue,
+    // Core Instances
+    pool, bot, solanaConnection, app,
+    // Caches & State
+    userStateCache, walletCache, activeDepositAddresses,
+    processedDepositTxSignatures, commandCooldown, pendingReferrals, userLastBetAmounts,
+    // Config & Constants
+    GAME_CONFIG, RACE_HORSES, // RACE_HORSES is now defined in this part
     BOT_VERSION, LAMPORTS_PER_SOL, SOL_DECIMALS, DEPOSIT_CONFIRMATION_LEVEL,
     MIN_WITHDRAWAL_LAMPORTS, WITHDRAWAL_FEE_LAMPORTS, REFERRAL_INITIAL_BET_MIN_LAMPORTS,
     REFERRAL_MILESTONE_REWARD_PERCENT, REFERRAL_INITIAL_BONUS_TIERS, REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS,
     DEPOSIT_ADDRESS_EXPIRY_MS, USER_STATE_TTL_MS, PENDING_REFERRAL_TTL_MS, STANDARD_BET_AMOUNTS_LAMPORTS,
     STANDARD_BET_AMOUNTS_SOL, MAX_PROCESSED_TX_CACHE_SIZE, USER_COMMAND_COOLDOWN_MS,
-    SLOTS_JACKPOT_SEED_LAMPORTS, SLOTS_JACKPOT_CONTRIBUTION_PERCENT, currentSlotsJackpotLamports, // Jackpot exports
-    isFullyInitialized, server, // Allow modification in Part 6
-    depositMonitorIntervalId, sweepIntervalId, // Allow modification in Part 6
-    // Also export functions from subsequent parts if needed globally
-    // Part 2 functions
-    queryDatabase, ensureUserExists, linkUserWallet, getUserWalletDetails, getLinkedWallet, getUserByReferralCode, linkReferral, updateUserWagerStats, getUserBalance, updateUserBalanceAndLedger, createDepositAddressRecord, findDepositAddressInfo, markDepositAddressUsed, recordConfirmedDeposit, getNextDepositAddressIndex, createWithdrawalRequest, updateWithdrawalStatus, getWithdrawalDetails, createBetRecord, updateBetStatus, isFirstCompletedBet, getBetDetails, recordPendingReferralPayout, updateReferralPayoutStatus, getReferralPayoutDetails, getTotalReferralEarnings,
-    getJackpotAmount, updateJackpotAmount, // New DB functions for Jackpot
-    updateUserLastBetAmount, getUserLastBetAmount, // New DB functions for last bet
-    getBetHistory, // New DB function for bet history
-    // Part 3 functions
-    sleep, formatSol, createSafeIndex, generateUniqueDepositAddress, getKeypairFromPath, isRetryableSolanaError, sendSol, analyzeTransactionAmounts, notifyAdmin, safeSendMessage, escapeMarkdownV2, escapeHtml, getUserDisplayName, updateWalletCache, getWalletCache, addActiveDepositAddressCache, getActiveDepositAddressCache, removeActiveDepositAddressCache, addProcessedDepositTx, hasProcessedDepositTx, generateReferralCode,
-    // Part 4 functions
-    playCoinflip, simulateRace, simulateSlots, simulateRouletteSpin, getRoulettePayoutMultiplier, simulateWar,
-    simulateCrash, getCrashPayoutMultiplier, // New Game Logic
-    simulateBlackjackDeal, getBlackjackCardValue, getBlackjackHandValue, determineBlackjackWinner, // New Game Logic
-    // Part 5a functions
-    handleMessage, handleCallbackQuery, proceedToGameStep, placeBet, handleCoinflipGame, handleRaceGame, RACE_HORSES, handleSlotsGame, handleWarGame, handleRouletteGame,
+    SLOTS_JACKPOT_SEED_LAMPORTS, SLOTS_JACKPOT_CONTRIBUTION_PERCENT, currentSlotsJackpotLamports,
+    // Queues
+    messageQueue, callbackQueue, payoutProcessorQueue, depositProcessorQueue, telegramSendQueue,
+    // Mutable Global State (for startup/shutdown)
+    isFullyInitialized, server,
+    depositMonitorIntervalId, sweepIntervalId,
+    // Function exports from subsequent parts will be listed here as they are defined
+    // Part 2 (Database Operations)
+    queryDatabase, ensureUserExists, linkUserWallet, getUserWalletDetails, getLinkedWallet,
+    getUserByReferralCode, linkReferral, updateUserWagerStats, getUserBalance,
+    updateUserBalanceAndLedger, createDepositAddressRecord, findDepositAddressInfo,
+    markDepositAddressUsed, recordConfirmedDeposit, getNextDepositAddressIndex,
+    createWithdrawalRequest, updateWithdrawalStatus, getWithdrawalDetails,
+    createBetRecord, updateBetStatus, isFirstCompletedBet, getBetDetails,
+    recordPendingReferralPayout, updateReferralPayoutStatus, getReferralPayoutDetails,
+    getTotalReferralEarnings, updateUserLastBetAmount, getUserLastBetAmounts,
+    ensureJackpotExists, getJackpotAmount, updateJackpotAmount, incrementJackpotAmount,
+    getBetHistory,
+    // Part 3 (Solana Utilities & Telegram Helpers)
+    sleep, formatSol, createSafeIndex, generateUniqueDepositAddress, getKeypairFromPath,
+    isRetryableSolanaError, sendSol, analyzeTransactionAmounts, notifyAdmin,
+    safeSendMessage, escapeMarkdownV2, escapeHtml, getUserDisplayName,
+    updateWalletCache, getWalletCache, addActiveDepositAddressCache,
+    getActiveDepositAddressCache, removeActiveDepositAddressCache, addProcessedDepositTx,
+    hasProcessedDepositTx, generateReferralCode,
+    // Part 4 (Game Logic)
+    playCoinflip, simulateRace, simulateSlots, simulateRouletteSpin,
+    getRoulettePayoutMultiplier, simulateWar,
+    simulateCrash, // New Game Logic for Crash
+    createDeck, shuffleDeck, dealCard, getCardNumericValue, formatCard, calculateHandValue, // Blackjack utilities
+    simulateDealerPlay, determineBlackjackWinner, // Blackjack game logic helpers
+    // Part 5a (Telegram Message/Callback Handlers & Game Result Processing)
+    handleMessage, handleCallbackQuery, proceedToGameStep, placeBet,
+    handleCoinflipGame, handleRaceGame, handleSlotsGame, handleWarGame, handleRouletteGame,
     handleCrashGame, handleBlackjackGame, // New Game Handlers
-    // Part 5b functions
-    routeStatefulInput, handleCustomAmountInput, handleWithdrawalAddressInput, handleWithdrawalAmountInput, handleRouletteBetInput, handleRouletteNumberInput, handleStartCommand, handleHelpCommand, handleWalletCommand, handleReferralCommand, handleDepositCommand, handleWithdrawCommand, showBetAmountButtons, handleCoinflipCommand, handleRaceCommand, handleSlotsCommand, handleWarCommand, handleRouletteCommand,
-    handleCrashCommand, handleBlackjackCommand, // New Game Commands
-    handleHistoryCommand, // New command for bet history
+    // Part 5b (Input Handlers, Command Handlers, Referral Checks)
+    routeStatefulInput, handleCustomAmountInput, handleRouletteNumberInput,
+    handleWithdrawalAmountInput, // handleWithdrawalAddressInput is deprecated
+    handleStartCommand, handleHelpCommand, handleWalletCommand, handleReferralCommand,
+    handleDepositCommand, handleWithdrawCommand, showBetAmountButtons,
+    handleCoinflipCommand, handleRaceCommand, handleSlotsCommand, handleWarCommand,
+    handleRouletteCommand, handleCrashCommand, handleBlackjackCommand, // New Game Cmds
+    handleHistoryCommand, handleLeaderboardsCommand, // New Cmds
     commandHandlers, menuCommandHandlers, handleAdminCommand, _handleReferralChecks,
-    // Part 6 functions are generally internal or startup/shutdown related
-    // initializeDatabase, loadActiveDepositsCache, startDepositMonitor, monitorDepositsPolling, processDepositTransaction, startDepositSweeper, sweepDepositAddresses, addPayoutJob, handleWithdrawalPayoutJob, handleReferralPayoutJob, setupTelegramConnection, startPollingFallback, setupExpressServer, shutdown, setupTelegramListeners,
-    // loadSlotsJackpot // New startup function
+    // Part 6 (Background Tasks, Payouts, Startup & Shutdown) - Will be listed as they are defined if globally needed
+    // For Part 6, functions are mostly called internally during startup/shutdown, direct export might be minimal
+    initializeDatabase, loadActiveDepositsCache, loadSlotsJackpot, // Startup DB functions
+    startDepositMonitor, startDepositSweeper, startLeaderboardManager, // Start background tasks
+    addPayoutJob, // For queuing payouts
+    setupTelegramConnection, startPollingFallback, setupExpressServer, shutdown, setupTelegramListeners // Core lifecycle
 };
 
 // --- End of Part 1 ---
