@@ -1,5 +1,5 @@
 // index.js - Part 1: Imports, Environment Configuration, Core Initializations, Utility Definitions
-// --- VERSION: 3.2.1 --- (Moved functions, REMOVED export block, MdV2 fixes, Robust safeGetBigIntEnv)
+// --- VERSION: 3.2.1 --- (Moved functions, REMOVED export block, MdV2 fixes, Robust safeGetBigIntEnv, Corrected GAME_CONFIG loop)
 
 // --- All Imports MUST come first ---
 import 'dotenv/config'; // Keep for local development via .env file
@@ -314,33 +314,18 @@ console.log(`⏳ Starting Solana Gambles Bot (Custodial, Buttons, v${BOT_VERSION
 
 
 // --- Environment Variable Validation ---
-const REQUIRED_ENV_VARS = [ /* ... as before ... */
-    'BOT_TOKEN', 'DATABASE_URL', 'DEPOSIT_MASTER_SEED_PHRASE', 'MAIN_BOT_PRIVATE_KEY',
-    'REFERRAL_PAYOUT_PRIVATE_KEY', 'RPC_URLS', 'ADMIN_USER_IDS',
-];
+// ... (Validation code remains the same as the previous correct version) ...
+const REQUIRED_ENV_VARS = [ /* ... */ 'BOT_TOKEN', 'DATABASE_URL', 'DEPOSIT_MASTER_SEED_PHRASE', 'MAIN_BOT_PRIVATE_KEY', 'REFERRAL_PAYOUT_PRIVATE_KEY', 'RPC_URLS', 'ADMIN_USER_IDS'];
 if (process.env.RAILWAY_ENVIRONMENT === 'production' || process.env.RAILWAY_ENVIRONMENT === 'staging') { REQUIRED_ENV_VARS.push('RAILWAY_PUBLIC_DOMAIN'); }
 let missingVars = false;
-REQUIRED_ENV_VARS.forEach((key) => { /* ... validation logic as before ... */
-    if (key === 'REFERRAL_PAYOUT_PRIVATE_KEY') return;
-    if (key === 'RAILWAY_PUBLIC_DOMAIN' && !(process.env.RAILWAY_ENVIRONMENT === 'production' || process.env.RAILWAY_ENVIRONMENT === 'staging')) return;
-    if (!process.env[key]) { console.error(`❌ Environment variable ${key} is missing.`); missingVars = true; }
-});
-if (!process.env.ADMIN_USER_IDS) { if (!missingVars && REQUIRED_ENV_VARS.includes('ADMIN_USER_IDS')) { console.error(`❌ Environment variable ADMIN_USER_IDS is missing.`); missingVars = true; } }
-else if (process.env.ADMIN_USER_IDS.split(',').map(id => id.trim()).filter(id => /^\d+$/.test(id)).length === 0) { console.error(`❌ ADMIN_USER_IDS must contain at least one valid numeric ID.`); missingVars = true; }
-console.log(`[Env Check] Checking DEPOSIT_MASTER_SEED_PHRASE... Present: ${!!process.env.DEPOSIT_MASTER_SEED_PHRASE}`);
-if (process.env.DEPOSIT_MASTER_SEED_PHRASE && !bip39.validateMnemonic(process.env.DEPOSIT_MASTER_SEED_PHRASE)) { console.error(`❌ DEPOSIT_MASTER_SEED_PHRASE is set but invalid.`); missingVars = true; }
-else if (!process.env.DEPOSIT_MASTER_SEED_PHRASE && REQUIRED_ENV_VARS.includes('DEPOSIT_MASTER_SEED_PHRASE')) { if (!missingVars) { console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is missing.`); missingVars = true; } }
-const parsedRpcUrls = (process.env.RPC_URLS || '').split(',').map(u => u.trim()).filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
-if (parsedRpcUrls.length === 0 && REQUIRED_ENV_VARS.includes('RPC_URLS')) { console.error(`❌ RPC_URLS missing or contains no valid URLs.`); missingVars = true; }
-else if (parsedRpcUrls.length === 1) { console.warn(`⚠️ RPC_URLS only contains one URL. Redundancy recommended.`); }
-const validateBase58Key = (keyName, isRequired) => { /* ... validation logic as before ... */
-    const key = process.env[keyName];
-    if (key) { try { const decoded = bs58.decode(key); if (decoded.length !== 64) { console.error(`❌ Env var ${keyName} incorrect length (Expected 64): ${decoded.length}.`); return false; } console.log(`[Env Check] Key ${keyName} OK.`); } catch (e) { console.error(`❌ Failed to decode ${keyName}: ${e.message}`); return false; } }
-    else if (isRequired) { console.error(`❌ Required env var ${keyName} missing.`); return false; } return true;
-};
-if (!validateBase58Key('MAIN_BOT_PRIVATE_KEY', true)) missingVars = true;
-if (process.env.REFERRAL_PAYOUT_PRIVATE_KEY && !validateBase58Key('REFERRAL_PAYOUT_PRIVATE_KEY', false)) { missingVars = true; }
+REQUIRED_ENV_VARS.forEach((key) => { /* ... */ if (key === 'REFERRAL_PAYOUT_PRIVATE_KEY') return; if (key === 'RAILWAY_PUBLIC_DOMAIN' && !(process.env.RAILWAY_ENVIRONMENT === 'production' || process.env.RAILWAY_ENVIRONMENT === 'staging')) return; if (!process.env[key]) { console.error(`❌ Environment variable ${key} is missing.`); missingVars = true; } });
+if (!process.env.ADMIN_USER_IDS) { if (!missingVars && REQUIRED_ENV_VARS.includes('ADMIN_USER_IDS')) { console.error(`❌ Environment variable ADMIN_USER_IDS is missing.`); missingVars = true; } } else if (process.env.ADMIN_USER_IDS.split(',').map(id => id.trim()).filter(id => /^\d+$/.test(id)).length === 0) { console.error(`❌ ADMIN_USER_IDS must contain at least one valid numeric ID.`); missingVars = true; }
+console.log(`[Env Check] Checking DEPOSIT_MASTER_SEED_PHRASE... Present: ${!!process.env.DEPOSIT_MASTER_SEED_PHRASE}`); if (process.env.DEPOSIT_MASTER_SEED_PHRASE && !bip39.validateMnemonic(process.env.DEPOSIT_MASTER_SEED_PHRASE)) { console.error(`❌ DEPOSIT_MASTER_SEED_PHRASE is set but invalid.`); missingVars = true; } else if (!process.env.DEPOSIT_MASTER_SEED_PHRASE && REQUIRED_ENV_VARS.includes('DEPOSIT_MASTER_SEED_PHRASE')) { if (!missingVars) { console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is missing.`); missingVars = true; } }
+const parsedRpcUrls = (process.env.RPC_URLS || '').split(',').map(u => u.trim()).filter(u => u && (u.startsWith('http://') || u.startsWith('https://'))); if (parsedRpcUrls.length === 0 && REQUIRED_ENV_VARS.includes('RPC_URLS')) { console.error(`❌ RPC_URLS missing or contains no valid URLs.`); missingVars = true; } else if (parsedRpcUrls.length === 1) { console.warn(`⚠️ RPC_URLS only contains one URL. Redundancy recommended.`); }
+const validateBase58Key = (keyName, isRequired) => { /* ... */ const key = process.env[keyName]; if (key) { try { const decoded = bs58.decode(key); if (decoded.length !== 64) { console.error(`❌ Env var ${keyName} incorrect length (Expected 64): ${decoded.length}.`); return false; } console.log(`[Env Check] Key ${keyName} OK.`); } catch (e) { console.error(`❌ Failed to decode ${keyName}: ${e.message}`); return false; } } else if (isRequired) { console.error(`❌ Required env var ${keyName} missing.`); return false; } return true; };
+if (!validateBase58Key('MAIN_BOT_PRIVATE_KEY', true)) missingVars = true; if (process.env.REFERRAL_PAYOUT_PRIVATE_KEY && !validateBase58Key('REFERRAL_PAYOUT_PRIVATE_KEY', false)) { missingVars = true; }
 if (missingVars) { console.error("⚠️ Required environment variables missing/invalid. Exiting."); process.exit(1); }
+
 
 // --- Optional Environment Variables & Defaults ---
 const OPTIONAL_ENV_DEFAULTS = { /* ... all the defaults as listed before ... */
@@ -369,34 +354,24 @@ Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => { if (pro
 console.log("✅ Environment variables checked/defaults applied.");
 
 // --- Global Constants & State (Derived from Env Vars) ---
-const SOL_DECIMALS = 9;
-const DEPOSIT_ADDRESS_EXPIRY_MS = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000;
-const validConfirmLevels = ['processed', 'confirmed', 'finalized'];
-const envConfirmLevel = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase();
+// ... (All constant definitions remain the same as the previous correct version) ...
+const SOL_DECIMALS = 9; const DEPOSIT_ADDRESS_EXPIRY_MS = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000;
+const validConfirmLevels = ['processed', 'confirmed', 'finalized']; const envConfirmLevel = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase();
 const DEPOSIT_CONFIRMATION_LEVEL = validConfirmLevels.includes(envConfirmLevel) ? envConfirmLevel : 'confirmed';
-const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
-const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
-const MAX_PROCESSED_TX_CACHE_SIZE = parseInt(process.env.MAX_PROCESSED_TX_CACHE, 10);
-const USER_COMMAND_COOLDOWN_MS = parseInt(process.env.USER_COMMAND_COOLDOWN_MS, 10);
-const USER_STATE_TTL_MS = parseInt(process.env.USER_STATE_CACHE_TTL_MS, 10);
-const WALLET_CACHE_TTL_MS = parseInt(process.env.WALLET_CACHE_TTL_MS, 10);
-const DEPOSIT_ADDR_CACHE_TTL_MS = parseInt(process.env.DEPOSIT_ADDR_CACHE_TTL_MS, 10);
-const REFERRAL_INITIAL_BET_MIN_LAMPORTS = BigInt(process.env.REFERRAL_INITIAL_BET_MIN_LAMPORTS);
+const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS); const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
+const MAX_PROCESSED_TX_CACHE_SIZE = parseInt(process.env.MAX_PROCESSED_TX_CACHE, 10); const USER_COMMAND_COOLDOWN_MS = parseInt(process.env.USER_COMMAND_COOLDOWN_MS, 10);
+const USER_STATE_TTL_MS = parseInt(process.env.USER_STATE_CACHE_TTL_MS, 10); const WALLET_CACHE_TTL_MS = parseInt(process.env.WALLET_CACHE_TTL_MS, 10);
+const DEPOSIT_ADDR_CACHE_TTL_MS = parseInt(process.env.DEPOSIT_ADDR_CACHE_TTL_MS, 10); const REFERRAL_INITIAL_BET_MIN_LAMPORTS = BigInt(process.env.REFERRAL_INITIAL_BET_MIN_LAMPORTS);
 const REFERRAL_MILESTONE_REWARD_PERCENT = parseFloat(process.env.REFERRAL_MILESTONE_REWARD_PERCENT);
-const REFERRAL_INITIAL_BONUS_TIERS = [ /* ... as before ... */ { maxCount: 10, percent: 0.05 }, { maxCount: 25, percent: 0.10 }, { maxCount: 50, percent: 0.15 }, { maxCount: 100, percent: 0.20 }, { maxCount: Infinity, percent: 0.25 } ];
-const REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS = [ /* ... as before ... */ BigInt(1 * LAMPORTS_PER_SOL), BigInt(5 * LAMPORTS_PER_SOL), BigInt(10 * LAMPORTS_PER_SOL), BigInt(25 * LAMPORTS_PER_SOL), BigInt(50 * LAMPORTS_PER_SOL), BigInt(100 * LAMPORTS_PER_SOL), BigInt(250 * LAMPORTS_PER_SOL), BigInt(500 * LAMPORTS_PER_SOL), BigInt(1000 * LAMPORTS_PER_SOL) ];
-const SWEEP_FEE_BUFFER_LAMPORTS = BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS);
-const SWEEP_BATCH_SIZE = parseInt(process.env.SWEEP_BATCH_SIZE, 10);
-const SWEEP_ADDRESS_DELAY_MS = parseInt(process.env.SWEEP_ADDRESS_DELAY_MS, 10);
-const SWEEP_RETRY_ATTEMPTS = parseInt(process.env.SWEEP_RETRY_ATTEMPTS, 10);
-const SWEEP_RETRY_DELAY_MS = parseInt(process.env.SWEEP_RETRY_DELAY_MS, 10);
-const SLOTS_JACKPOT_SEED_LAMPORTS = BigInt(process.env.SLOTS_JACKPOT_SEED_LAMPORTS);
-const SLOTS_JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.SLOTS_JACKPOT_CONTRIBUTION_PERCENT);
+const REFERRAL_INITIAL_BONUS_TIERS = [ { maxCount: 10, percent: 0.05 }, { maxCount: 25, percent: 0.10 }, { maxCount: 50, percent: 0.15 }, { maxCount: 100, percent: 0.20 }, { maxCount: Infinity, percent: 0.25 } ];
+const REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS = [ BigInt(1 * LAMPORTS_PER_SOL), BigInt(5 * LAMPORTS_PER_SOL), BigInt(10 * LAMPORTS_PER_SOL), BigInt(25 * LAMPORTS_PER_SOL), BigInt(50 * LAMPORTS_PER_SOL), BigInt(100 * LAMPORTS_PER_SOL), BigInt(250 * LAMPORTS_PER_SOL), BigInt(500 * LAMPORTS_PER_SOL), BigInt(1000 * LAMPORTS_PER_SOL) ];
+const SWEEP_FEE_BUFFER_LAMPORTS = BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS); const SWEEP_BATCH_SIZE = parseInt(process.env.SWEEP_BATCH_SIZE, 10);
+const SWEEP_ADDRESS_DELAY_MS = parseInt(process.env.SWEEP_ADDRESS_DELAY_MS, 10); const SWEEP_RETRY_ATTEMPTS = parseInt(process.env.SWEEP_RETRY_ATTEMPTS, 10); const SWEEP_RETRY_DELAY_MS = parseInt(process.env.SWEEP_RETRY_DELAY_MS, 10);
+const SLOTS_JACKPOT_SEED_LAMPORTS = BigInt(process.env.SLOTS_JACKPOT_SEED_LAMPORTS); const SLOTS_JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.SLOTS_JACKPOT_CONTRIBUTION_PERCENT);
 let currentSlotsJackpotLamports = SLOTS_JACKPOT_SEED_LAMPORTS;
-const STANDARD_BET_AMOUNTS_SOL = [0.01, 0.05, 0.10, 0.25, 0.5, 1.0];
-const STANDARD_BET_AMOUNTS_LAMPORTS = STANDARD_BET_AMOUNTS_SOL.map(sol => BigInt(Math.round(sol * LAMPORTS_PER_SOL)));
+const STANDARD_BET_AMOUNTS_SOL = [0.01, 0.05, 0.10, 0.25, 0.5, 1.0]; const STANDARD_BET_AMOUNTS_LAMPORTS = STANDARD_BET_AMOUNTS_SOL.map(sol => BigInt(Math.round(sol * LAMPORTS_PER_SOL)));
 console.log(`[Config] Standard Bet Amounts (Lamports): ${STANDARD_BET_AMOUNTS_LAMPORTS.join(', ')}`);
-const RACE_HORSES = [ /* ... as before ... */ { name: "Solar Sprint", emoji: "🐎₁", payoutMultiplier: 3.0 }, { name: "Comet Tail", emoji: "🏇₂", payoutMultiplier: 4.0 }, { name: "Galaxy Gallop", emoji: "🐴₃", payoutMultiplier: 5.0 }, { name: "Nebula Speed", emoji: "🎠₄", payoutMultiplier: 6.0 } ];
+const RACE_HORSES = [ { name: "Solar Sprint", emoji: "🐎₁", payoutMultiplier: 3.0 }, { name: "Comet Tail", emoji: "🏇₂", payoutMultiplier: 4.0 }, { name: "Galaxy Gallop", emoji: "🐴₃", payoutMultiplier: 5.0 }, { name: "Nebula Speed", emoji: "🎠₄", payoutMultiplier: 6.0 } ];
 
 // In-memory Caches & State
 const userStateCache = new Map(); const walletCache = new Map(); const activeDepositAddresses = new Map();
@@ -414,7 +389,7 @@ app.use(express.json({ limit: '10kb' }));
 // Initialize Solana Connection
 console.log("⚙️ Initializing Multi-RPC Solana connection...");
 console.log(`ℹ️ Using RPC Endpoints: ${parsedRpcUrls.join(', ')}`);
-const solanaConnection = new RateLimitedConnection(parsedRpcUrls, { /* ... options as before ... */
+const solanaConnection = new RateLimitedConnection(parsedRpcUrls, { /* ... options ... */
     maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10), retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
     maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10), rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
     retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10), retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
@@ -425,22 +400,22 @@ console.log("✅ Multi-RPC Solana connection instance created.");
 
 // Initialize Processing Queues
 console.log("⚙️ Initializing Processing Queues...");
-const messageQueue = new PQueue({ /* ... options as before ... */ concurrency: parseInt(process.env.MSG_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.MSG_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
-const callbackQueue = new PQueue({ /* ... options as before ... */ concurrency: parseInt(process.env.CALLBACK_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.CALLBACK_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
-const payoutProcessorQueue = new PQueue({ /* ... options as before ... */ concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
-const depositProcessorQueue = new PQueue({ /* ... options as before ... */ concurrency: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
-const telegramSendQueue = new PQueue({ /* ... options as before ... */ concurrency: parseInt(process.env.TELEGRAM_SEND_QUEUE_CONCURRENCY, 10), interval: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_MS, 10), intervalCap: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_CAP, 10) });
+const messageQueue = new PQueue({ /* ... */ concurrency: parseInt(process.env.MSG_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.MSG_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
+const callbackQueue = new PQueue({ /* ... */ concurrency: parseInt(process.env.CALLBACK_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.CALLBACK_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
+const payoutProcessorQueue = new PQueue({ /* ... */ concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
+const depositProcessorQueue = new PQueue({ /* ... */ concurrency: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
+const telegramSendQueue = new PQueue({ /* ... */ concurrency: parseInt(process.env.TELEGRAM_SEND_QUEUE_CONCURRENCY, 10), interval: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_MS, 10), intervalCap: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_CAP, 10) });
 console.log("✅ Processing Queues initialized.");
 
 
 // Initialize PostgreSQL Pool
 console.log("⚙️ Setting up PostgreSQL Pool...");
-const pool = new Pool({ /* ... options as before ... */
+const pool = new Pool({ /* ... options ... */
     connectionString: process.env.DATABASE_URL, max: parseInt(process.env.DB_POOL_MAX, 10), min: parseInt(process.env.DB_POOL_MIN, 10),
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10), connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT, 10),
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: process.env.DB_REJECT_UNAUTHORIZED === 'true' } : false,
 });
-pool.on('error', (err, client) => { /* ... error handling as before ... */
+pool.on('error', (err, client) => { /* ... error handling ... */
     console.error('❌ Unexpected error on idle PostgreSQL client', err);
     if (typeof notifyAdmin === "function") { notifyAdmin(`🚨 DATABASE POOL ERROR (Idle Client): ${escapeMarkdownV2(err.message || String(err))}`).catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr)); }
     else { console.error(`[ADMIN ALERT during DB Pool Error (Idle Client)] ${err.message}`); }
@@ -449,7 +424,7 @@ console.log("✅ PostgreSQL Pool created.");
 
 // Initialize Telegram Bot
 console.log("⚙️ Initializing Telegram Bot...");
-const bot = new TelegramBot(process.env.BOT_TOKEN, { /* ... options as before ... */
+const bot = new TelegramBot(process.env.BOT_TOKEN, { /* ... options ... */
     polling: false, request: { timeout: 15000, agentOptions: { keepAlive: true, keepAliveMsecs: 60000, maxSockets: 100, maxFreeSockets: 10 } }
 });
 console.log("✅ Telegram Bot instance created.");
@@ -480,57 +455,84 @@ const safeGetBigIntEnv = (key, defaultValue) => {
         }
     }
 };
-const safeGetFloatEnv = (key, defaultValue) => { /* ... as before ... */ try { const val = parseFloat(process.env[key]); return isNaN(val) ? defaultValue : val; } catch { return defaultValue; } };
+const safeGetFloatEnv = (key, defaultValue) => { try { const val = parseFloat(process.env[key]); return isNaN(val) ? defaultValue : val; } catch { return defaultValue; } };
+
+// ** CORRECTED GAME_CONFIG LOOP **
+// Helper to get the correct ENV prefix (Matches OPTIONAL_ENV_DEFAULTS keys)
+const getEnvPrefix = (gameKey) => {
+    if (gameKey === 'coinflip') return 'CF';
+    // Check prefixes used in your OPTIONAL_ENV_DEFAULTS and add specific cases if needed
+    if (gameKey === 'blackjack') return 'BLACKJACK'; // Assuming BLACKJACK_ prefix matches defaults
+    // Add other specific prefixes if they differ from full uppercase (e.g., WAR_, RACE_, SLOTS_, ROULETTE_, CRASH_)
+    // Make sure these match EXACTLY what's in OPTIONAL_ENV_DEFAULTS
+    if (gameKey === 'war') return 'WAR';
+    if (gameKey === 'race') return 'RACE';
+    if (gameKey === 'slots') return 'SLOTS';
+    if (gameKey === 'roulette') return 'ROULETTE';
+    if (gameKey === 'crash') return 'CRASH';
+
+    return gameKey.toUpperCase(); // Fallback if no specific prefix needed/found
+};
+
 const games = ['coinflip', 'race', 'slots', 'roulette', 'war', 'crash', 'blackjack'];
-games.forEach(key => { /* ... game config loading logic as before ... */
-    const upperKey = key.toUpperCase();
+games.forEach(key => {
+    const envPrefix = getEnvPrefix(key);
+    const defaultMinKey = `${envPrefix}_MIN_BET_LAMPORTS`;
+    const defaultMaxKey = `${envPrefix}_MAX_BET_LAMPORTS`;
+    const defaultEdgeKey = `${envPrefix}_HOUSE_EDGE`;
+
+    // Check if default keys actually exist before using them
+    if (!(defaultMinKey in OPTIONAL_ENV_DEFAULTS)) console.warn(`[Config Load] Missing default key in OPTIONAL_ENV_DEFAULTS: ${defaultMinKey}`);
+    if (!(defaultMaxKey in OPTIONAL_ENV_DEFAULTS)) console.warn(`[Config Load] Missing default key in OPTIONAL_ENV_DEFAULTS: ${defaultMaxKey}`);
+    if (!(defaultEdgeKey in OPTIONAL_ENV_DEFAULTS)) console.warn(`[Config Load] Missing default key in OPTIONAL_ENV_DEFAULTS: ${defaultEdgeKey}`);
+
     GAME_CONFIG[key] = {
-        key: key, name: key.charAt(0).toUpperCase() + key.slice(1),
-        minBetLamports: safeGetBigIntEnv(`${upperKey}_MIN_BET_LAMPORTS`, OPTIONAL_ENV_DEFAULTS[`${upperKey}_MIN_BET_LAMPORTS`]),
-        maxBetLamports: safeGetBigIntEnv(`${upperKey}_MAX_BET_LAMPORTS`, OPTIONAL_ENV_DEFAULTS[`${upperKey}_MAX_BET_LAMPORTS`]),
-        houseEdge: safeGetFloatEnv(`${upperKey}_HOUSE_EDGE`, parseFloat(OPTIONAL_ENV_DEFAULTS[`${upperKey}_HOUSE_EDGE`]))
+        key: key,
+        name: key.charAt(0).toUpperCase() + key.slice(1), // Default name
+        minBetLamports: safeGetBigIntEnv(defaultMinKey, OPTIONAL_ENV_DEFAULTS[defaultMinKey]),
+        maxBetLamports: safeGetBigIntEnv(defaultMaxKey, OPTIONAL_ENV_DEFAULTS[defaultMaxKey]),
+        houseEdge: safeGetFloatEnv(defaultEdgeKey, parseFloat(OPTIONAL_ENV_DEFAULTS[defaultEdgeKey] || '0.1')) // Added fallback for edge default lookup
     };
-    if(key === 'slots') {
-        GAME_CONFIG[key].name = 'Slots';
-        GAME_CONFIG[key].jackpotContributionPercent = safeGetFloatEnv('SLOTS_JACKPOT_CONTRIBUTION_PERCENT', parseFloat(OPTIONAL_ENV_DEFAULTS['SLOTS_JACKPOT_CONTRIBUTION_PERCENT']));
-        GAME_CONFIG[key].jackpotSeedLamports = safeGetBigIntEnv('SLOTS_JACKPOT_SEED_LAMPORTS', OPTIONAL_ENV_DEFAULTS['SLOTS_JACKPOT_SEED_LAMPORTS']);
-    }
+
+    // Override default names
+    if(key === 'slots') GAME_CONFIG[key].name = 'Slots';
     if(key === 'war') GAME_CONFIG[key].name = 'Casino War';
     if(key === 'blackjack') GAME_CONFIG[key].name = 'Blackjack';
+    if(key === 'coinflip') GAME_CONFIG[key].name = 'Coinflip';
+    if(key === 'race') GAME_CONFIG[key].name = 'Race';
+    if(key === 'roulette') GAME_CONFIG[key].name = 'Roulette';
+    if(key === 'crash') GAME_CONFIG[key].name = 'Crash';
+
+    // Add slots specific config (ensure keys exist in defaults)
+    if(key === 'slots') {
+        const contributionKey = 'SLOTS_JACKPOT_CONTRIBUTION_PERCENT';
+        const seedKey = 'SLOTS_JACKPOT_SEED_LAMPORTS';
+        if (!(contributionKey in OPTIONAL_ENV_DEFAULTS)) console.warn(`[Config Load] Missing default key in OPTIONAL_ENV_DEFAULTS: ${contributionKey}`);
+        if (!(seedKey in OPTIONAL_ENV_DEFAULTS)) console.warn(`[Config Load] Missing default key in OPTIONAL_ENV_DEFAULTS: ${seedKey}`);
+
+        GAME_CONFIG[key].jackpotContributionPercent = safeGetFloatEnv(contributionKey, parseFloat(OPTIONAL_ENV_DEFAULTS[contributionKey] || '0'));
+        GAME_CONFIG[key].jackpotSeedLamports = safeGetBigIntEnv(seedKey, OPTIONAL_ENV_DEFAULTS[seedKey]);
+    }
 });
+
 // Validate Game Config
 function validateGameConfig(config) { /* ...validation logic as before... */
     const errors = [];
-    for (const gameKey in config) {
-        const gc = config[gameKey];
-        if (!gc) { errors.push(`Config for game "${gameKey}" missing.`); continue; }
-        if (gc.key !== gameKey) errors.push(`${gameKey}: key mismatch`);
-        if (!gc.name) errors.push(`${gameKey}: name missing`);
-        if (typeof gc.minBetLamports !== 'bigint' || gc.minBetLamports <= 0n) errors.push(`${gameKey}: minBetLamports invalid`);
-        if (typeof gc.maxBetLamports !== 'bigint' || gc.maxBetLamports <= 0n) errors.push(`${gameKey}: maxBetLamports invalid`);
-        if (gc.minBetLamports > gc.maxBetLamports) errors.push(`${gameKey}: minBet > maxBet`);
-        if (isNaN(gc.houseEdge) || gc.houseEdge < 0 || gc.houseEdge >= 1) errors.push(`${gameKey}: houseEdge invalid (must be 0 <= edge < 1)`);
-        if (gameKey === 'slots') {
-            if (isNaN(gc.jackpotContributionPercent) || gc.jackpotContributionPercent < 0 || gc.jackpotContributionPercent >= 1) errors.push(`${gameKey}: jackpotContributionPercent invalid`);
-            if (typeof gc.jackpotSeedLamports !== 'bigint' || gc.jackpotSeedLamports < 0n) errors.push(`${gameKey}: jackpotSeedLamports invalid`);
-        }
-    }
+    for (const gameKey in config) { /* ... */ const gc = config[gameKey]; if (!gc) { errors.push(`Config for game "${gameKey}" missing.`); continue; } if (gc.key !== gameKey) errors.push(`${gameKey}: key mismatch`); if (!gc.name) errors.push(`${gameKey}: name missing`); if (typeof gc.minBetLamports !== 'bigint' || gc.minBetLamports <= 0n) errors.push(`${gameKey}: minBetLamports invalid`); if (typeof gc.maxBetLamports !== 'bigint' || gc.maxBetLamports <= 0n) errors.push(`${gameKey}: maxBetLamports invalid`); if (gc.minBetLamports > gc.maxBetLamports) errors.push(`${gameKey}: minBet > maxBet`); if (isNaN(gc.houseEdge) || gc.houseEdge < 0 || gc.houseEdge >= 1) errors.push(`${gameKey}: houseEdge invalid (must be 0 <= edge < 1)`); if (gameKey === 'slots') { if (isNaN(gc.jackpotContributionPercent) || gc.jackpotContributionPercent < 0 || gc.jackpotContributionPercent >= 1) errors.push(`${gameKey}: jackpotContributionPercent invalid`); if (typeof gc.jackpotSeedLamports !== 'bigint' || gc.jackpotSeedLamports < 0n) errors.push(`${gameKey}: jackpotSeedLamports invalid`); } }
     return errors;
 }
-const configErrors = validateGameConfig(GAME_CONFIG);
-if (configErrors.length > 0) {
-    console.error(`❌ Invalid game configuration values: ${configErrors.join(', ')}. Exiting.`);
+const configErrorsAfterFix = validateGameConfig(GAME_CONFIG);
+if (configErrorsAfterFix.length > 0) {
+    console.error(`❌ Invalid game configuration values AFTER FIX ATTEMPT: ${configErrorsAfterFix.join(', ')}. Exiting.`);
     process.exit(1);
 }
-console.log("✅ Game Config Loaded and Validated.");
+console.log("✅ Game Config Loaded and Validated (with corrected key prefixes).");
 
 // Declare commandHandlers and menuCommandHandlers with `let`
-// They will be populated in Part 5b
 let commandHandlers;
 let menuCommandHandlers;
 
 // --- Export Block Removed ---
-// (No export block here anymore)
 
 // --- End of Part 1 ---
 // index.js - Part 2: Database Operations
