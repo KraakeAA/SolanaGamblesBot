@@ -6032,7 +6032,7 @@ async function initializeDatabase() {
                 referral_count INTEGER NOT NULL DEFAULT 0,
                 total_wagered BIGINT NOT NULL DEFAULT 0,
                 last_milestone_paid_lamports BIGINT NOT NULL DEFAULT 0,
-                last_bet_amounts JSONB DEFAULT '{}'::jsonb, // Included for new table creation
+                last_bet_amounts JSONB DEFAULT '{}'::jsonb,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         `);
