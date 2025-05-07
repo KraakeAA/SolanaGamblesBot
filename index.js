@@ -5148,10 +5148,12 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 
 // --- End of Part 5b (Section 1) ---
 // index.js - Part 5b: Telegram Command Handlers & Stateful Inputs (Section 2 of 2)
-// --- VERSION: 3.2.1a --- (Applied Fixes: Combined 5b sections, GIF, /wallet args, Emojis, Game Selection Menu)
+// --- VERSION: 3.2.1b --- (Corrected: Removed duplicate stateful handler definitions from this section)
 
 // (Continuing directly from Part 5b, Section 1)
 // ... (Assume functions like routeStatefulInput, handleCustomAmountInput, handleRouletteNumberInput, handleWalletAddressInput, handleWithdrawalAmountInput are defined above in Section 1) ...
+// ... (Assume other dependencies like bot, pool, GAME_CONFIG, utils, etc., are available) ...
+
 
 // --- General Command Handlers (/start, /help, /wallet, etc.) ---
 // All command handlers accept msgOrCbMsg, args, and optional correctUserIdFromCb
@@ -5197,11 +5199,11 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
                 const referrerInfo = await getUserByReferralCode(refCode); // getUserByReferralCode from Part 2
                 if (referrerInfo && referrerInfo.user_id !== userId) {
                      // pendingReferrals, PENDING_REFERRAL_TTL_MS from Part 1 state
-                    pendingReferrals.set(userId, { referrerUserId: referrerInfo.user_id, timestamp: Date.now() });
+                    pendingReferrals.set(userId, { referrerUserId: referrerInfo.user_id, timestamp: Date.now() }); // Store referrer ID
                     console.log(`${logPrefix} New user ${userId} has pending referral by ${referrerInfo.user_id} via code ${refCode}. Link on deposit.`);
                     const referrerDisplayName = await getUserDisplayName(chatId, referrerInfo.user_id); // getUserDisplayName from Part 3
                     // MarkdownV2 Safety: Escape name, punctuation
-                    safeSendMessage(chatId, `👋 Welcome via ${referrerDisplayName || escapeMarkdownV2('a friend')}'s referral link\\! Your accounts will be linked upon your first deposit\\.`, {parse_mode: 'MarkdownV2'}); // Escaped . !
+                    safeSendMessage(chatId, `👋 Welcome via ${referrerDisplayName || escapeMarkdownV2('a friend')}'s referral link\\! Your accounts will be linked upon your first deposit\\.`, {parse_mode: 'MarkdownV2'}); // Escaped . ! safeSendMessage from Part 3
                 } else if (referrerInfo && referrerInfo.user_id === userId) {
                      // MarkdownV2 Safety: Escape punctuation
                     safeSendMessage(chatId, "You can't use your own referral code\\!", {parse_mode: 'MarkdownV2'}); // Escaped !
@@ -5241,7 +5243,7 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
     const gifUrl = 'https://tenor.com/qkHvHxx2c1i.gif'; // User provided URL
 
     try {
-        // Send animation with caption and keyboard. We deleted the original message if needed earlier.
+        // Send animation with caption and keyboard. Original message was deleted earlier if needed.
         await bot.sendAnimation(chatId, gifUrl, {
             caption: welcomeMsg, // Already escaped
             parse_mode: 'MarkdownV2',
@@ -5255,7 +5257,7 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
     }
 }
 
-// --- NEW Game Selection Handler ---
+// --- Game Selection Handler ---
 async function handleGameSelectionCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
@@ -5279,7 +5281,8 @@ async function handleGameSelectionCommand(msgOrCbMsg, args, correctUserIdFromCb 
         else if (game.key === 'roulette') emoji = '⚪️';
         else if (game.key === 'crash') emoji = '🚀';
         else if (game.key === 'blackjack') emoji = '♠️';
-        return { text: `${emoji} ${game.name}`, callback_data: `select_game:${game.key}` }; // Use select_game action prefix
+        // Use `select_game` action prefix to trigger amount selection
+        return { text: `${emoji} ${game.name}`, callback_data: `select_game:${game.key}` };
     });
 
     // Arrange buttons (e.g., 2 per row for better mobile view)
@@ -5311,43 +5314,69 @@ async function handleGameSelectionCommand(msgOrCbMsg, args, correctUserIdFromCb 
 }
 
 
+/**
+ * Handles the /help command and callbacks for help sections.
+ * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg Message or callback message.
+ * @param {Array<string>} args args[0] is command or menu key, args[1] might be section.
+ * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
+ */
 async function handleHelpCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
-    let messageToEditId = msgOrCbMsg.message_id;
-    let isFromCallback = !!correctUserIdFromCb;
-    const section = args?.length > 1 ? args[1] : null; // Get section if provided
+    const messageId = msgOrCbMsg.message_id;
+    const isFromCallback = !!correctUserIdFromCb;
+    // Section comes from args[1] if command was `/help section`, or args[0] if callback was `show_help_section:section`
+    const section = isFromCallback ? args[0] : (args.length > 1 ? args[1] : null);
+    const logPrefix = `[HelpCmd User ${userId} Section ${section}]`;
 
-    // If no specific section requested via callback args, show the main help menu
-    if (!section && isFromCallback) {
-        await handleMenuAction(userId, chatId, messageId, 'help', []); // Use handleMenuAction to show main help section menu
+    // If called with /help or menu:help without a section, show the main help menu
+    if (!section) {
+        const text = `ℹ️ *Help & Information*\n\nSelect a topic for more details:`;
+        const keyboard = { // Add Emojis
+            inline_keyboard: [
+                [{ text: '❓ How to Play', callback_data: 'show_help_section:how_to_play' }],
+                [{ text: '💰 Deposits & Withdrawals', callback_data: 'show_help_section:deposits_withdrawals' }],
+                [{ text: '🎲 Game Rules', callback_data: 'show_help_section:game_rules' }],
+                [{ text: '⚖️ Fairness & House Edge', callback_data: 'show_help_section:fairness' }],
+                [{ text: '👥 Referral Program', callback_data: 'menu:referral' }],
+                [{ text: '📞 Support', callback_data: 'show_help_section:support' }],
+                [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
+            ]
+        };
+        const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: keyboard };
+        if (isFromCallback && messageId) {
+             bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options })
+                .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, text, options); });
+        } else {
+            safeSendMessage(chatId, text, options);
+        }
         return;
     }
 
     // If section IS provided, show that specific help text
+    console.log(`${logPrefix} Displaying help section: ${section}`);
     let text = '';
     let keyboard = { inline_keyboard: [[{ text: '↩️ Back to Help Menu', callback_data: 'menu:help' }]] }; // Default back button
 
-    if (section) {
-        // Existing logic to generate specific help text based on section
-        // (Copied from previous response - ensure variables are defined/imported)
-        const feeSOL = escapeMarkdownV2(formatSol(WITHDRAWAL_FEE_LAMPORTS)); // Needs constants from Part 1
-        const minWithdrawSOL = escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS));
-        const botVersionHelp = escapeMarkdownV2(BOT_VERSION);
-        const expiryMinutesHelp = escapeMarkdownV2(String(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES || '60'));
-        const confirmationLevelHelp = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL);
+    // Generate specific help text based on section (ensure variables are defined/imported)
+    // Constants like WITHDRAWAL_FEE_LAMPORTS, MIN_WITHDRAWAL_LAMPORTS, BOT_VERSION, DEPOSIT_CONFIRMATION_LEVEL are from Part 1
+    const feeSOL = escapeMarkdownV2(formatSol(WITHDRAWAL_FEE_LAMPORTS));
+    const minWithdrawSOL = escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS));
+    const botVersionHelp = escapeMarkdownV2(BOT_VERSION);
+    const expiryMinutesHelp = escapeMarkdownV2(String(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES || '60'));
+    const confirmationLevelHelp = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL);
 
-        switch (section) {
-            case 'how_to_play':
-                 text = "❓ *How to Play*\n\n" +
+    switch (section) {
+        case 'how_to_play':
+             text = "❓ *How to Play*\n\n" +
                    "1\\. *Deposit SOL*: Use the `/deposit` command or 'Deposit SOL' button in your Wallet menu to get a unique SOL address\\. Send SOL to it\\.\n" + // Escaped .
                    "2\\. *Choose a Game*: Navigate to 'Play Games' from the main menu and select a game\\.\n" + // Escaped .
                    "3\\. *Place Your Bet*: Select a predefined bet amount or enter a custom amount when prompted\\.\n" + // Escaped .
                    "4\\. *Play & Win\\!*: Follow game-specific instructions\\. Winnings are instantly credited to your internal balance\\.\n" + // Escaped . !
                    "5\\. *Withdraw SOL*: Use the 'Withdraw SOL' button in your Wallet to send funds to your linked external Solana wallet\\."; // Escaped .
-                break;
-            case 'deposits_withdrawals':
-                 text = "💰 *Deposits & Withdrawals*\n\n" +
+            break;
+        case 'deposits_withdrawals':
+             text = "💰 *Deposits & Withdrawals*\n\n" +
                    "*Deposits:*\n" +
                    "  \\- Use `/deposit` or the 'Deposit SOL' button for a unique, temporary SOL address\\.\n" + // Escaped . -
                    "  \\- Send SOL to this address from your external wallet\\.\n" + // Escaped . -
@@ -5358,19 +5387,19 @@ async function handleHelpCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
                    "  \\- Choose 'Withdraw SOL' from the Wallet menu and enter the amount\\.\n" + // Escaped . -
                    "  \\- A small network fee applies \\(${feeSOL} SOL\\)\\.\n" + // Escaped . () -
                    `  \\- Minimum withdrawal: ${minWithdrawSOL} SOL\\.`; // Escaped . -
-                 break;
-            case 'game_rules':
-                text = "🎲 *Game Rules*\n\n" +
-                       "*Coinflip*: Choose Heads or Tails\\. 50/50 chance\\. Simple as that\\!\n" + // Escaped . !
-                       "*Slots*: Spin the reels\\! Match symbols for payouts\\. Hit the Jackpot \\(💎💎💎\\) for a big win\\!\n" + // Escaped ! ()
-                       "*War*: Your card vs\\. the Dealer's card\\. Highest card wins \\(Ace is high\\)\\. Push on a tie\\.\n" + // Escaped . () .
-                       "*Race*: Pick a horse to win the race\\. Each horse has different payout odds\\.\n" + // Escaped .
-                       "*Roulette*: European style \\(0-36\\)\\. Bet on numbers, colors \\(Red/Black\\), Even/Odd, or Low \\(1-18\\)/High \\(19-36\\)\\.\n" + // Escaped . ()
-                       "*Crash*: Watch the multiplier increase\\! Cash out before it crashes to win your bet multiplied by the cashout value\\. If it crashes before you cash out, you lose\\.\n" + // Escaped . !
-                       "*Blackjack*: Get closer to 21 than the dealer without going over\\. Aces can be 1 or 11\\. Dealer stands on 17\\. Blackjack \\(Ace + 10-value card\\) pays 3:2\\."; // Escaped . ()
-                break;
-            case 'fairness':
-                 text = "⚖️ *Fairness & House Edge*\n\n" +
+             break;
+        case 'game_rules':
+            text = "🎲 *Game Rules*\n\n" +
+                   "*Coinflip*: Choose Heads or Tails\\. 50/50 chance\\. Simple as that\\!\n" + // Escaped . !
+                   "*Slots*: Spin the reels\\! Match symbols for payouts\\. Hit the Jackpot \\(💎💎💎\\) for a big win\\!\n" + // Escaped ! ()
+                   "*War*: Your card vs\\. the Dealer's card\\. Highest card wins \\(Ace is high\\)\\. Push on a tie\\.\n" + // Escaped . () .
+                   "*Race*: Pick a horse to win the race\\. Each horse has different payout odds\\.\n" + // Escaped .
+                   "*Roulette*: European style \\(0-36\\)\\. Bet on numbers, colors \\(Red/Black\\), Even/Odd, or Low \\(1-18\\)/High \\(19-36\\)\\.\n" + // Escaped . ()
+                   "*Crash*: Watch the multiplier increase\\! Cash out before it crashes to win your bet multiplied by the cashout value\\. If it crashes before you cash out, you lose\\.\n" + // Escaped . !
+                   "*Blackjack*: Get closer to 21 than the dealer without going over\\. Aces can be 1 or 11\\. Dealer stands on 17\\. Blackjack \\(Ace + 10-value card\\) pays 3:2\\."; // Escaped . ()
+            break;
+        case 'fairness':
+             text = "⚖️ *Fairness & House Edge*\n\n" +
                    "Our games use provably fair algorithms where applicable \\(details may vary per game\\)\\.\n" + // Escaped . ()
                    "The House Edge is a small percentage ensuring the bot's operational sustainability\\. It's applied to winnings and varies per game:\n" + // Escaped .
                    `  \\- Coinflip: ${escapeMarkdownV2(GAME_CONFIG.coinflip.houseEdge * 100)}%\n` + // GAME_CONFIG from Part 1
@@ -5380,37 +5409,26 @@ async function handleHelpCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
                    `  \\- Roulette: ${escapeMarkdownV2(GAME_CONFIG.roulette.houseEdge * 100)}%\n` +
                    `  \\- Crash: ${escapeMarkdownV2(GAME_CONFIG.crash.houseEdge * 100)}%\n`+
                    `  \\- Blackjack: ${escapeMarkdownV2(GAME_CONFIG.blackjack.houseEdge * 100)}%`;
-                 break;
-            case 'support':
-                  // MarkdownV2 Safety: Escape username/group link
-                 const supportContact = process.env.SUPPORT_CONTACT_TELEGRAM || 'your_support_contact_env_var';
-                 text = `📞 *Support*\n\nIf you need help or encounter any issues, please reach out to our support team: @${escapeMarkdownV2(supportContact)}\n\n` +
-                       `Please provide your User ID \\(\`${escapeMarkdownV2(userId)}\`\\) and any relevant Bet IDs or Transaction details when contacting support\\.`; // Escaped () .
-                 break;
-            default:
-                  // MarkdownV2 Safety: Escape section
-                 text = `⚠️ Help section \`${escapeMarkdownV2(section)}\` not found\\.`; // Escaped .
-                 keyboard.inline_keyboard = [[{ text: '↩️ Back to Main Help', callback_data: 'menu:help' }]];
-        }
-    } else { // No section provided, show main help menu (redundant if called via menu:help)
-        text = `ℹ️ *Help & Information*\n\nSelect a topic for more details:`;
-        keyboard.inline_keyboard = [ // Add Emojis
-            [{ text: '❓ How to Play', callback_data: 'show_help_section:how_to_play' }],
-            [{ text: '💰 Deposits & Withdrawals', callback_data: 'show_help_section:deposits_withdrawals' }],
-            [{ text: '🎲 Game Rules', callback_data: 'show_help_section:game_rules' }],
-            [{ text: '⚖️ Fairness & House Edge', callback_data: 'show_help_section:fairness' }],
-            [{ text: '👥 Referral Program', callback_data: 'menu:referral' }], // Link to existing referral menu
-            [{ text: '📞 Support', callback_data: 'show_help_section:support' }],
-            [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
-        ];
+             break;
+        case 'support':
+              // MarkdownV2 Safety: Escape username/group link
+             const supportContact = process.env.SUPPORT_CONTACT_TELEGRAM || 'your_support_contact_env_var';
+             text = `📞 *Support*\n\nIf you need help or encounter any issues, please reach out to our support team: @${escapeMarkdownV2(supportContact)}\n\n` +
+                   `Please provide your User ID \\(\`${escapeMarkdownV2(userId)}\`\\) and any relevant Bet IDs or Transaction details when contacting support\\.`; // Escaped () .
+             break;
+        default:
+              // MarkdownV2 Safety: Escape section
+             text = `⚠️ Help section \`${escapeMarkdownV2(section)}\` not found\\.`; // Escaped .
+             keyboard.inline_keyboard = [[{ text: '↩️ Back to Main Help', callback_data: 'menu:help' }]];
     }
 
     const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: keyboard };
 
-    if (isFromCallback && messageToEditId) {
-        bot.editMessageText(text, { chat_id: chatId, message_id: messageToEditId, ...options })
-           .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, text, options); });
-    } else {
+    // Edit the existing message (if from callback)
+    if (isFromCallback && messageId) {
+        bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options })
+            .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, text, options); });
+    } else { // Should not happen if called via callback 'show_help_section', but handle direct call too
         safeSendMessage(chatId, text, options);
     }
 }
@@ -5425,27 +5443,26 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
     // *** FIX: /wallet Argument Bug - Use args[1] and check length > 1 ***
     // args from direct message: args[0] is '/wallet', args[1] is address
-    // If called from callback 'menu:wallet', args will be empty or reflect callback params (not address)
     const potentialNewAddress = (!isFromCallback && args && args.length > 1) // Check if command has an argument *after* /wallet
                                  ? args[1].trim()
-                                 : null;
+                                 : null; // Cannot set address via callback 'menu:wallet'
 
     if (potentialNewAddress) {
-        console.log(`${logPrefix} Attempting to link new address: ${potentialNewAddress}`);
-        // Don't edit the user's original command message, send a new reply
-        const loadingMsg = await safeSendMessage(chatId, `🔗 Linking wallet \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\\.\\.`, { parse_mode: 'MarkdownV2' }); // Escaped . ...
+        console.log(`${logPrefix} Attempting to link new address via command: ${potentialNewAddress}`);
+        // Don't edit the user's original command message (/wallet address), send a new reply
+        const loadingMsg = await safeSendMessage(chatId, `🔗 Linking wallet \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\\.\\.`, { parse_mode: 'MarkdownV2' }); // Escaped . ... Add Emoji
         if (!loadingMsg) return; // Failed to send feedback
-        messageToEditId = loadingMsg.message_id; // Edit *this* message with the result
+        messageToEditId = loadingMsg.message_id; // We can edit *this* message with the result
 
         const linkResult = await linkUserWallet(userId, potentialNewAddress); // from Part 2
         if (linkResult.success) {
              // MarkdownV2 Safety: Escape address, referral code
             const successMsg = `✅ Wallet \`${escapeMarkdownV2(linkResult.wallet)}\` successfully linked\\.\nYour referral code: \`${escapeMarkdownV2(linkResult.referralCode || 'Generated!')}\``; // Escaped . !
-            bot.editMessageText(successMsg, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
+            bot.editMessageText(successMsg, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }}); // Add Emoji
         } else {
              // MarkdownV2 Safety: Escape error
             const errorMsg = `⚠️ Failed to link wallet: ${escapeMarkdownV2(linkResult.error || 'Unknown error')}\\. Please ensure it's a valid Solana address\\.`; // Escaped .
-            bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] } });
+            bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] } }); // Add Emoji
         }
     } else {
         // View wallet info (called by /wallet without args or menu:wallet)
@@ -5510,7 +5527,7 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
 
     if (!history || history.length === 0) {
         const noHistoryMsg = "You have no betting history yet\\. Time to play some games\\!"; // Escaped . !
-        const keyboard = {inline_keyboard: [[{text: "🎮 Games Menu", callback_data: "menu:game_selection"}]]}; // Back to game select
+        const keyboard = {inline_keyboard: [[{text: "🎮 Games Menu", callback_data: "menu:game_selection"}]]}; // Back to game select, Add Emoji
         const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard };
         if (isFromCallback && messageToEditId) {
              return bot.editMessageText(noHistoryMsg, {chat_id: chatId, message_id: messageToEditId, ...options})
@@ -5519,7 +5536,7 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         return safeSendMessage(chatId, noHistoryMsg, options);
     }
 
-    let historyMsg = "📜 *Your Last 5 Bets:*\n\n"; // Escaped
+    let historyMsg = "📜 *Your Last 5 Bets:*\n\n"; // Escaped, Added Emoji
     history.forEach(bet => {
         const gameName = GAME_CONFIG[bet.game_type]?.name || bet.game_type; // GAME_CONFIG from Part 1
         const wager = formatSol(bet.wager_amount_lamports); // formatSol from Part 3
@@ -5569,16 +5586,47 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         return safeSendMessage(chatId, noWalletMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
     }
     if (!userDetails.referral_code) {
-        // Maybe try to link wallet again to generate code? For now, prompt user.
-        // linkUserWallet(userId, userDetails.external_withdrawal_address); // This might auto-generate if needed
-        const genCodeMsg = `Referral code not found\\. Trying to generate it\\. Please try \`/referral\` again in a moment\\. If this persists, use \`/wallet ${escapeMarkdownV2(userDetails.external_withdrawal_address)}\` to ensure linkage\\.`; // Escaped .
-        const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emoji
-        if (isFromCallback && messageToEditId) {
-            return bot.editMessageText(genCodeMsg, {chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
+        // Try to generate if missing (might happen if linked before code existed)
+        let clientGen = null;
+        let generatedCode = null;
+        try {
+            clientGen = await pool.connect();
+            await clientGen.query('BEGIN');
+            const walletCheck = await queryDatabase('SELECT referral_code FROM wallets WHERE user_id=$1 FOR UPDATE', [userId], clientGen);
+            if (walletCheck.rowCount > 0 && !walletCheck.rows[0].referral_code) {
+                 generatedCode = generateReferralCode(); // from Part 3
+                 await queryDatabase('UPDATE wallets SET referral_code=$1 WHERE user_id=$2', [generatedCode, userId], clientGen);
+                 await clientGen.query('COMMIT');
+                 console.log(`[ReferralCmd User ${userId}] Generated missing referral code: ${generatedCode}`);
+                 updateWalletCache(userId, { referralCode: generatedCode }); // from Part 3
+                 userDetails.referral_code = generatedCode; // Update local copy
+            } else {
+                 await clientGen.query('ROLLBACK'); // Code already exists or user not found
+                 generatedCode = walletCheck.rows[0]?.referral_code; // Get existing code
+                 if (!generatedCode) throw new Error("User or code not found after check.");
+            }
+        } catch (genError) {
+            if(clientGen) await clientGen.query('ROLLBACK').catch(()=>{});
+            console.error(`[ReferralCmd User ${userId}] Error generating/fetching referral code: ${genError.message}`);
+             // MarkdownV2 Safety: Escape static text
+            const genCodeMsg = `There was an error getting your referral code\\. Please try again or contact support\\.`; // Escaped .
+            const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emoji
+            if (isFromCallback && messageToEditId) {
+                return bot.editMessageText(genCodeMsg, {chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
                       .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, genCodeMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard }); });
+            }
+            return safeSendMessage(chatId, genCodeMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+        } finally {
+            if(clientGen) clientGen.release();
         }
-        return safeSendMessage(chatId, genCodeMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+        if (!userDetails.referral_code) { // Should have code now if generation worked
+             const stillMissingMsg = `Could not retrieve referral code\\. Please ensure wallet is linked and try again\\.`; // Escaped .
+             const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emoji
+             if (isFromCallback && messageToEditId) { /* Send error */ } else { /* Send error */ }
+             return;
+        }
     }
+
 
     const refCode = userDetails.referral_code;
     const totalEarningsLamports = await getTotalReferralEarnings(userId); // from Part 2
@@ -5591,11 +5639,10 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
     let escapedBotUsername = escapeMarkdownV2(botUsername);
     if (botUsername === 'YOUR_BOT_USERNAME') { try { const me = await bot.getMe(); if (me.username) { botUsername = me.username; escapedBotUsername = escapeMarkdownV2(me.username); } } catch (e) {} }
     const referralLink = `https://t.me/${botUsername}?start=${refCode}`;
-    // Don't escape the full URL for button, only for display in text.
-    const displayReferralLink = escapeMarkdownV2(referralLink);
+    const displayReferralLink = escapeMarkdownV2(referralLink); // Escaped version for display in text
 
     const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS)); // Constants from Part 1
-    const milestonePercent = escapeMarkdownV2(String(REFERRAL_MILESTONE_REWARD_PERCENT * 100));
+    const milestonePercent = escapeMarkdownV2(String(REFERRAL_MILESTONE_REWARD_PERCENT * 100)); // Constants from Part 1
     // REFERRAL_INITIAL_BONUS_TIERS from Part 1
     const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => { const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${t.maxCount}`; const percent = escapeMarkdownV2(String(t.percent * 100)); return `${count} refs \\= ${percent}%`; }).join(', '); // Escaped <> =
 
@@ -5661,8 +5708,32 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         try { tempClient = await pool.connect(); await ensureUserExists(userId, tempClient); } // from Part 2
         finally { if (tempClient) tempClient.release(); }
 
-        const addressIndex = await getNextDepositAddressIndex(userId); // from Part 2
-        const derivedInfo = await generateUniqueDepositAddress(userId, addressIndex); // from Part 3
+        // Check for existing active address first
+         const existingAddresses = await queryDatabase( // queryDatabase from Part 2
+            "SELECT deposit_address, expires_at FROM deposit_addresses WHERE user_id = $1 AND status = 'pending' AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
+            [userId]
+        );
+
+        if (existingAddresses.rowCount > 0) {
+            const existing = existingAddresses.rows[0];
+            const existingAddress = existing.deposit_address;
+            const existingExpiresAt = new Date(existing.expires_at);
+            const expiresInMs = existingExpiresAt.getTime() - Date.now();
+            const expiresInMinutes = Math.ceil(expiresInMs / (60 * 1000));
+
+             // MarkdownV2 Safety: Escape address, time
+            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapeMarkdownV2(existingAddress)}\`\n\\_(Tap address to copy\\)_\n\nIt expires in approximately ${escapeMarkdownV2(expiresInMinutes)} minutes\\.`; // Escaped . () _
+            text += `\n\nOnce you send SOL, it will be credited after confirmations\\. New deposits to this address will be credited until it expires\\.`; // Escaped .
+            bot.editMessageText(text, {
+                chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2',
+                reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]] } // Add Emoji
+            });
+            return;
+        }
+
+
+        const nextIndex = await getNextDepositAddressIndex(userId); // from Part 2
+        const derivedInfo = await generateUniqueDepositAddress(userId, nextIndex); // from Part 3
         if (!derivedInfo) { throw new Error("Failed to generate deposit address\\. Master seed phrase might be an issue\\."); } // Escaped .
 
         const depositAddress = derivedInfo.publicKey.toBase58();
@@ -5674,11 +5745,12 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const confirmationLevel = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL); // DEPOSIT_CONFIRMATION_LEVEL from Part 1
         const escapedAddress = escapeMarkdownV2(depositAddress);
 
-        const message = `💰 *Deposit SOL*\n\n` +
+         // MarkdownV2 Safety: Escape address, time, level
+        const message = `💰 *Your Unique Deposit Address*\n\n` +
                         `Send SOL to this unique address:\n\n` +
                         `\`${escapedAddress}\`\n\\_(Tap address to copy\\)_\n\n` + // Escaped () _
                         `⚠️ *Important:*\n` +
-                        `1\\. This address is for *one deposit only* & expires in *${expiryMinutes} minutes*\\.\n` + // Escaped .
+                        `1\\. This address is unique to you and for this deposit session\\. It will expire in *${expiryMinutes} minutes*\\.\n` + // Escaped .
                         `2\\. For new deposits, use \`/deposit\` again or the menu option\\.\n` + // Escaped .
                         `3\\. Confirmation: *${confirmationLevel}* network confirmations required\\.`; // Escaped .
 
@@ -5710,13 +5782,13 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
     let workingMessageId = messageToEditId;
     if (isFromCallback && messageToEditId) {
-         await bot.editMessageText("💸 Preparing withdrawal process\\.\\.\\.", { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } }).catch(() => { workingMessageId = null; }); // Escaped . ... Added Emoji
+         await bot.editMessageText("💸 Preparing withdrawal process\\.\\.\\.", { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } }).catch(() => { workingMessageId = null; }); // Escaped . ... Add Emoji
     } else if (!isFromCallback) {
-         const tempMsg = await safeSendMessage(chatId, "💸 Preparing withdrawal process\\.\\.\\.", { parse_mode: 'MarkdownV2' }); // Escaped . ... Added Emoji
+         const tempMsg = await safeSendMessage(chatId, "💸 Preparing withdrawal process\\.\\.\\.", { parse_mode: 'MarkdownV2' }); // Escaped . ... Add Emoji
          workingMessageId = tempMsg?.message_id;
     }
     if (!workingMessageId && isFromCallback) { // Handle case where initial edit failed
-         const tempMsg = await safeSendMessage(chatId, "💸 Preparing withdrawal process\\.\\.\\.", { parse_mode: 'MarkdownV2' }); // Escaped . ... Added Emoji
+         const tempMsg = await safeSendMessage(chatId, "💸 Preparing withdrawal process\\.\\.\\.", { parse_mode: 'MarkdownV2' }); // Escaped . ... Add Emoji
          workingMessageId = tempMsg?.message_id;
     }
     if (!workingMessageId) { console.error(`${logPrefix} Failed message context for withdraw.`); safeSendMessage(chatId, "Failed to initiate withdrawal process\\. Please try again\\.", { parse_mode: 'MarkdownV2' }); return; } // Escaped .
@@ -5735,7 +5807,8 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         const minWithdrawTotal = MIN_WITHDRAWAL_LAMPORTS + feeLamports; // MIN_WITHDRAWAL_LAMPORTS from Part 1
 
         if (currentBalance < minWithdrawTotal) {
-            const lowBalMsg = `⚠️ Your balance \\(${escapeMarkdownV2(formatSol(currentBalance))} SOL\\) is below the minimum required to withdraw \\(${escapeMarkdownV2(formatSol(minWithdrawTotal))} SOL total including fee\\)\\.`; // Escaped . ()
+             // MarkdownV2 Safety: Escape amounts, fee
+            const lowBalMsg = `⚠️ Your balance \\(${escapeMarkdownV2(formatSol(currentBalance))} SOL\\) is below the minimum required to withdraw \\(${escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS))} SOL + fee\\)\\.`; // Escaped . ()
             const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emoji
             return bot.editMessageText(lowBalMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
                       .catch(e => safeSendMessage(chatId, lowBalMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard}));
@@ -5786,10 +5859,10 @@ async function handleLeaderboardsCommand(msgOrCbMsg, args, correctUserIdFromCb =
     const type = args?.length > 1 ? args[1] : (args?.[0] || 'overall_wagered'); // Default to overall_wagered
     const page = args?.length > 2 ? parseInt(args[2], 10) : (args?.length > 1 && !isNaN(parseInt(args[1], 10)) ? parseInt(args[1], 10) : 0); // Get page if numeric
 
-    // Clear state as we are just viewing data
     clearUserState(userId);
 
-    await displayLeaderboard(chatId, messageId, userId, type, page, isFromCallback); // Defined above in Section 1
+    // Call displayLeaderboard, which now exists above in this section (or Part 5b Section 1)
+    await displayLeaderboard(chatId, messageId, userId, type, page, isFromCallback);
 }
 
 // --- Game Command Handlers ---
@@ -5799,8 +5872,9 @@ async function handleCoinflipCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const isFromCallback = !!correctUserIdFromCb;
+    // messageContext needs to include message_id for editing by showBetAmountButtons
     const messageContext = isFromCallback ? msgOrCbMsg : { from: { id: userId }, chat: { id: chatId }, message_id: msgOrCbMsg.message_id };
-    const betAmountArg = args?.length > 1 ? args[1] : null; // Arg index 1 is the amount after /cf
+    const betAmountArg = (!isFromCallback && args?.length > 1) ? args[1] : null; // Arg index 1 is the amount after /cf
 
     clearUserState(userId); // Ensure no lingering state
 
@@ -5813,9 +5887,10 @@ async function handleCoinflipCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             if (amountLamports >= gameConfig.minBetLamports && amountLamports <= gameConfig.maxBetLamports) {
                 // Valid amount provided via command, proceed to side selection
                 // Need a message to edit for proceedToGameStep
-                const loadingMsg = await safeSendMessage(chatId, `🪙 Loading Coinflip with ${escapeMarkdownV2(amountSOL)} SOL bet...`, {parse_mode: 'MarkdownV2'});
+                const loadingMsg = await safeSendMessage(chatId, `🪙 Loading Coinflip with ${escapeMarkdownV2(amountSOL)} SOL bet...`, {parse_mode: 'MarkdownV2'}); // Add Emoji
                 if (loadingMsg) {
-                    return proceedToGameStep(userId, chatId, loadingMsg.message_id, 'coinflip', amountLamports.toString(), null); // proceedToGameStep from Part 5a
+                    // Call proceedToGameStep from Part 5a
+                    return proceedToGameStep(userId, chatId, loadingMsg.message_id, 'coinflip', amountLamports.toString(), null);
                 } else {
                     console.error(`[CoinflipCmd] Failed to send loading message for user ${userId}.`);
                 }
@@ -5829,14 +5904,15 @@ async function handleCoinflipCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         }
     } else {
         // If no valid amount in args, show standard buttons
-        await showBetAmountButtons(messageContext, 'coinflip', null, userId); // Pass correctUserIdFromCb as userId now
+        await showBetAmountButtons(messageContext, 'coinflip', null, userId); // Show buttons, pass correct user ID
     }
 }
 
+// Simpler handlers just show bet buttons
 async function handleRaceCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     clearUserState(userId);
-    await showBetAmountButtons(msgOrCbMsg, 'race', null, userId); // Show buttons, pass correct user ID
+    await showBetAmountButtons(msgOrCbMsg, 'race', null, userId);
 }
 async function handleSlotsCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
@@ -5892,13 +5968,16 @@ menuCommandHandlers = new Map([
     ['game_selection', handleGameSelectionCommand], // Use the dedicated handler
     ['wallet', handleWalletCommand],
     ['referral', handleReferralCommand],
-    //['deposit', handleDepositCommand], // Use quick_deposit callback instead
-    ['withdraw', handleWithdrawCommand],
+    // 'deposit' is handled by 'quick_deposit' callback in handleCallbackQuery (Part 5a) which calls handleDepositCommand
+    ['withdraw', handleWithdrawCommand], // Initiates withdrawal prompt
     ['help', handleHelpCommand], // Shows main help section menu
-    //['leaderboards', handleLeaderboardsCommand], // Use leaderboard_nav callback instead
+    // 'leaderboards' is handled by 'leaderboard_nav' callback in handleCallbackQuery (Part 5a)
     ['history', handleHistoryCommand],
     ['link_wallet_prompt', handleMenuAction], // Show prompt text via handleMenuAction
     // Game menus map to game command handlers which will show bet buttons
+    // Callbacks like 'select_game:coinflip' now handled in handleCallbackQuery (Part 5a)
+    // Removing direct menu mapping for games as 'select_game' is now used.
+    // Keep them? Or rely on select_game? Let's keep them for robustness if user types /game directly.
     ['coinflip', handleCoinflipCommand],
     ['race', handleRaceCommand],
     ['slots', handleSlotsCommand],
@@ -5909,7 +5988,7 @@ menuCommandHandlers = new Map([
     // Other specific callbacks (confirm_bet, game actions, select_game etc.) handled in handleCallbackQuery (Part 5a)
 ]);
 
-// --- End of Part 5b ---
+// --- End of Part 5b (Section 2) ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
 // --- VERSION: 3.2.1a --- (Added clearUserState utility function)
 
