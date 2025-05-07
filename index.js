@@ -1,5 +1,5 @@
 // index.js - Part 1: Imports, Environment Configuration, Core Initializations, Utility Definitions
-// --- VERSION: 3.2.1 --- (Moved _handleReferralChecks/handleAdminCommand here, Added handleGameSelectionCommand export, MdV2 fixes)
+// --- VERSION: 3.2.1 --- (Moved _handleReferralChecks/handleAdminCommand/showBetAmountButtons here, REMOVED export block, MdV2 fixes)
 
 // --- All Imports MUST come first ---
 import 'dotenv/config'; // Keep for local development via .env file
@@ -54,16 +54,16 @@ const escapeMarkdownV2 = (text) => {
     return textString.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 };
 
-// --- Moved Functions from Part 5b (to fix export errors) ---
+// --- Moved Functions from Part 5b ---
 
 /**
  * Handles admin commands. Checks authorization.
  * @param {import('node-telegram-bot-api').Message} msg The Telegram message object.
  * @param {string[]} argsArray Command arguments array (index 0 is command itself if from msg).
- * @param {string | null} [correctUserIdFromCb=null] Optional: Correct user ID if called from callback.
+ * @param {string | null} [correctUserIdFromCb=null] Optional: Correct user ID if called from callback. (Note: Admin commands should generally only come from direct messages)
  */
 async function handleAdminCommand(msg, argsArray, correctUserIdFromCb = null) {
-    // Admin commands must originate from a direct message, use msg.from.id
+    // Admin commands MUST originate from a direct message, use msg.from.id
     const userId = String(msg.from.id);
     const chatId = msg.chat.id;
     // Args array from direct message includes command, so sub-command is index 1
@@ -92,7 +92,7 @@ async function handleAdminCommand(msg, argsArray, correctUserIdFromCb = null) {
                 // TODO: Implement actual broadcast logic
                 // MarkdownV2 Safety: Escape the preview and punctuation
                 reply = `Broadcast initiated with message: "${escapeMarkdownV2(broadcastMessage.substring(0,50))}\\.\\.\\." \\(Actual broadcast not yet implemented\\)\\.`;
-                // Notify admin function expects already escaped message for main content
+                // notifyAdmin function expects already escaped message for main content
                 await notifyAdmin(`Admin ${userId} initiated broadcast: ${escapeMarkdownV2(broadcastMessage)}`);
             }
             break;
@@ -161,8 +161,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
         // Fetch referee details using the provided client to ensure transactional read
         const refereeDetails = await getUserWalletDetails(stringRefereeUserId, client); // Pass client
         if (!refereeDetails?.referred_by_user_id) {
-            // console.log(`${logPrefix} Referee ${stringRefereeUserId} was not referred. No referral checks needed.`);
-            return;
+            return; // Not referred
         }
 
         const referrerUserId = refereeDetails.referred_by_user_id;
@@ -173,19 +172,18 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
             return;
         }
 
-        let payoutQueuedForReferrer = false; // To track if we initiated any payout for this referrer from this bet
+        let payoutQueuedForReferrer = false;
 
         // 1. Check Initial Bet Bonus for the Referee
         const isRefereeFirstCompletedBet = await isFirstCompletedBet(stringRefereeUserId, completedBetId, client); // Pass client
 
         if (isRefereeFirstCompletedBet && wagerAmountLamports >= REFERRAL_INITIAL_BET_MIN_LAMPORTS) { // REFERRAL_INITIAL_BET_MIN_LAMPORTS from Part 1
-            // Lock referrer's wallet row to get accurate referral_count and prevent race conditions
             const referrerWalletForCount = await queryDatabase('SELECT referral_count FROM wallets WHERE user_id = $1 FOR UPDATE', [referrerUserId], client);
             const currentReferrerCount = parseInt(referrerWalletForCount.rows[0]?.referral_count || '0', 10);
 
-            let bonusTier = REFERRAL_INITIAL_BONUS_TIERS[REFERRAL_INITIAL_BONUS_TIERS.length - 1]; // Default to highest tier
-            for (const tier of REFERRAL_INITIAL_BONUS_TIERS) { // REFERRAL_INITIAL_BONUS_TIERS from Part 1
-                if (currentReferrerCount < tier.maxCount) { // Use < maxCount to ensure correct tier selection
+            let bonusTier = REFERRAL_INITIAL_BONUS_TIERS[REFERRAL_INITIAL_BONUS_TIERS.length - 1];
+            for (const tier of REFERRAL_INITIAL_BONUS_TIERS) {
+                if (currentReferrerCount < tier.maxCount) {
                     bonusTier = tier;
                     break;
                 }
@@ -193,76 +191,173 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
             const initialBonusAmount = BigInt(Math.floor(Number(wagerAmountLamports) * bonusTier.percent));
 
             if (initialBonusAmount > 0n) {
-                const payoutRecord = await recordPendingReferralPayout(referrerUserId, stringRefereeUserId, 'initial_bet', initialBonusAmount, completedBetId, null, client); // recordPendingReferralPayout from Part 2
+                const payoutRecord = await recordPendingReferralPayout(referrerUserId, stringRefereeUserId, 'initial_bet', initialBonusAmount, completedBetId, null, client);
                 if (payoutRecord.success && payoutRecord.payoutId) {
-                    await addPayoutJob({ type: 'payout_referral', payoutId: payoutRecord.payoutId, userId: referrerUserId }); // addPayoutJob from Part 6
+                    await addPayoutJob({ type: 'payout_referral', payoutId: payoutRecord.payoutId, userId: referrerUserId });
                     payoutQueuedForReferrer = true;
                     console.log(`${logPrefix} Queued initial bet referral payout ID ${payoutRecord.payoutId} for referrer ${referrerUserId} (${formatSol(initialBonusAmount)} SOL).`);
-                } else if (!payoutRecord.duplicate) { // Don't log error if it was a handled duplicate
+                } else if (!payoutRecord.duplicate) {
                     console.error(`${logPrefix} Failed to record initial bonus payout for referrer ${referrerUserId}: ${payoutRecord.error}`);
                 }
             }
         }
 
-        // 2. Check Milestone Bonus for the Referee's Wagers benefitting the Referrer
-        const currentTotalWageredByReferee = refereeDetails.total_wagered; // Already includes the current wager
-        const lastMilestonePaidForReferee = refereeDetails.last_milestone_paid_lamports; // Highest milestone threshold paid for this referee
+        // 2. Check Milestone Bonus
+        const currentTotalWageredByReferee = refereeDetails.total_wagered;
+        const lastMilestonePaidForReferee = refereeDetails.last_milestone_paid_lamports;
 
         let highestNewMilestoneCrossed = null;
-        for (const threshold of REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS) { // From Part 1
+        for (const threshold of REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS) {
             if (currentTotalWageredByReferee >= threshold && threshold > lastMilestonePaidForReferee) {
-                highestNewMilestoneCrossed = threshold; // Keep track of the highest new one crossed
+                highestNewMilestoneCrossed = threshold;
             } else if (currentTotalWageredByReferee < threshold) {
-                 break; // No need to check higher thresholds
+                 break;
             }
         }
 
         if (highestNewMilestoneCrossed) {
-            const milestoneBonusAmount = BigInt(Math.floor(Number(highestNewMilestoneCrossed) * REFERRAL_MILESTONE_REWARD_PERCENT)); // REFERRAL_MILESTONE_REWARD_PERCENT from Part 1
+            const milestoneBonusAmount = BigInt(Math.floor(Number(highestNewMilestoneCrossed) * REFERRAL_MILESTONE_REWARD_PERCENT));
             if (milestoneBonusAmount > 0n) {
-                // Attempt to record this specific milestone payout. DB constraint prevents duplicates for same (ref,ree,type,thresh).
                 const payoutRecord = await recordPendingReferralPayout(
-                    referrerUserId,
-                    stringRefereeUserId,
-                    'milestone',
-                    milestoneBonusAmount,
-                    null, // triggeringBetId not directly relevant for milestone
-                    highestNewMilestoneCrossed,
-                    client
+                    referrerUserId, stringRefereeUserId, 'milestone',
+                    milestoneBonusAmount, null, highestNewMilestoneCrossed, client
                 );
-
                 if (payoutRecord.success && payoutRecord.payoutId) {
                     await addPayoutJob({ type: 'payout_referral', payoutId: payoutRecord.payoutId, userId: referrerUserId });
                     payoutQueuedForReferrer = true;
                     console.log(`${logPrefix} Queued milestone referral payout ID ${payoutRecord.payoutId} for referrer ${referrerUserId} (${formatSol(milestoneBonusAmount)} SOL for ${formatSol(highestNewMilestoneCrossed)} milestone).`);
-                    // Update the referee's `last_milestone_paid_lamports` to this new highest threshold they crossed
                     await queryDatabase(
-                        'UPDATE wallets SET last_milestone_paid_lamports = $1 WHERE user_id = $2 AND $1 > last_milestone_paid_lamports', // Only update if new threshold is greater
+                        'UPDATE wallets SET last_milestone_paid_lamports = $1 WHERE user_id = $2 AND $1 > last_milestone_paid_lamports',
                         [highestNewMilestoneCrossed, stringRefereeUserId], client
                     );
                 } else if (payoutRecord.duplicate) {
-                    // console.log(`${logPrefix} Milestone payout for ${formatSol(highestNewMilestoneCrossed)} for referrer ${referrerUserId} from referee ${stringRefereeUserId} was a duplicate (already paid or pending).`);
+                    // Optional: log duplicate attempts if needed for debugging
                 } else {
                     console.error(`${logPrefix} Failed to record milestone bonus payout for referrer ${referrerUserId}: ${payoutRecord.error}`);
                 }
             }
         }
-        // Commit/rollback is handled by the calling function (placeBet)
-        if (payoutQueuedForReferrer) {
-            // Optionally notify referrer here
-        }
-
+        // Optional: Notify referrer if payoutQueuedForReferrer is true
     } catch (error) {
         console.error(`${logPrefix} Error during referral checks (within transaction): ${error.message}`, error.stack);
         throw error; // Re-throw to ensure the main transaction is rolled back.
     }
 }
 
+/** Generic function to show bet amount buttons for a game */
+// Moved from Part 5b to Part 1
+async function showBetAmountButtons(msgOrCbMsg, gameKey, existingBetAmountStr = null, correctUserIdFromCb = null) {
+    // Determine userId based on whether it's from a direct message or callback
+    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
+    const chatId = String(msgOrCbMsg.chat.id);
+    const gameConfig = GAME_CONFIG[gameKey];
+    const logPrefix = `[ShowBetButtons User ${userId} Game ${gameKey}]`;
+    let messageToEditId = msgOrCbMsg.message_id; // ID of the message to edit
+    let isFromCallback = !!correctUserIdFromCb;
+
+    // Ensure messageToEditId is valid
+    if (!messageToEditId) {
+         console.warn(`${logPrefix} Cannot show bet buttons - no valid message context (messageId missing).`);
+         return; // Cannot proceed without a message to edit or reply to
+    }
+
+    if (!gameConfig) {
+         // MarkdownV2 Safety: Escape game key
+        const errorMsg = `⚠️ Internal error: Unknown game \`${escapeMarkdownV2(gameKey)}\`\\.`;
+         // Note: Button text does not use MarkdownV2
+        const keyboard = {inline_keyboard: [[{text:"↩️ Back", callback_data:"menu:main"}]]};
+        return bot.editMessageText(errorMsg, {chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: keyboard});
+    }
+
+    const balance = await getUserBalance(userId); // Uses correct userId
+    if (balance < gameConfig.minBetLamports) {
+        // MarkdownV2 Safety: Escape balance, game name, amount, punctuation
+        const lowBalMsg = `⚠️ Your balance \\(${escapeMarkdownV2(formatSol(balance))} SOL\\) is too low to play ${escapeMarkdownV2(gameConfig.name)} \\(min bet: ${escapeMarkdownV2(formatSol(gameConfig.minBetLamports))} SOL\\)\\. Use /deposit to add funds\\.`;
+        // Note: Button text does not use MarkdownV2
+        const lowBalKeyboard = { inline_keyboard: [[{ text: '💰 Quick Deposit', callback_data: 'quick_deposit' }],[{ text: '↩️ Back to Games', callback_data: 'menu:main' }]]};
+        return bot.editMessageText(lowBalMsg, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: lowBalKeyboard });
+    }
+
+    // Determine last bet amount (handle potential string/BigInt conversion)
+    let lastBetForThisGame = null;
+    if (existingBetAmountStr) {
+        try { lastBetForThisGame = BigInt(existingBetAmountStr); } catch {}
+    }
+    if (!lastBetForThisGame) {
+        const userLastBets = userLastBetAmounts.get(userId) || new Map();
+        lastBetForThisGame = userLastBets.get(gameKey) || null; // Expect BigInt from memory cache
+    }
+
+    const buttons = [];
+    const amountsRow1 = [], amountsRow2 = [];
+    STANDARD_BET_AMOUNTS_LAMPORTS.forEach((lamports, index) => { // STANDARD_BET_AMOUNTS_LAMPORTS from Part 1
+        if (lamports >= gameConfig.minBetLamports && lamports <= gameConfig.maxBetLamports) {
+            // Use formatSol for consistent display
+            const solAmountStr = formatSol(lamports);
+             // Note: Button text does not use MarkdownV2
+            let buttonText = `${solAmountStr} SOL`;
+            if (lastBetForThisGame && lamports === lastBetForThisGame) {
+                buttonText = `前回 ${buttonText} 👍`; // Keep emoji
+            }
+            // Determine next action based on gameKey -> leads to proceedToGameStep or confirm_bet
+            let callbackActionData;
+            // These actions will be handled by proceedToGameStep or handleCallbackQuery directly
+            if (gameKey === 'coinflip') {
+                 callbackActionData = `coinflip_select_side:${lamports.toString()}`;
+            } else if (gameKey === 'race') {
+                 callbackActionData = `race_select_horse:${lamports.toString()}`;
+            } else if (gameKey === 'roulette') {
+                 callbackActionData = `roulette_select_bet_type:${lamports.toString()}`;
+            } else {
+                // Default: confirm directly for simple games (Slots, War, Crash, Blackjack amount selection)
+                callbackActionData = `confirm_bet:${gameKey}:${lamports.toString()}`;
+            }
+
+            const button = { text: buttonText, callback_data: callbackActionData };
+            if (amountsRow1.length < 3) amountsRow1.push(button);
+            else amountsRow2.push(button);
+        }
+    });
+    if (amountsRow1.length > 0) buttons.push(amountsRow1);
+    if (amountsRow2.length > 0) buttons.push(amountsRow2);
+
+     // Note: Button text does not use MarkdownV2
+    buttons.push([
+        { text: "✏️ Custom Amount", callback_data: `custom_amount_select:${gameKey}` },
+        { text: "❌ Cancel", callback_data: 'menu:main' }
+    ]);
+
+    // MarkdownV2 Safety: Escape breadcrumb, game name
+    const breadcrumb = escapeMarkdownV2(gameConfig.name);
+    let prompt = `${breadcrumb}\nSelect bet amount for *${breadcrumb}*:`; // Use breadcrumb again for name
+
+    if (gameKey === 'slots') {
+        const jackpotAmount = await getJackpotAmount('slots'); // from Part 2
+        // MarkdownV2 Safety: Escape jackpot amount
+        prompt += `\n\n💎 Current Slots Jackpot: *${escapeMarkdownV2(formatSol(jackpotAmount))} SOL*`;
+    }
+     // MarkdownV2 Safety: Escape numbers, punctuation, symbols like :, (), use italics
+    if (gameKey === 'roulette') prompt += "\n\\_(Common payouts: Straight Up 35x, Even Money Bets 1x winnings\\)_";
+    else if (gameKey === 'blackjack') prompt += "\n\\_(Blackjack pays 3:2, Dealer typically stands on 17\\)_";
+
+
+    // Edit the message that triggered this
+    bot.editMessageText(prompt, {
+        chat_id: chatId, message_id: messageToEditId,
+        reply_markup: { inline_keyboard: buttons }, parse_mode: 'MarkdownV2'
+    }).catch(e => {
+        // Ignore "message is not modified" error, log others
+        if (!e.message.includes("message is not modified")) {
+            console.warn(`${logPrefix} Failed to edit message ${messageToEditId} for bet amounts, sending new: ${e.message}`);
+            safeSendMessage(chatId, prompt, { reply_markup: { inline_keyboard: buttons }, parse_mode: 'MarkdownV2' });
+        }
+    });
+}
+
 // --- End of Moved Functions ---
 
 
 // --- Version and Startup Logging ---
-// BOT_VERSION is used in multiple places, define it early.
 const BOT_VERSION = process.env.npm_package_version || '3.2.1'; // Read from package.json or use default
 console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} --- v${BOT_VERSION} ---`);
 console.log(`⏳ Starting Solana Gambles Bot (Custodial, Buttons, v${BOT_VERSION})... Checking environment variables...`);
@@ -313,7 +408,6 @@ if (process.env.DEPOSIT_MASTER_SEED_PHRASE && !bip39.validateMnemonic(process.en
     console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is set but is not a valid BIP39 mnemonic.`);
     missingVars = true;
 } else if (!process.env.DEPOSIT_MASTER_SEED_PHRASE && REQUIRED_ENV_VARS.includes('DEPOSIT_MASTER_SEED_PHRASE')) {
-     // This check might be redundant due to the main loop, but ensures it's flagged
      if (!missingVars) {
          console.error(`❌ Environment variable DEPOSIT_MASTER_SEED_PHRASE is missing.`);
          missingVars = true;
@@ -352,7 +446,6 @@ const validateBase58Key = (keyName, isRequired) => {
 };
 
 if (!validateBase58Key('MAIN_BOT_PRIVATE_KEY', true)) missingVars = true;
-// REFERRAL_PAYOUT_PRIVATE_KEY is optional; if present, validate it. sendSol has fallback.
 if (process.env.REFERRAL_PAYOUT_PRIVATE_KEY && !validateBase58Key('REFERRAL_PAYOUT_PRIVATE_KEY', false)) {
     missingVars = true;
 }
@@ -450,7 +543,6 @@ console.log("✅ Environment variables checked/defaults applied.");
 // --- Global Constants & State (Derived from Env Vars) ---
 const SOL_DECIMALS = 9;
 const DEPOSIT_ADDRESS_EXPIRY_MS = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000;
-// Validate confirmation level - use 'confirmed' as default fallback if invalid value provided
 const validConfirmLevels = ['processed', 'confirmed', 'finalized'];
 const envConfirmLevel = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase();
 const DEPOSIT_CONFIRMATION_LEVEL = validConfirmLevels.includes(envConfirmLevel) ? envConfirmLevel : 'confirmed';
@@ -464,14 +556,11 @@ const DEPOSIT_ADDR_CACHE_TTL_MS = parseInt(process.env.DEPOSIT_ADDR_CACHE_TTL_MS
 // Referral Constants
 const REFERRAL_INITIAL_BET_MIN_LAMPORTS = BigInt(process.env.REFERRAL_INITIAL_BET_MIN_LAMPORTS);
 const REFERRAL_MILESTONE_REWARD_PERCENT = parseFloat(process.env.REFERRAL_MILESTONE_REWARD_PERCENT);
-const REFERRAL_INITIAL_BONUS_TIERS = [ // Consider making this configurable via ENV JSON string?
-    { maxCount: 10, percent: 0.05 },   // 5% for first 10 referrals
-    { maxCount: 25, percent: 0.10 },   // 10% for 11-25
-    { maxCount: 50, percent: 0.15 },   // 15% for 26-50
-    { maxCount: 100, percent: 0.20 },  // 20% for 51-100
-    { maxCount: Infinity, percent: 0.25 } // 25% for >100
+const REFERRAL_INITIAL_BONUS_TIERS = [
+    { maxCount: 10, percent: 0.05 }, { maxCount: 25, percent: 0.10 }, { maxCount: 50, percent: 0.15 },
+    { maxCount: 100, percent: 0.20 }, { maxCount: Infinity, percent: 0.25 }
 ];
-const REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS = [ // Consider making this configurable via ENV CSV string?
+const REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS = [
     BigInt(1 * LAMPORTS_PER_SOL), BigInt(5 * LAMPORTS_PER_SOL), BigInt(10 * LAMPORTS_PER_SOL),
     BigInt(25 * LAMPORTS_PER_SOL), BigInt(50 * LAMPORTS_PER_SOL), BigInt(100 * LAMPORTS_PER_SOL),
     BigInt(250 * LAMPORTS_PER_SOL), BigInt(500 * LAMPORTS_PER_SOL), BigInt(1000 * LAMPORTS_PER_SOL)
@@ -488,40 +577,38 @@ const SLOTS_JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.SLOTS_JACKPOT_
 let currentSlotsJackpotLamports = SLOTS_JACKPOT_SEED_LAMPORTS; // Initialize with seed, loaded from DB in Part 6
 
 // Standard Bet Amounts
-const STANDARD_BET_AMOUNTS_SOL = [0.01, 0.05, 0.10, 0.25, 0.5, 1.0]; // Example standard amounts
+const STANDARD_BET_AMOUNTS_SOL = [0.01, 0.05, 0.10, 0.25, 0.5, 1.0];
 const STANDARD_BET_AMOUNTS_LAMPORTS = STANDARD_BET_AMOUNTS_SOL.map(sol => BigInt(Math.round(sol * LAMPORTS_PER_SOL)));
 console.log(`[Config] Standard Bet Amounts (Lamports): ${STANDARD_BET_AMOUNTS_LAMPORTS.join(', ')}`);
 
-// Game Specific Constants (Example: Race Horses)
-const RACE_HORSES = [ // Consider moving complex game constants to separate config file?
-    { name: "Solar Sprint", emoji: "🐎₁", payoutMultiplier: 3.0 },
-    { name: "Comet Tail", emoji: "🏇₂", payoutMultiplier: 4.0 },
-    { name: "Galaxy Gallop", emoji: "🐴₃", payoutMultiplier: 5.0 },
-    { name: "Nebula Speed", emoji: "🎠₄", payoutMultiplier: 6.0 },
+// Race Horses Constant
+const RACE_HORSES = [
+    { name: "Solar Sprint", emoji: "🐎₁", payoutMultiplier: 3.0 }, { name: "Comet Tail", emoji: "🏇₂", payoutMultiplier: 4.0 },
+    { name: "Galaxy Gallop", emoji: "🐴₃", payoutMultiplier: 5.0 }, { name: "Nebula Speed", emoji: "🎠₄", payoutMultiplier: 6.0 },
 ];
 
-// In-memory Caches & State (Using Maps for better performance than objects for frequent adds/deletes)
-const userStateCache = new Map(); // Key: userId, Value: { state, chatId, messageId, data, timestamp }
-const walletCache = new Map(); // Key: userId, Value: { withdrawalAddress, referralCode, ..., timestamp, timeoutId }
-const activeDepositAddresses = new Map(); // Key: deposit_address_string, Value: { userId, expiresAtTimestamp, timeoutId }
-const processedDepositTxSignatures = new Set(); // Stores recently processed signatures to prevent duplicates
-const commandCooldown = new Map(); // Key: userId (or userId_cb), Value: lastActionTimestamp
-const pendingReferrals = new Map(); // Key: refereeUserId, Value: { referrerUserId, timestamp }
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours for pending referral link
-const userLastBetAmounts = new Map(); // Key: userId, Value: Map(gameKey -> lastBetAmountLamports)
+// In-memory Caches & State
+const userStateCache = new Map();
+const walletCache = new Map();
+const activeDepositAddresses = new Map();
+const processedDepositTxSignatures = new Set();
+const commandCooldown = new Map();
+const pendingReferrals = new Map();
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000;
+const userLastBetAmounts = new Map();
 
-// Global State Variables (for server instances, intervals, status)
+// Global State Variables
 let isFullyInitialized = false;
-let server; // Holds the Express server instance
+let server;
 let depositMonitorIntervalId = null;
 let sweepIntervalId = null;
 let leaderboardManagerIntervalId = null;
 
 // --- Core Initializations ---
 const app = express();
-app.use(express.json({ limit: '10kb' })); // Limit payload size for security, adjust if needed
+app.use(express.json({ limit: '10kb' }));
 
-// Initialize Solana Connection (Rate Limited)
+// Initialize Solana Connection
 console.log("⚙️ Initializing Multi-RPC Solana connection...");
 console.log(`ℹ️ Using RPC Endpoints: ${parsedRpcUrls.join(', ')}`);
 const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
@@ -538,34 +625,13 @@ const solanaConnection = new RateLimitedConnection(parsedRpcUrls, {
 console.log("✅ Multi-RPC Solana connection instance created.");
 
 
-// Initialize Processing Queues (Using p-queue)
+// Initialize Processing Queues
 console.log("⚙️ Initializing Processing Queues...");
-const messageQueue = new PQueue({
-    concurrency: parseInt(process.env.MSG_QUEUE_CONCURRENCY, 10),
-    timeout: parseInt(process.env.MSG_QUEUE_TIMEOUT_MS, 10),
-    throwOnTimeout: true
-});
-const callbackQueue = new PQueue({
-    concurrency: parseInt(process.env.CALLBACK_QUEUE_CONCURRENCY, 10),
-    timeout: parseInt(process.env.CALLBACK_QUEUE_TIMEOUT_MS, 10),
-    throwOnTimeout: true
-});
-const payoutProcessorQueue = new PQueue({
-    concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
-    timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10),
-    throwOnTimeout: true
-});
-const depositProcessorQueue = new PQueue({
-    concurrency: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_CONCURRENCY, 10),
-    timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10),
-    throwOnTimeout: true
-});
-// Telegram Send Queue with specific rate limiting per second
-const telegramSendQueue = new PQueue({
-    concurrency: parseInt(process.env.TELEGRAM_SEND_QUEUE_CONCURRENCY, 10),
-    interval: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_MS, 10),
-    intervalCap: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_CAP, 10)
-});
+const messageQueue = new PQueue({ concurrency: parseInt(process.env.MSG_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.MSG_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
+const callbackQueue = new PQueue({ concurrency: parseInt(process.env.CALLBACK_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.CALLBACK_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
+const payoutProcessorQueue = new PQueue({ concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
+const depositProcessorQueue = new PQueue({ concurrency: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_CONCURRENCY, 10), timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10), throwOnTimeout: true });
+const telegramSendQueue = new PQueue({ concurrency: parseInt(process.env.TELEGRAM_SEND_QUEUE_CONCURRENCY, 10), interval: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_MS, 10), intervalCap: parseInt(process.env.TELEGRAM_SEND_QUEUE_INTERVAL_CAP, 10) });
 console.log("✅ Processing Queues initialized.");
 
 
@@ -577,13 +643,10 @@ const pool = new Pool({
     min: parseInt(process.env.DB_POOL_MIN, 10),
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10),
     connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT, 10),
-    // Ensure boolean comparison for SSL settings
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: process.env.DB_REJECT_UNAUTHORIZED === 'true' } : false,
 });
-// Pool error handling
 pool.on('error', (err, client) => {
     console.error('❌ Unexpected error on idle PostgreSQL client', err);
-    // Use notifyAdmin if available, ensuring message is escaped
     if (typeof notifyAdmin === "function") {
         notifyAdmin(`🚨 DATABASE POOL ERROR (Idle Client): ${escapeMarkdownV2(err.message || String(err))}`)
            .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
@@ -596,55 +659,39 @@ console.log("✅ PostgreSQL Pool created.");
 // Initialize Telegram Bot
 console.log("⚙️ Initializing Telegram Bot...");
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
-    polling: false, // Explicitly false, will be enabled in Part 6 if no webhook
-    request: { // Options for underlying http(s) agent
-        timeout: 15000, // Request timeout (15 seconds)
-        agentOptions: {
-            keepAlive: true,
-            keepAliveMsecs: 60000, // Keep sockets alive for 1 minute
-            maxSockets: 100, // Default in Node.js, can be adjusted
-            maxFreeSockets: 10, // Keep some sockets free
-            // scheduling: 'fifo', // Default is 'fifo'
-        }
+    polling: false, // Webhook/Polling determined in Part 6
+    request: {
+        timeout: 15000,
+        agentOptions: { keepAlive: true, keepAliveMsecs: 60000, maxSockets: 100, maxFreeSockets: 10 }
     }
 });
 console.log("✅ Telegram Bot instance created.");
 
 
-// Load Game Configuration from Environment Variables
+// Load Game Configuration
 console.log("⚙️ Loading Game Configuration...");
 const GAME_CONFIG = {};
-// Helper function to safely parse BigInt from ENV
-const safeGetBigIntEnv = (key, defaultValue) => {
-    try { return BigInt(process.env[key] || defaultValue); } catch { return BigInt(defaultValue); }
-};
-// Helper function to safely parse Float from ENV
-const safeGetFloatEnv = (key, defaultValue) => {
-    try { const val = parseFloat(process.env[key]); return isNaN(val) ? defaultValue : val; } catch { return defaultValue; }
-};
-// Define games and load their specific config
+const safeGetBigIntEnv = (key, defaultValue) => { try { return BigInt(process.env[key] || defaultValue); } catch { return BigInt(defaultValue); } };
+const safeGetFloatEnv = (key, defaultValue) => { try { const val = parseFloat(process.env[key]); return isNaN(val) ? defaultValue : val; } catch { return defaultValue; } };
 const games = ['coinflip', 'race', 'slots', 'roulette', 'war', 'crash', 'blackjack'];
 games.forEach(key => {
     const upperKey = key.toUpperCase();
     GAME_CONFIG[key] = {
-        key: key,
-        name: key.charAt(0).toUpperCase() + key.slice(1), // Basic name generation
+        key: key, name: key.charAt(0).toUpperCase() + key.slice(1),
         minBetLamports: safeGetBigIntEnv(`${upperKey}_MIN_BET_LAMPORTS`, OPTIONAL_ENV_DEFAULTS[`${upperKey}_MIN_BET_LAMPORTS`]),
         maxBetLamports: safeGetBigIntEnv(`${upperKey}_MAX_BET_LAMPORTS`, OPTIONAL_ENV_DEFAULTS[`${upperKey}_MAX_BET_LAMPORTS`]),
         houseEdge: safeGetFloatEnv(`${upperKey}_HOUSE_EDGE`, parseFloat(OPTIONAL_ENV_DEFAULTS[`${upperKey}_HOUSE_EDGE`]))
     };
-    // Add game-specific overrides/additions
     if(key === 'slots') {
-        GAME_CONFIG[key].name = 'Slots'; // Custom name
+        GAME_CONFIG[key].name = 'Slots';
         GAME_CONFIG[key].jackpotContributionPercent = safeGetFloatEnv('SLOTS_JACKPOT_CONTRIBUTION_PERCENT', parseFloat(OPTIONAL_ENV_DEFAULTS['SLOTS_JACKPOT_CONTRIBUTION_PERCENT']));
         GAME_CONFIG[key].jackpotSeedLamports = safeGetBigIntEnv('SLOTS_JACKPOT_SEED_LAMPORTS', OPTIONAL_ENV_DEFAULTS['SLOTS_JACKPOT_SEED_LAMPORTS']);
     }
     if(key === 'war') GAME_CONFIG[key].name = 'Casino War';
     if(key === 'blackjack') GAME_CONFIG[key].name = 'Blackjack';
-    // Add other custom names as needed
 });
-// Validate Game Configuration
-function validateGameConfig(config) {
+// Validate Game Config
+function validateGameConfig(config) { /* ...validation logic from original... */
     const errors = [];
     for (const gameKey in config) {
         const gc = config[gameKey];
@@ -664,87 +711,22 @@ function validateGameConfig(config) {
 }
 const configErrors = validateGameConfig(GAME_CONFIG);
 if (configErrors.length > 0) {
-    console.error(`❌ Invalid game configuration values: ${configErrors.join(', ')}.`);
-    process.exit(1); // Exit if game config is invalid
+    console.error(`❌ Invalid game configuration values: ${configErrors.join(', ')}. Exiting.`);
+    process.exit(1);
 }
 console.log("✅ Game Config Loaded and Validated.");
 
-
-// Declare commandHandlers and menuCommandHandlers with `let` so they can be exported
-// and then populated later in Part 5b.
+// Declare commandHandlers and menuCommandHandlers with `let` so they can be populated later in Part 5b.
+// These need to be accessible by other parts before Part 5b defines them if used elsewhere,
+// but primarily Part 5a/6 use them after they are set in 5b.
 let commandHandlers;
 let menuCommandHandlers;
 
-// --- Export necessary variables/instances ---
-// Note: Functions defined in later parts are exported by name.
-export {
-    // Core Instances
-    pool, bot, solanaConnection, app,
-    // Caches & State
-    userStateCache, walletCache, activeDepositAddresses,
-    processedDepositTxSignatures, commandCooldown, pendingReferrals, userLastBetAmounts,
-    // Config & Constants
-    GAME_CONFIG, RACE_HORSES,
-    BOT_VERSION, LAMPORTS_PER_SOL, SOL_DECIMALS, DEPOSIT_CONFIRMATION_LEVEL,
-    MIN_WITHDRAWAL_LAMPORTS, WITHDRAWAL_FEE_LAMPORTS, REFERRAL_INITIAL_BET_MIN_LAMPORTS,
-    REFERRAL_MILESTONE_REWARD_PERCENT, REFERRAL_INITIAL_BONUS_TIERS, REFERRAL_MILESTONE_THRESHOLDS_LAMPORTS,
-    DEPOSIT_ADDRESS_EXPIRY_MS, USER_STATE_TTL_MS, PENDING_REFERRAL_TTL_MS, STANDARD_BET_AMOUNTS_LAMPORTS,
-    STANDARD_BET_AMOUNTS_SOL, MAX_PROCESSED_TX_CACHE_SIZE, USER_COMMAND_COOLDOWN_MS,
-    SLOTS_JACKPOT_SEED_LAMPORTS, SLOTS_JACKPOT_CONTRIBUTION_PERCENT, currentSlotsJackpotLamports,
-    // Queues
-    messageQueue, callbackQueue, payoutProcessorQueue, depositProcessorQueue, telegramSendQueue,
-    // Mutable Global State (for startup/shutdown)
-    isFullyInitialized, server,
-    depositMonitorIntervalId, sweepIntervalId, leaderboardManagerIntervalId,
-    // Utility functions defined in this Part (Part 1)
-    sleep, escapeMarkdownV2,
-    // Moved functions previously in Part 5b, now defined above in Part 1
-    handleAdminCommand, _handleReferralChecks,
-    // Placeholders for functions to be defined in subsequent Parts
-    // Part 2 (Database Operations)
-    queryDatabase, ensureUserExists, linkUserWallet, getUserWalletDetails, getLinkedWallet,
-    getUserByReferralCode, linkReferral, updateUserWagerStats, getUserBalance,
-    updateUserBalanceAndLedger, createDepositAddressRecord, findDepositAddressInfo,
-    markDepositAddressUsed, recordConfirmedDeposit, getNextDepositAddressIndex,
-    createWithdrawalRequest, updateWithdrawalStatus, getWithdrawalDetails, // Corrected: updateWithdrawalStatus was updateWithdrawalDbStatus
-    createBetRecord, updateBetStatus, isFirstCompletedBet, getBetDetails,
-    recordPendingReferralPayout, updateReferralPayoutStatus, getReferralPayoutDetails,
-    getTotalReferralEarnings, updateUserLastBetAmount, getUserLastBetAmounts,
-    ensureJackpotExists, getJackpotAmount, updateJackpotAmount, incrementJackpotAmount,
-    getBetHistory,
-    // Part 3 (Solana Utilities & Telegram Helpers)
-    formatSol, createSafeIndex, generateUniqueDepositAddress, getKeypairFromPath,
-    isRetryableSolanaError, sendSol, analyzeTransactionAmounts, notifyAdmin,
-    safeSendMessage, escapeHtml, getUserDisplayName,
-    updateWalletCache, getWalletCache, addActiveDepositAddressCache,
-    getActiveDepositAddressCache, removeActiveDepositAddressCache, addProcessedDepositTx,
-    hasProcessedDepositTx, generateReferralCode,
-    // Part 4 (Game Logic)
-    playCoinflip, simulateRace, simulateSlots, simulateRouletteSpin,
-    getRoulettePayoutMultiplier, simulateWar,
-    simulateCrash,
-    createDeck, shuffleDeck, dealCard, getCardNumericValue, formatCard, calculateHandValue,
-    simulateDealerPlay, determineBlackjackWinner,
-    // Part 5a (Telegram Message/Callback Handlers & Game Result Processing)
-    handleMessage, handleCallbackQuery, proceedToGameStep, placeBet,
-    handleCoinflipGame, handleRaceGame, handleSlotsGame, handleWarGame, handleRouletteGame,
-    handleCrashGame, handleBlackjackGame,
-    // Part 5b (Input Handlers, Command Handlers)
-    routeStatefulInput, handleCustomAmountInput, handleRouletteNumberInput,
-    handleWithdrawalAddressInput, handleWithdrawalAmountInput, // Added withdrawal address input handler
-    handleStartCommand, handleHelpCommand, handleWalletCommand, handleReferralCommand,
-    handleDepositCommand, handleWithdrawCommand, showBetAmountButtons, handleGameSelectionCommand, // Added game selection handler
-    handleCoinflipCommand, handleRaceCommand, handleSlotsCommand, handleWarCommand,
-    handleRouletteCommand, handleCrashCommand, handleBlackjackCommand,
-    handleHistoryCommand, handleLeaderboardsCommand,
-    commandHandlers, menuCommandHandlers, // Exporting the let-declared variables
-    // Part 6 (Background Tasks, Payouts, Startup & Shutdown)
-    initializeDatabase, loadActiveDepositsCache, loadSlotsJackpot,
-    startDepositMonitor, startDepositSweeper, startLeaderboardManager,
-    addPayoutJob, processDepositTransaction, sweepDepositAddresses, updateLeaderboardsCycle, // Exporting background task functions
-    handleWithdrawalPayoutJob, handleReferralPayoutJob, // Exporting payout job handlers
-    setupTelegramConnection, startPollingFallback, setupExpressServer, shutdown, setupTelegramListeners
-};
+// --- Export Block Removed ---
+// The large export { ... }; block that was here previously has been removed
+// as it's unnecessary for a single-file application structure using ES Modules via imports
+// and was causing the "Export ... is not defined" errors.
+// All functions/variables defined in this file are available within its scope.
 
 // --- End of Part 1 ---
 // index.js - Part 2: Database Operations
