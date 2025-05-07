@@ -6145,41 +6145,28 @@ async function initializeDatabase() {
                 referral_count INTEGER NOT NULL DEFAULT 0,
                 total_wagered BIGINT NOT NULL DEFAULT 0,
                 last_milestone_paid_lamports BIGINT NOT NULL DEFAULT 0,
-                last_bet_amounts JSONB DEFAULT '{}'::jsonb, 
+                last_bet_amounts JSONB DEFAULT '{}'::jsonb, // Column definition included here
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         `);
+        // REMOVED the ALTER TABLE ... ADD COLUMN last_bet_amounts block entirely.
 
-        // --- UPDATED SECTION USING SAVEPOINT ---
-        // Ensure 'last_bet_amounts' column exists, handling potential failure without aborting the main transaction
-        console.log('⚙️ [DB Init] Ensuring wallets.last_bet_amounts column exists using savepoint...');
-        await client.query('SAVEPOINT check_column_wallets_last_bet;'); // Create a savepoint
-        try {
-            // Attempt to add the column
-            await client.query(`ALTER TABLE wallets ADD COLUMN last_bet_amounts JSONB DEFAULT '{}'::jsonb;`);
-            console.log('✅ [DB Init] Column wallets.last_bet_amounts added.');
-            await client.query('RELEASE SAVEPOINT check_column_wallets_last_bet;'); // Release savepoint if successful
-        } catch (e) {
-            await client.query('ROLLBACK TO SAVEPOINT check_column_wallets_last_bet;'); // Rollback ALTER TABLE attempt
-            if (e.code === '42701') { // 42701 is 'duplicate_column'
-                console.log('ℹ️ [DB Init] Column wallets.last_bet_amounts already exists (handled via savepoint).');
-                // Ignore the error specifically for duplicate column, transaction continues
-            } else {
-                // If it's another unexpected error, re-throw it to fail the whole initialization
-                console.error(`❌ [DB Init] Unexpected error trying to add wallets.last_bet_amounts: ${e.message} (Code: ${e.code})`);
-                throw e; 
-            }
-            // Note: We might not need to explicitly release the savepoint after rolling back to it, 
-            // but it doesn't hurt and keeps pairing consistent conceptually.
-            // Some resources say ROLLBACK TO SAVEPOINT implicitly destroys the savepoint.
-        }
-        // --- END OF UPDATED SECTION ---
-
-        console.log('⚙️ [DB Init] Ensuring wallets indexes...'); // This should now execute in the active transaction
+        console.log('⚙️ [DB Init] Ensuring wallets indexes...'); // This should now run without transaction aborted error
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referral_code ON wallets (referral_code);');
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referred_by ON wallets (referred_by_user_id);');
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_total_wagered ON wallets (total_wagered DESC);');
 
+        // User Balances Table (No changes needed here)
+        console.log('⚙️ [DB Init] Ensuring user_balances table...');
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS user_balances (
+                user_id VARCHAR(255) PRIMARY KEY REFERENCES wallets(user_id) ON DELETE CASCADE,
+                balance_lamports BIGINT NOT NULL DEFAULT 0 CHECK (balance_lamports >= 0),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        `);
+
+        // ... (rest of table/index creations, ensuring referral_payouts and ledger DDL are also corrected as previously discussed) ...
 
         // Referral Payouts Table
         console.log('⚙️ [DB Init] Ensuring referral_payouts table...');
