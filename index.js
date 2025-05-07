@@ -5999,7 +5999,7 @@ async function _handleReferralChecks(refereeUserId, completedBetId, wagerAmountL
 
 // --- End of Part 5b ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
-// --- VERSION: 3.2.1 --- (Corrected DB Init Syntax)
+// --- VERSION: 3.2.1 --- (Incorporating all discussed DB Init Fixes)
 
 // --- Assuming functions & constants from Parts 1, 2, 3, 5a, 5b are available ---
 // Global variables like 'server', 'isFullyInitialized', 'depositMonitorIntervalId', 'sweepIntervalId',
@@ -6032,10 +6032,25 @@ async function initializeDatabase() {
                 referral_count INTEGER NOT NULL DEFAULT 0,
                 total_wagered BIGINT NOT NULL DEFAULT 0,
                 last_milestone_paid_lamports BIGINT NOT NULL DEFAULT 0,
-                last_bet_amounts JSONB DEFAULT '{}'::jsonb,
+                last_bet_amounts JSONB DEFAULT '{}'::jsonb, // Included for new table creation
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         `);
+
+        // Ensure 'last_bet_amounts' column exists if table was created before this column was added to DDL
+        console.log('⚙️ [DB Init] Ensuring wallets.last_bet_amounts column exists...');
+        try {
+            await client.query(`ALTER TABLE wallets ADD COLUMN last_bet_amounts JSONB DEFAULT '{}'::jsonb;`);
+            console.log('✅ [DB Init] Column wallets.last_bet_amounts added (or an error was expected if it already existed and caught).');
+        } catch (e) {
+            if (e.code === '42701') { // 42701 is 'duplicate_column' error in PostgreSQL
+                console.log('ℹ️ [DB Init] Column wallets.last_bet_amounts already exists.');
+            } else {
+                console.error(`❌ [DB Init] Error trying to add wallets.last_bet_amounts: ${e.message} (Code: ${e.code})`);
+                throw e; // Re-throw other errors to fail initialization
+            }
+        }
+
         console.log('⚙️ [DB Init] Ensuring wallets indexes...');
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referral_code ON wallets (referral_code);');
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referred_by ON wallets (referred_by_user_id);');
@@ -6060,10 +6075,10 @@ async function initializeDatabase() {
                 user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
                 deposit_address VARCHAR(44) NOT NULL UNIQUE,
                 derivation_path VARCHAR(255) NOT NULL,
-                status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, used, expired, swept, sweep_error, sweep_error_key_mismatch, sweep_error_processing, swept_low_balance
+                status VARCHAR(30) NOT NULL DEFAULT 'pending', -- pending, used, expired, swept, sweep_error, sweep_error_key_mismatch, sweep_error_processing, swept_low_balance
                 expires_at TIMESTAMPTZ NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                last_checked_at TIMESTAMPTZ -- For deposit monitor optimization
+                last_checked_at TIMESTAMPTZ
             );
         `);
         console.log('⚙️ [DB Init] Ensuring deposit_addresses indexes...');
@@ -6079,10 +6094,10 @@ async function initializeDatabase() {
             CREATE TABLE IF NOT EXISTS deposits (
                 id SERIAL PRIMARY KEY,
                 user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                deposit_address_id INTEGER REFERENCES deposit_addresses(id) ON DELETE SET NULL, -- Link to the specific deposit address used
-                tx_signature VARCHAR(88) NOT NULL UNIQUE, -- Solana signatures can be up to 88 chars base58
+                deposit_address_id INTEGER REFERENCES deposit_addresses(id) ON DELETE SET NULL,
+                tx_signature VARCHAR(88) NOT NULL UNIQUE,
                 amount_lamports BIGINT NOT NULL CHECK (amount_lamports > 0),
-                status VARCHAR(20) NOT NULL DEFAULT 'confirmed', -- e.g., confirmed, error
+                status VARCHAR(20) NOT NULL DEFAULT 'confirmed',
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
@@ -6098,15 +6113,15 @@ async function initializeDatabase() {
             CREATE TABLE IF NOT EXISTS bets (
                 id SERIAL PRIMARY KEY,
                 user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                chat_id VARCHAR(255) NOT NULL, -- For context, if needed
+                chat_id VARCHAR(255) NOT NULL,
                 game_type VARCHAR(50) NOT NULL,
-                bet_details JSONB, -- Game-specific details (e.g., chosen number, horse, cards)
+                bet_details JSONB,
                 wager_amount_lamports BIGINT NOT NULL CHECK (wager_amount_lamports > 0),
-                payout_amount_lamports BIGINT, -- Amount credited back (includes original wager for win/push)
-                status VARCHAR(30) NOT NULL DEFAULT 'active', -- active, processing_game, completed_win, completed_loss, completed_push, error_game_logic
-                priority INTEGER NOT NULL DEFAULT 0, -- For potential priority processing of bets
+                payout_amount_lamports BIGINT,
+                status VARCHAR(30) NOT NULL DEFAULT 'active',
+                priority INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                processed_at TIMESTAMPTZ -- Timestamp when game logic completed
+                processed_at TIMESTAMPTZ
             );
         `);
         console.log('⚙️ [DB Init] Ensuring bets indexes...');
@@ -6121,16 +6136,16 @@ async function initializeDatabase() {
             CREATE TABLE IF NOT EXISTS withdrawals (
                 id SERIAL PRIMARY KEY,
                 user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                requested_amount_lamports BIGINT NOT NULL, -- Amount user asked for
+                requested_amount_lamports BIGINT NOT NULL,
                 fee_lamports BIGINT NOT NULL DEFAULT 0,
-                final_send_amount_lamports BIGINT NOT NULL, -- Actual amount sent (requested_amount_lamports)
+                final_send_amount_lamports BIGINT NOT NULL,
                 recipient_address VARCHAR(44) NOT NULL,
-                status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, processing, completed, failed
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
                 payout_tx_signature VARCHAR(88) UNIQUE,
                 error_message TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                processed_at TIMESTAMPTZ, -- When payout attempt started
-                completed_at TIMESTAMPTZ -- When successfully paid or terminally failed
+                processed_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ
             );
         `);
         console.log('⚙️ [DB Init] Ensuring withdrawals indexes...');
@@ -6144,18 +6159,17 @@ async function initializeDatabase() {
             CREATE TABLE IF NOT EXISTS referral_payouts (
                 id SERIAL PRIMARY KEY,
                 referrer_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                referee_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE, -- The user who generated the reward
-                payout_type VARCHAR(20) NOT NULL, -- 'initial_bet', 'milestone'
+                referee_user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
+                payout_type VARCHAR(20) NOT NULL,
                 payout_amount_lamports BIGINT NOT NULL,
-                triggering_bet_id INTEGER REFERENCES bets(id) ON DELETE SET NULL, -- For 'initial_bet' type
-                milestone_reached_lamports BIGINT, -- For 'milestone' type, stores the wager threshold achieved
-                status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, processing, paid, failed
+                triggering_bet_id INTEGER REFERENCES bets(id) ON DELETE SET NULL,
+                milestone_reached_lamports BIGINT,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
                 payout_tx_signature VARCHAR(88) UNIQUE,
                 error_message TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 processed_at TIMESTAMPTZ,
                 paid_at TIMESTAMPTZ
-                -- REMOVED incorrect inline constraint: CONSTRAINT idx_refpayout_unique_milestone UNIQUE (...) WHERE ...
             );
         `);
         // Correctly define the partial unique index separately:
@@ -6200,7 +6214,7 @@ async function initializeDatabase() {
         console.log('⚙️ [DB Init] Ensuring jackpots table...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS jackpots (
-                game_key VARCHAR(50) PRIMARY KEY, -- e.g., 'slots'
+                game_key VARCHAR(50) PRIMARY KEY,
                 current_amount_lamports BIGINT NOT NULL DEFAULT 0 CHECK (current_amount_lamports >= 0),
                 last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
@@ -6213,11 +6227,11 @@ async function initializeDatabase() {
                 id SERIAL PRIMARY KEY,
                 game_key VARCHAR(50) NOT NULL,
                 user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
-                score_type VARCHAR(50) NOT NULL, -- e.g., 'total_profit', 'total_wagered', 'win_streak'
-                period_type VARCHAR(20) NOT NULL, -- e.g., 'daily', 'weekly', 'monthly', 'all_time'
-                period_identifier VARCHAR(50) NOT NULL, -- e.g., '2023-10-27' for daily, '2023-W43' for weekly
-                score BIGINT NOT NULL, -- The actual score value
-                player_display_name VARCHAR(255), -- Cached for quick display, can be updated
+                score_type VARCHAR(50) NOT NULL,
+                period_type VARCHAR(20) NOT NULL,
+                period_identifier VARCHAR(50) NOT NULL,
+                score BIGINT NOT NULL,
+                player_display_name VARCHAR(255),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 UNIQUE (game_key, user_id, score_type, period_type, period_identifier)
             );
@@ -6232,9 +6246,9 @@ async function initializeDatabase() {
         console.error('❌ CRITICAL DATABASE INITIALIZATION ERROR:', err);
         if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error('Rollback failed:', rbErr); } }
         if (typeof notifyAdmin === "function") {
-            try { await notifyAdmin(`🚨 CRITICAL DB INIT FAILED: ${escapeMarkdownV2(err.message)}\\. Bot cannot start\\. Check logs immediately\\.`).catch(()=>{}); } catch {}
+            try { await notifyAdmin(`🚨 CRITICAL DB INIT FAILED: ${escapeMarkdownV2(String(err.message || err))}\\. Bot cannot start\\. Check logs immediately\\.`).catch(()=>{}); } catch {}
         } else {
-            console.error(`[ADMIN ALERT during DB Init Error] DB Init failed: ${err.message}`)
+            console.error(`[ADMIN ALERT during DB Init Error] DB Init failed: ${String(err.message || err)}`)
         }
         process.exit(2);
     } finally {
@@ -6263,7 +6277,7 @@ async function loadActiveDepositsCache() {
         console.log(`✅ ${logPrefix} Loaded ${count} active deposit addresses into cache. Found and processed ${expiredCount} already expired.`);
     } catch (error) {
         console.error(`❌ ${logPrefix} Error loading active deposits: ${error.message}`);
-        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 ERROR Loading active deposit cache on startup: ${escapeMarkdownV2(error.message)}`);
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 ERROR Loading active deposit cache on startup: ${escapeMarkdownV2(String(error.message || error))}`);
     }
 }
 
@@ -6287,14 +6301,13 @@ async function loadSlotsJackpot() {
     } catch (error) {
         if (client) { try { await client.query('ROLLBACK'); } catch (rbErr) { console.error(`${logPrefix} Rollback error on jackpot load: ${rbErr.message}`);} }
         console.error(`❌ ${logPrefix} Error loading slots jackpot: ${error.message}. Using seed value ${formatSol(SLOTS_JACKPOT_SEED_LAMPORTS)} SOL.`);
-        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 ERROR Loading slots jackpot: ${escapeMarkdownV2(error.message)}. Using seed value.`);
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 ERROR Loading slots jackpot: ${escapeMarkdownV2(String(error.message || error))}. Using seed value.`);
         return SLOTS_JACKPOT_SEED_LAMPORTS;
     } finally {
         if (client) client.release();
     }
 }
 
-// --- Background Task: Deposit Monitor ---
 function startDepositMonitor() {
     let intervalMs = parseInt(process.env.DEPOSIT_MONITOR_INTERVAL_MS, 10);
     if (isNaN(intervalMs) || intervalMs < 5000) {
@@ -6319,7 +6332,7 @@ function startDepositMonitor() {
             console.log(`✅ [DepositMonitor] Recurring monitor interval set.`);
         } catch (initialRunError) {
             console.error("❌ [DepositMonitor] CRITICAL ERROR during initial monitor setup/run:", initialRunError);
-            if (typeof notifyAdmin === "function") notifyAdmin(`🚨 CRITICAL ERROR setting up Deposit Monitor interval: ${escapeMarkdownV2(initialRunError.message)}`).catch(()=>{});
+            if (typeof notifyAdmin === "function") notifyAdmin(`🚨 CRITICAL ERROR setting up Deposit Monitor interval: ${escapeMarkdownV2(String(initialRunError.message || initialRunError))}`).catch(()=>{});
         }
     }, initialDelay);
 }
@@ -6350,7 +6363,6 @@ async function monitorDepositsPolling() {
             monitorDepositsPolling.isRunning = false;
             return;
         }
-        // console.log(`${logPrefix} Found ${pendingAddressesRes.rowCount} active pending addresses to check.`); // Less noisy log
 
         batchUpdateClient = await pool.connect();
         await batchUpdateClient.query('BEGIN');
@@ -6358,7 +6370,6 @@ async function monitorDepositsPolling() {
         await batchUpdateClient.query('UPDATE deposit_addresses SET last_checked_at = NOW() WHERE id = ANY($1::int[])', [addressIdsToCheck]);
         await batchUpdateClient.query('COMMIT');
         batchUpdateClient.release(); batchUpdateClient = null;
-
 
         for (const row of pendingAddressesRes.rows) {
             const address = row.deposit_address;
@@ -6373,16 +6384,11 @@ async function monitorDepositsPolling() {
                 );
 
                 if (signatures && signatures.length > 0) {
-                    // console.log(`${addrLogPrefix} Found ${signatures.length} signatures. Processing oldest relevant first...`); // Can be noisy
                     for (const sigInfo of signatures.reverse()) {
                         if (sigInfo?.signature && !hasProcessedDepositTx(sigInfo.signature)) {
-                             // Check confirmationStatus against the configured level, also accept 'finalized' as confirmed.
-                            const isConfirmed = sigInfo.confirmationStatus === DEPOSIT_CONFIRMATION_LEVEL || sigInfo.confirmationStatus === 'finalized';
-                            // Include 'processed' if that's acceptable based on RPC node behavior (less secure than confirmed/finalized)
-                            // const isConfirmed = isConfirmed || (DEPOSIT_CONFIRMATION_LEVEL === 'processed' && sigInfo.confirmationStatus === 'processed');
-
+                            const isConfirmed = sigInfo.confirmationStatus === DEPOSIT_CONFIRMATION_LEVEL || sigInfo.confirmationStatus === 'finalized' || sigInfo.confirmationStatus === 'processed';
                             if (!sigInfo.err && isConfirmed) {
-                                console.log(`${addrLogPrefix} Found new confirmed/finalized TX: ${sigInfo.signature}. Queuing for processing.`);
+                                console.log(`${addrLogPrefix} Found new confirmed/processed TX: ${sigInfo.signature}. Queuing for processing.`);
                                 depositProcessorQueue.add(() => processDepositTransaction(sigInfo.signature, address, addressId, userId))
                                     .catch(queueError => console.error(`❌ ${addrLogPrefix} Error adding TX ${sigInfo.signature} to deposit queue: ${queueError.message}`));
                                 addProcessedDepositTx(sigInfo.signature);
@@ -6406,7 +6412,7 @@ async function monitorDepositsPolling() {
             try { await batchUpdateClient.query('ROLLBACK'); } catch (rbErr) { console.error(`${logPrefix} Rollback failed for last_checked_at update: ${rbErr.message}`); }
             batchUpdateClient.release();
         }
-        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 ERROR in Deposit Monitor loop: ${escapeMarkdownV2(error.message)}`);
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 ERROR in Deposit Monitor loop: ${escapeMarkdownV2(String(error.message || error))}`);
     } finally {
         if (batchUpdateClient) batchUpdateClient.release();
         monitorDepositsPolling.isRunning = false;
@@ -6437,7 +6443,6 @@ async function processDepositTransaction(signature, depositAddress, depositAddre
         const { transferAmount, payerAddress } = analyzeTransactionAmounts(tx, depositAddress);
 
         if (transferAmount <= 0n) {
-            // console.log(`ℹ️ ${logPrefix} No positive SOL transfer to ${depositAddress} found in TX ${signature}. Ignoring.`);
             addProcessedDepositTx(signature);
             return;
         }
@@ -6520,14 +6525,13 @@ async function processDepositTransaction(signature, depositAddress, depositAddre
             try { await client.query('ROLLBACK'); console.log(`ℹ️ ${logPrefix} Transaction rolled back due to error for TX ${signature}.`); }
             catch (rbErr) { console.error(`❌ ${logPrefix} Rollback failed for TX ${signature}:`, rbErr); }
         }
-        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL Error Processing Deposit TX \`${escapeMarkdownV2(signature)}\` Addr \`${escapeMarkdownV2(depositAddress)}\` User \`${escapeMarkdownV2(userId)}\`:\n${escapeMarkdownV2(error.message)}`);
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL Error Processing Deposit TX \`${escapeMarkdownV2(signature)}\` Addr \`${escapeMarkdownV2(depositAddress)}\` User \`${escapeMarkdownV2(userId)}\`:\n${escapeMarkdownV2(String(error.message || error))}`);
         addProcessedDepositTx(signature);
     } finally {
         if (client) client.release();
     }
 }
 
-// --- Background Task: Deposit Address Sweeper ---
 function startDepositSweeper() {
     let intervalMs = parseInt(process.env.SWEEP_INTERVAL_MS, 10);
     if (isNaN(intervalMs) || intervalMs <= 0) {
@@ -6557,7 +6561,7 @@ function startDepositSweeper() {
             console.log(`✅ [DepositSweeper] Recurring sweep interval set.`);
         } catch (initialRunError) {
             console.error("❌ [DepositSweeper] CRITICAL ERROR during initial sweep setup/run:", initialRunError);
-            if (typeof notifyAdmin === "function") notifyAdmin(`🚨 CRITICAL ERROR setting up Deposit Sweeper interval: ${escapeMarkdownV2(initialRunError.message)}`).catch(()=>{});
+            if (typeof notifyAdmin === "function") notifyAdmin(`🚨 CRITICAL ERROR setting up Deposit Sweeper interval: ${escapeMarkdownV2(String(initialRunError.message || initialRunError))}`).catch(()=>{});
         }
     }, initialDelay);
 }
@@ -6691,7 +6695,7 @@ async function sweepDepositAddresses() {
                 sweepErrors++;
                 console.error(`❌ ${addrLogPrefix} Error processing address ${addressString} for sweep: ${processAddrError.message}`, processAddrError.stack);
                 await queryDatabase("UPDATE deposit_addresses SET status = 'sweep_error_processing' WHERE id = $1 AND status = 'used'", [addressId]);
-                if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 SWEEP FAILED (Processing Error) Addr \`${escapeMarkdownV2(addressString)}\` (ID: ${addressId}): ${escapeMarkdownV2(processAddrError.message)}. Manual check needed.`);
+                if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 SWEEP FAILED (Processing Error) Addr \`${escapeMarkdownV2(addressString)}\` (ID: ${addressId}): ${escapeMarkdownV2(String(processAddrError.message || processAddrError))}. Manual check needed.`);
             }
             if (delayBetweenAddressesMs > 0 && addressesProcessed < addressesRes.rowCount) {
                 await sleep(delayBetweenAddressesMs);
@@ -6700,58 +6704,71 @@ async function sweepDepositAddresses() {
         console.log(`🧹 ${logPrefix} Sweep cycle finished. Processed: ${addressesProcessed}, Swept OK: ${addressesSwept}, Low Balance Skipped: ${lowBalanceSkipped}, Errors: ${sweepErrors}.`);
     } catch (error) {
         console.error(`❌ ${logPrefix} CRITICAL ERROR in main sweep cycle: ${error.message}`, error.stack);
-        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL Error in Deposit Sweeper main loop: ${escapeMarkdownV2(error.message)}.`);
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL Error in Deposit Sweeper main loop: ${escapeMarkdownV2(String(error.message || error))}.`);
     } finally {
         sweepDepositAddresses.isRunning = false;
     }
 }
 
-// --- Background Task: Leaderboard Manager ---
+// --- Background Task: Leaderboard Manager (Full Definition) ---
 async function updateLeaderboardsCycle() {
     const logPrefix = '[LeaderboardManager Cycle]';
     console.log(`🏆 ${logPrefix} Starting leaderboard update cycle...`);
-    // Define leaderboard criteria
+    
     const periods = ['daily', 'weekly', 'all_time'];
-    const scoreTypes = ['total_profit', 'total_wagered']; // Add more types as needed
-    const games = Object.keys(GAME_CONFIG);
+    const scoreTypes = ['total_wagered', 'total_profit']; // Define which scores to track
+    const gamesToTrack = Object.keys(GAME_CONFIG); // Track for all configured games
 
     const now = new Date();
-    const today = now.toISOString().split('T')[0]; // YYYY-MM-DD
-    const weekStart = new Date(now.setDate(now.getDate() - now.getDay() + (now.getDay() === 0 ? -6 : 1))).toISOString().split('T')[0]; // Monday of current week
-    const currentWeekIdentifier = `${now.getFullYear()}-W${String(Math.ceil((new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - new Date(now.getFullYear(), 0, 1).getTime()) / (24 * 60 * 60 * 1000 * 7))).padStart(2, '0')}`;
+    const todayISO = now.toISOString().split('T')[0]; // YYYY-MM-DD for daily
+
+    const getWeekNumber = (d) => {
+        d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+        d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay()||7));
+        const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+        const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1)/7);
+        return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+    }
+    const currentWeekIdentifier = getWeekNumber(now);
 
     let client = null;
     try {
         client = await pool.connect();
 
-        for (const gameKey of games) {
+        for (const gameKey of gamesToTrack) {
             for (const period of periods) {
                 let startDate;
-                let periodId;
+                let periodIdentifier;
 
                 switch (period) {
                     case 'daily':
-                        startDate = new Date(today);
-                        periodId = today;
+                        startDate = new Date(todayISO); // Start of today
+                        periodIdentifier = todayISO;
                         break;
                     case 'weekly':
-                        startDate = new Date(weekStart);
-                        periodId = currentWeekIdentifier;
+                        const dayOfWeek = now.getDay(); // Sunday - 0, Monday - 1
+                        const diff = now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // Adjust to Monday
+                        startDate = new Date(now.setDate(diff));
+                        startDate.setHours(0,0,0,0); // Start of Monday
+                        periodIdentifier = currentWeekIdentifier;
                         break;
                     case 'all_time':
-                        startDate = new Date(0); // Beginning of time for SQL
-                        periodId = 'all';
+                        startDate = new Date(0); // Unix epoch start
+                        periodIdentifier = 'all';
                         break;
-                    default: continue; // Skip unknown periods
+                    default:
+                        console.warn(`${logPrefix} Unknown period type: ${period}. Skipping.`);
+                        continue;
                 }
 
                 for (const scoreType of scoreTypes) {
-                    console.log(`${logPrefix} Processing: Game=${gameKey}, Period=${period}, Score=${scoreType}...`);
-                    let scoreQuery = '';
-                    let scoreColumnAlias = 'calculated_score';
+                    console.log(`${logPrefix} Processing: Game=${gameKey}, Period=${period} (${periodIdentifier}), ScoreType=${scoreType}...`);
+                    let scoreDataQuery = '';
+                    let queryParams = [gameKey, startDate.toISOString()];
+                    const scoreColumnAlias = 'calculated_score_value';
 
                     if (scoreType === 'total_wagered') {
-                        scoreQuery = `
+                        scoreDataQuery = `
                             SELECT user_id, SUM(wager_amount_lamports) as ${scoreColumnAlias}
                             FROM bets
                             WHERE game_type = $1 AND status LIKE 'completed_%' AND created_at >= $2
@@ -6759,25 +6776,26 @@ async function updateLeaderboardsCycle() {
                             HAVING SUM(wager_amount_lamports) > 0;
                         `;
                     } else if (scoreType === 'total_profit') {
-                        scoreQuery = `
+                        scoreDataQuery = `
                             SELECT user_id, SUM(COALESCE(payout_amount_lamports, 0) - wager_amount_lamports) as ${scoreColumnAlias}
                             FROM bets
                             WHERE game_type = $1 AND status LIKE 'completed_%' AND created_at >= $2
-                            GROUP BY user_id
-                            HAVING SUM(COALESCE(payout_amount_lamports, 0) - wager_amount_lamports) > 0; -- Only positive profit leaderboards? Or allow negative? Let's allow all for now.
+                            GROUP BY user_id; 
+                            -- Not filtering by HAVING SUM > 0, as even net loss can be a "score" for some leaderboards
                         `;
-                         // Modify HAVING if only positive profit needed: HAVING SUM(...) > 0
                     } else {
-                        continue; // Skip unsupported score types
+                        console.warn(`${logPrefix} Unknown score type: ${scoreType}. Skipping.`);
+                        continue;
                     }
 
-                    await client.query('BEGIN'); // Transaction per score type update
+                    await client.query('BEGIN'); // Transaction for each specific leaderboard update
                     try {
-                        const scoreDataRes = await client.query(scoreQuery, [gameKey, startDate]);
+                        const scoreDataRes = await client.query(scoreDataQuery, queryParams);
                         if (scoreDataRes.rowCount > 0) {
                             for (const row of scoreDataRes.rows) {
-                                const userDetails = await getUserWalletDetails(row.user_id, client);
-                                const displayName = userDetails?.referral_code || `User...${row.user_id.slice(-4)}`;
+                                // Fetch display name (can be cached or simplified)
+                                const userDetails = await getUserWalletDetails(row.user_id, client); // Ensures transactional read
+                                const displayName = userDetails?.referral_code || `User...${row.user_id.slice(-4)}`; // Example display name
 
                                 await client.query(`
                                     INSERT INTO game_leaderboards (game_key, user_id, score_type, period_type, period_identifier, score, player_display_name, updated_at)
@@ -6785,22 +6803,23 @@ async function updateLeaderboardsCycle() {
                                     ON CONFLICT (game_key, user_id, score_type, period_type, period_identifier)
                                     DO UPDATE SET score = EXCLUDED.score, player_display_name = EXCLUDED.player_display_name, updated_at = NOW()
                                     WHERE game_leaderboards.score <> EXCLUDED.score OR game_leaderboards.player_display_name <> EXCLUDED.player_display_name;
-                                `, [gameKey, row.user_id, scoreType, period, periodId, BigInt(row[scoreColumnAlias]), displayName]);
+                                `, [gameKey, row.user_id, scoreType, period, periodIdentifier, BigInt(row[scoreColumnAlias]), displayName]);
                             }
-                            console.log(`${logPrefix} Updated ${scoreDataRes.rowCount} entries for ${gameKey}/${period}/${scoreType}.`);
+                            console.log(`${logPrefix} Updated/checked ${scoreDataRes.rowCount} entries for ${gameKey}/${period}/${scoreType}.`);
+                        } else {
+                            console.log(`${logPrefix} No new data to update for ${gameKey}/${period}/${scoreType}.`);
                         }
                         await client.query('COMMIT');
                     } catch (innerError) {
-                        console.error(`❌ ${logPrefix} Error updating ${gameKey}/${period}/${scoreType}: ${innerError.message}`);
+                        console.error(`❌ ${logPrefix} Error updating specific leaderboard ${gameKey}/${period}/${scoreType}: ${innerError.message}`);
                         await client.query('ROLLBACK');
-                        // Optionally notify admin on inner error
                     }
                 } // end scoreType loop
             } // end period loop
         } // end gameKey loop
     } catch (error) {
-        console.error(`❌ ${logPrefix} Error in leaderboard update cycle: ${error.message}`, error.stack);
-        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 Error updating leaderboards: ${escapeMarkdownV2(error.message)}`);
+        console.error(`❌ ${logPrefix} Major error in leaderboard update cycle: ${error.message}`, error.stack);
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 Error during leaderboard update cycle: ${escapeMarkdownV2(String(error.message || error))}`);
     } finally {
         if (client) client.release();
         console.log(`🏆 ${logPrefix} Leaderboard update cycle finished.`);
@@ -6810,7 +6829,7 @@ async function updateLeaderboardsCycle() {
 function startLeaderboardManager() {
     const logPrefix = '[LeaderboardManager Start]';
     console.log(`⚙️ ${logPrefix} Initializing Leaderboard Manager...`);
-    const intervalMs = parseInt(process.env.LEADERBOARD_UPDATE_INTERVAL_MS, 10); // From OPTIONAL_ENV_DEFAULTS in Part 1
+    const intervalMs = parseInt(process.env.LEADERBOARD_UPDATE_INTERVAL_MS, 10);
 
     if (isNaN(intervalMs) || intervalMs <= 0) {
         console.warn(`⚠️ ${logPrefix} Leaderboard updates are disabled (LEADERBOARD_UPDATE_INTERVAL_MS not set or invalid).`);
@@ -6822,7 +6841,7 @@ function startLeaderboardManager() {
         console.log(`🔄 ${logPrefix} Restarting leaderboard manager...`);
     }
 
-    const initialDelayMs = (parseInt(process.env.INIT_DELAY_MS, 10) || 5000) + 5000; // Delay first run
+    const initialDelayMs = (parseInt(process.env.INIT_DELAY_MS, 10) || 5000) + 7000; // Delay a bit more
     console.log(`⚙️ ${logPrefix} Scheduling first leaderboard update run in ${initialDelayMs / 1000}s...`);
 
     setTimeout(() => {
@@ -6833,7 +6852,8 @@ function startLeaderboardManager() {
     }, initialDelayMs);
 }
 
-// --- Payout Processing ---
+
+// --- Payout Processing --- (Identical to previous correct version)
 async function addPayoutJob(jobData) {
     const jobType = jobData?.type || 'unknown_job';
     const jobId = jobData?.withdrawalId || jobData?.payoutId || 'N/A_ID';
@@ -6875,7 +6895,7 @@ async function addPayoutJob(jobData) {
         }
     }).catch(queueError => {
         console.error(`❌ ${logPrefix} CRITICAL Error processing job in Payout Queue: ${queueError.message}`);
-        if (typeof notifyAdmin === "function") notifyAdmin(`🚨 CRITICAL Payout Queue Error. Type: ${jobType}, ID: ${jobId}. Error: ${escapeMarkdownV2(queueError.message)}`).catch(()=>{});
+        if (typeof notifyAdmin === "function") notifyAdmin(`🚨 CRITICAL Payout Queue Error. Type: ${jobType}, ID: ${jobId}. Error: ${escapeMarkdownV2(String(queueError.message || queueError))}`).catch(()=>{});
     });
 }
 
@@ -7022,7 +7042,7 @@ async function handleReferralPayoutJob(payoutId) {
             await updateReferralPayoutStatus(payoutId, 'failed', null, null, sendErrorMsg.substring(0, 500));
             await safeSendMessage(referrerUserId, `❌ Your Referral Reward of ${escapeMarkdownV2(amountToPaySOL)} SOL failed to send \\(Reason: ${escapeMarkdownV2(sendErrorMsg)}\\)\\. Please contact support if this issue persists\\.`, {parse_mode: 'MarkdownV2'});
             if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 REFERRAL PAYOUT FAILED (Referrer ${referrerUserId}, Payout ID ${payoutId}, Amount ${amountToPaySOL} SOL): ${escapeMarkdownV2(sendErrorMsg)}`);
-
+            
             const errorToThrowForRetry = new Error(sendErrorMsg);
             errorToThrowForRetry.isRetryable = sendSolResult.isRetryable === true;
             throw errorToThrowForRetry;
@@ -7040,7 +7060,6 @@ async function handleReferralPayoutJob(payoutId) {
     }
 }
 
-// --- Telegram Connection & Server Setup ---
 async function setupTelegramConnection() {
     console.log('⚙️ [Startup] Configuring Telegram connection (Webhook/Polling)...');
     let webhookUrlBase = process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : process.env.WEBHOOK_URL;
@@ -7072,7 +7091,7 @@ async function setupTelegramConnection() {
             return true;
         } catch (error) {
             console.error(`❌ [Startup] Failed to set Telegram Webhook: ${error.message}. Falling back to polling.`, error.response?.body ? JSON.stringify(error.response.body) : '');
-            if (typeof notifyAdmin === "function") await notifyAdmin(`⚠️ WARNING: Webhook setup failed for ${escapeMarkdownV2(fullWebhookUrl)}\nError: ${escapeMarkdownV2(error.message)}\nFalling back to polling.`).catch(()=>{});
+            if (typeof notifyAdmin === "function") await notifyAdmin(`⚠️ WARNING: Webhook setup failed for ${escapeMarkdownV2(fullWebhookUrl)}\nError: ${escapeMarkdownV2(String(error.message || error))}\nFalling back to polling.`).catch(()=>{});
             bot.options.polling = true;
             return false;
         }
@@ -7091,13 +7110,13 @@ async function startPollingFallback() {
     try {
         await bot.deleteWebHook({ drop_pending_updates: true }).catch(() => {});
         await bot.startPolling({
-            timeout: 10,
-            allowed_updates: JSON.stringify(['message', 'callback_query'])
+            timeout: 10, // Long polling timeout in seconds
+            allowed_updates: JSON.stringify(['message', 'callback_query']) // Must be JSON string array
         });
         console.log('✅ [Startup] Telegram Polling started successfully.');
     } catch (err) {
         console.error(`❌ CRITICAL: Telegram Polling failed to start: ${err.message}`, err.stack);
-        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL POLLING FAILED TO START: ${escapeMarkdownV2(err.message)}. Bot cannot receive updates. Exiting.`).catch(()=>{});
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL POLLING FAILED TO START: ${escapeMarkdownV2(String(err.message || err))}. Bot cannot receive updates. Exiting.`).catch(()=>{});
         process.exit(3);
     }
 }
@@ -7146,7 +7165,7 @@ function setupExpressServer() {
 
     server.on('error', async (error) => {
         console.error(`❌ Express Server Error: ${error.message}`, error.stack);
-        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL Express Server Error: ${escapeMarkdownV2(error.message)}. Bot may not function. Restart advised.`).catch(()=>{});
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 CRITICAL Express Server Error: ${escapeMarkdownV2(String(error.message || error))}. Bot may not function. Restart advised.`).catch(()=>{});
         if (error.code === 'EADDRINUSE' && !isShuttingDown) {
             console.error("Address in use, shutting down...");
             await shutdown('EADDRINUSE_SERVER_ERROR').catch(() => process.exit(4));
@@ -7154,7 +7173,6 @@ function setupExpressServer() {
     });
 }
 
-// --- Shutdown Logic ---
 let isShuttingDown = false;
 async function shutdown(signal) {
     if (isShuttingDown) {
@@ -7250,17 +7268,17 @@ function setupTelegramListeners() {
     bot.on('polling_error', (error) => {
         console.error(`❌ TG Polling Error: Code ${error.code || 'N/A'} | ${error.message}`, error.stack);
         if (String(error.message).includes('409') || String(error.code).includes('EFATAL') || String(error.message).toLowerCase().includes('conflict')) {
-            if (typeof notifyAdmin === "function") notifyAdmin(`🚨 POLLING CONFLICT (409) or EFATAL detected. Another instance running? Shutting down. Error: ${escapeMarkdownV2(error.message)}`).catch(()=>{});
+            if (typeof notifyAdmin === "function") notifyAdmin(`🚨 POLLING CONFLICT (409) or EFATAL detected. Another instance running? Shutting down. Error: ${escapeMarkdownV2(String(error.message || error))}`).catch(()=>{});
             if (!isShuttingDown) shutdown('POLLING_FATAL_ERROR').catch(() => process.exit(1));
         }
     });
     bot.on('webhook_error', (error) => {
         console.error(`❌ TG Webhook Error: Code ${error.code || 'N/A'} | ${error.message}`, error.stack);
-        if (typeof notifyAdmin === "function") notifyAdmin(`🚨 Telegram Webhook Error: ${error.code || 'N/A'} - ${escapeMarkdownV2(error.message)}`).catch(()=>{});
+        if (typeof notifyAdmin === "function") notifyAdmin(`🚨 Telegram Webhook Error: ${error.code || 'N/A'} - ${escapeMarkdownV2(String(error.message || error))}`).catch(()=>{});
     });
     bot.on('error', (error) => {
         console.error('❌ General node-telegram-bot-api Library Error:', error);
-        if (typeof notifyAdmin === "function") notifyAdmin(`🚨 General TG Bot Library Error:\n${escapeMarkdownV2(error.message)}`).catch(()=>{});
+        if (typeof notifyAdmin === "function") notifyAdmin(`🚨 General TG Bot Library Error:\n${escapeMarkdownV2(String(error.message || error))}`).catch(()=>{});
     });
     console.log("✅ [Listeners] Telegram event listeners are ready.");
 }
@@ -7280,7 +7298,7 @@ function setupTelegramListeners() {
         if (!isShuttingDown) {
             console.error("Initiating emergency shutdown due to uncaught exception...");
             try {
-                if (typeof notifyAdmin === "function") await notifyAdmin(`🚨🚨🚨 UNCAUGHT EXCEPTION (${escapeMarkdownV2(String(origin))})\n${escapeMarkdownV2(error.message)}\nAttempting emergency shutdown...`).catch(e => console.error("Admin notify fail (uncaught):", e));
+                if (typeof notifyAdmin === "function") await notifyAdmin(`🚨🚨🚨 UNCAUGHT EXCEPTION (${escapeMarkdownV2(String(origin))})\n${escapeMarkdownV2(String(error.message || error))}\nAttempting emergency shutdown...`).catch(e => console.error("Admin notify fail (uncaught):", e));
                 await shutdown('uncaughtException');
             } catch (shutdownErr) {
                 console.error("❌ Emergency shutdown attempt itself FAILED:", shutdownErr);
@@ -7305,28 +7323,25 @@ function setupTelegramListeners() {
     });
 
     try {
-        console.log("⚙️ [Startup Step 1/8] Setting up Telegram Listeners (will attach after init)...");
-        // Listeners setup logic is called later now.
-
-        console.log("⚙️ [Startup Step 2/8] Initializing Database...");
+        console.log("⚙️ [Startup Step 1/8] Initializing Database (this will also set up listeners internally if needed by notifyAdmin)...");
         await initializeDatabase(); // Contains the DDL fixes now
 
-        console.log("⚙️ [Startup Step 3/8] Loading Active Deposits Cache...");
+        console.log("⚙️ [Startup Step 2/8] Loading Active Deposits Cache...");
         await loadActiveDepositsCache();
 
-        console.log("⚙️ [Startup Step 4/8] Loading Slots Jackpot...");
+        console.log("⚙️ [Startup Step 3/8] Loading Slots Jackpot...");
         const loadedJackpot = await loadSlotsJackpot();
         currentSlotsJackpotLamports = loadedJackpot;
         console.log(`⚙️ [Startup] Global slots jackpot variable set to: ${formatSol(currentSlotsJackpotLamports)} SOL`);
 
-        console.log("⚙️ [Startup Step 5/8] Setting up Telegram Connection (Webhook/Polling)...");
+        console.log("⚙️ [Startup Step 4/8] Setting up Telegram Connection (Webhook/Polling)...");
         const useWebhook = await setupTelegramConnection();
 
-        console.log("⚙️ [Startup Step 6/8] Setting up Express Server...");
+        console.log("⚙️ [Startup Step 5/8] Setting up Express Server...");
         setupExpressServer();
 
-        console.log("⚙️ [Startup Step 7/8] Attaching Telegram Listeners & Starting Polling (if applicable)...");
-        setupTelegramListeners(); // Attach listeners now
+        console.log("⚙️ [Startup Step 6/8] Attaching Telegram Listeners & Starting Polling (if applicable)...");
+        setupTelegramListeners();
         if (!useWebhook && bot.options.polling) {
             await startPollingFallback();
         } else if (!useWebhook && !bot.options.polling && (process.env.WEBHOOK_URL || process.env.RAILWAY_PUBLIC_DOMAIN)) {
@@ -7337,21 +7352,20 @@ function setupTelegramListeners() {
              console.log("ℹ️ [Startup] Polling mode is primary or webhook setup failed. Polling should be active if configured.")
         }
 
-
         const initDelay = parseInt(process.env.INIT_DELAY_MS, 10) || 3000;
-        console.log(`⚙️ [Startup Step 8/8] Finalizing startup & scheduling Background Tasks in ${initDelay / 1000}s...`);
+        console.log(`⚙️ [Startup Step 7/8] Finalizing startup & scheduling Background Tasks in ${initDelay / 1000}s...`);
 
         setTimeout(async () => {
             try {
-                console.log("⚙️ [Startup Final Phase] Starting Background Tasks now...");
+                console.log("⚙️ [Startup Final Phase Step 8/8] Starting Background Tasks now...");
                 startDepositMonitor();
                 startDepositSweeper();
-                startLeaderboardManager(); // Added full function earlier
+                startLeaderboardManager();
 
                 console.log("✅ [Startup Final Phase] Background Tasks scheduled/started.");
-
-                await pool.query('SELECT NOW()');
-                console.log("✅ [Startup Final Phase] Database pool confirmed operational.");
+                
+                await pool.query('SELECT NOW()'); // Final check of DB pool
+                console.log("✅ [Startup Final Phase] Database pool confirmed operational post-init.");
 
                 console.log("⚙️ [Startup Final Phase] Setting isFullyInitialized to true...");
                 isFullyInitialized = true;
@@ -7366,12 +7380,12 @@ function setupTelegramListeners() {
             } catch (finalPhaseError) {
                 console.error("❌ FATAL ERROR DURING FINAL STARTUP PHASE (after initial delay):", finalPhaseError);
                 isFullyInitialized = false;
-                if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 BOT STARTUP FAILED (Final Phase): ${escapeMarkdownV2(finalPhaseError.message)}. Bot may not be operational.`).catch(()=>{});
+                if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 BOT STARTUP FAILED (Final Phase): ${escapeMarkdownV2(String(finalPhaseError.message || finalPhaseError))}. Bot may not be operational.`).catch(()=>{});
                 if (!isShuttingDown) await shutdown('STARTUP_FINAL_PHASE_ERROR').catch(() => process.exit(5));
             }
         }, initDelay);
 
-    } catch (error) { // Catch errors from the main startup sequence (steps 1-7)
+    } catch (error) {
         console.error("❌❌❌ FATAL ERROR DURING MAIN STARTUP SEQUENCE:", error);
         isFullyInitialized = false;
         if (pool) { pool.end().catch(() => {});}
@@ -7381,7 +7395,7 @@ function setupTelegramListeners() {
                  const adminIdsForError = process.env.ADMIN_USER_IDS.split(',');
                  for (const adminId of adminIdsForError) {
                      if(adminId.trim()) {
-                         tempBotForError.sendMessage(adminId.trim(), `🚨 BOT STARTUP FAILED (Main Sequence): ${error.message}. Check logs & DB. Exiting.`).catch(e => console.error("Fallback admin notify failed:", e));
+                         tempBotForError.sendMessage(adminId.trim(), `🚨 BOT STARTUP FAILED (Main Sequence): ${String(error.message || error)}. Check logs & DB. Exiting.`).catch(e => console.error("Fallback admin notify failed:", e));
                      }
                  }
             }
