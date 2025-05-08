@@ -5874,8 +5874,8 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
 
 // --- End of Part 5b (Section 2b) ---
-// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - CORRECTED
-// --- VERSION: 3.2.1r --- (Applying Fixes: Corrected invalid syntax in handleReferralCommand, Verifying Ref/Deposit Cmd Escaping, Referral/Help Parse Errors, Deposit Hint Format, Link Wallet Escaping, Ref Link Display, Error Recovery, Balance on Start, Start Animation + previous)
+// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - CORRECTED v2
+// --- VERSION: 3.2.1v --- (Applying Fixes: FINAL REFERRAL FIX - Escaping '.' and other chars in handleReferralCommand message)
 
 // (Continuing directly from Part 5b, Section 2b)
 // ... (Assume functions, dependencies etc. are available) ...
@@ -5954,9 +5954,7 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
  * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
  */
 async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** Applying Fix #2: Escape % signs (Verified Already Present) ***
-    // *** Applying Fix #6: Referral Link Display (Verified Already Present) ***
-    // *** Applying Fix #8: Improve Error Recovery (Verified Already Present) ***
+    // *** FINAL FIX: Meticulously check escaping for '.', '!', '(', ')', '%', '+', '-' ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     let messageToEditId = msgOrCbMsg.message_id;
@@ -6033,22 +6031,19 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             return `${count} refs \\= ${percent}\\%`; // Added \\%
         }).join(', ');
 
-        // *** FIX #6: Referral Link Display (Plain + Backticks) (Verified Already Present) ***
-        // *** FIX #2: Escape % sign in Milestone line + Reverted double escaping parens (Verified Already Present) ***
-      // Carefully construct the message ensuring all dynamic parts and MarkdownV2 syntax are escaped
-      // *** REMOVED INVALID SYNTAX FROM PREVIOUS VERSION ***
+      // *** FINAL FIX: Meticulously review and escape ., !, (), %, +, - ***
         let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
                           `Share your unique link to earn SOL when your friends play\\!\n\n` + // Escaped !
-                          `*Your Code:* \`${escapedRefCode}\`\n` + // Escaped `
-                          `*Your Clickable Link:*\n${referralLink}\n` + // Display raw link for auto-linking by Telegram
-                          `\\_\(Tap button below or copy here: \`${referralLink}\`\\)_\n\n`+ // Link in backticks (unescaped), parens/underscores escaped
+                          `*Your Code:* \`${escapedRefCode}\`\n` + // ` escapes content
+                          `*Your Clickable Link:*\n${referralLink}\n` + // Raw link for TG
+                          `\\_\(Tap button below or copy here: \`${referralLink}\`\\)_\n\n`+ // Escaped ()_, ` for copy
                           `*Successful Referrals:* ${referralCount}\n` +
                           `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
                           `*How Rewards Work:*\n` +
-                          `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Escaped . ! % and standard escaped \( \)
-                          `  tiers: ${tiersDesc}\n` + // Includes escaped % now
-                          `2\\. *Milestone Bonus:* Earn ${milestonePercent}\\% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Added \\% + standard escaped \( \) + Escaped .
-                          `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``; // Escaped `
+                          `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Escaped . ! () %
+                          `  tiers: ${tiersDesc}\n` + // Tiers desc already escaped where needed
+                          `2\\. *Milestone Bonus:* Earn ${milestonePercent}\\% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Escaped % . () ,
+                          `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``; // ` escapes content
 
 
         // Button uses the raw link for the switch_inline_query parameter
@@ -6060,9 +6055,27 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
         // Edit or send the message
         if (isFromCallback && messageToEditId) {
-            await bot.editMessageText(referralMsg, {chat_id: chatId, message_id: messageToEditId, ...options});
+            await bot.editMessageText(referralMsg, {chat_id: chatId, message_id: messageToEditId, ...options}).catch(e => {
+                // Handle potential parse error on edit
+                if (e.message?.toLowerCase().includes("can't parse entities")) {
+                    console.error(`[ReferralCmd User ${userId}] PARSE ERROR on editMessageText. Text: ${referralMsg}`, e);
+                    safeSendMessage(chatId, "Error displaying referral info due to formatting. Please try again.", { reply_markup: fallbackKeyboard }); // Fallback simple message
+                } else if (!e.message.includes("message is not modified")) {
+                    console.warn(`[ReferralCmd User ${userId}] Failed edit, sending new. Error: ${e.message}`);
+                    safeSendMessage(chatId, referralMsg, options); // Fallback send new
+                }
+            });
         } else {
-            await safeSendMessage(chatId, referralMsg, options);
+            await safeSendMessage(chatId, referralMsg, options).catch(e => {
+                // Handle potential parse error on send
+                if (e.message?.toLowerCase().includes("can't parse entities")) {
+                     console.error(`[ReferralCmd User ${userId}] PARSE ERROR on safeSendMessage. Text: ${referralMsg}`, e);
+                     safeSendMessage(chatId, "Error displaying referral info due to formatting. Please try again.", { reply_markup: fallbackKeyboard }); // Fallback simple message
+                } else {
+                     console.error(`[ReferralCmd User ${userId}] Error sending referral message: ${e.message}`);
+                     safeSendMessage(chatId, "Error displaying referral info. Please try again.", { reply_markup: fallbackKeyboard });
+                }
+            });
         }
 
     } catch (error) { // Catch errors during setup or message sending
@@ -6314,7 +6327,7 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         const promptText = `${escapeMarkdownV2(breadcrumb)}\n\n` +
                             `Your withdrawal address: \`${escapedAddress}\`\n` + // Escaped `
                             `Minimum withdrawal: ${minWithdrawSOLText} SOL\\. Fee: ${feeSOLText} SOL\\.\n\n` + // Escaped .
-                            `Please enter the amount of SOL you wish to withdraw \\(e\\.g\\., 0\\.5\\), or /cancel:`; // Escaped . ()
+                            `Please enter the amount of SOL you wish to withdraw \\(e\\.g\\., 0\\.5\\), or /cancel\\:`; // Escaped . () :
 
         // Edit the "Preparing..." message with the actual prompt
         await bot.editMessageText(promptText, {
@@ -6507,7 +6520,7 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
             case 'link_wallet_prompt':
                 clearUserState(userId); // Clear any previous state before setting new one
                 const breadcrumbWallet = "Link Wallet";
-                // *** FIX #5: Escape periods (Verified Already Present) ***
+                // *** FIX #5: Escape periods (Verified Already Present & Escaped) ***
                 text = `🔗 *Link/Update External Wallet*\n\nPlease send your Solana wallet address in the chat\\.\n\nExample: \`SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\`\n\nOr type /cancel to go back\\.`; // Escaped '.' `
                 keyboard.inline_keyboard = [ [{ text: '❌ Cancel', callback_data: 'menu:wallet' }] ]; // Go back to wallet menu on cancel
                 // Set state to await the wallet address input
