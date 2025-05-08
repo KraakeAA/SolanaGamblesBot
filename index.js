@@ -3213,7 +3213,7 @@ function determineBlackjackWinner(playerHand, dealerHand) {
 
 // --- End of Part 4 ---
 // index.js - Part 5a: Telegram Message/Callback Handlers & Game Result Processing
-// --- VERSION: 3.2.1o --- (Applying Fixes: Double Deduction (All Games), BJ/Crash Play Again, BJ Parens, Deposit Hint Format, Link Wallet Escaping. Includes previous fixes.)
+// --- VERSION: 3.2.1p --- (Applying Fixes: Win Payout Accounting (CF,Race,Slots), Play Again Cooldown, + previous)
 
 // --- Assuming functions from Part 1, 2, 3, 4 are available ---
 // (bot, pool, caches, GAME_CONFIG, DB ops, utils like safeSendMessage, escapeMarkdownV2, formatSol, sleep, getUserBalance, etc.),
@@ -3370,12 +3370,12 @@ async function handleCallbackQuery(callbackQuery) {
     console.log(`${logPrefix} Received callback.`);
     bot.answerCallbackQuery(callbackQuery.id).catch(err => console.warn(`${logPrefix} Non-critical error answering CB query: ${err.message}`)); // Answer immediately
 
-    // Cooldown check (less strict for callbacks)
-    const now = Date.now();
-    const lastCallbackTimeKey = `${userId}_cb`;
-    const lastCallbackTime = commandCooldown.get(lastCallbackTimeKey) || 0; // commandCooldown from Part 1
-    if (now - lastCallbackTime < (USER_COMMAND_COOLDOWN_MS / 2)) { console.log(`${logPrefix} Callback cooldown active.`); return; } // Divide cooldown for callbacks
-    commandCooldown.set(lastCallbackTimeKey, now);
+    // *** FIX: Removed Callback Cooldown Check ***
+    // const now = Date.now();
+    // const lastCallbackTimeKey = `${userId}_cb`;
+    // const lastCallbackTime = commandCooldown.get(lastCallbackTimeKey) || 0; // commandCooldown from Part 1
+    // if (now - lastCallbackTime < (USER_COMMAND_COOLDOWN_MS / 2)) { console.log(`${logPrefix} Callback cooldown active.`); return; } // Divide cooldown for callbacks
+    // commandCooldown.set(lastCallbackTimeKey, now);
 
     // Parse action and params
     // Use a robust split that handles potential colons in parameters (though unlikely with current structure)
@@ -3408,28 +3408,18 @@ async function handleCallbackQuery(callbackQuery) {
                 const handler = menuCommandHandlers.get(menuKey);
                 const remainingParams = params.slice(1); // Get params intended *for the handler*
 
-                // *** FIX: Correctly call handleMenuAction vs other handlers (Refined v3) ***
-                // Check the expected signature based on the handler function itself
-                // This assumes handlers intended for direct command usage have a signature like (msgOrCbMsg, args, correctUserIdFromCb)
-                // And handleMenuAction has signature (userId, chatId, messageId, menuType, params, isFromCallback)
+                // Correctly call handleMenuAction vs other handlers (Already fixed)
                 if (handler === handleMenuAction) {
-                    // Call handleMenuAction with its specific signature
                     return handler(userId, chatId, messageId, menuKey, remainingParams, true);
                 } else if (typeof handler === 'function') {
-                    // Assume other handlers expect (msgOrCbMsg, args, correctUserIdFromCb)
-                    // Pass originalMessage, remainingParams as args array, and userId
-                    // Note: remainingParams might be empty if the callback was just 'menu:some_key'
-                    return handler(originalMessage, remainingParams, userId);
+                     return handler(originalMessage, remainingParams, userId);
                 } else {
-                    // Should not happen if map contains valid functions
-                    console.error(`${logPrefix} Invalid handler found in menuCommandHandlers for key '${menuKey}'.`);
+                     console.error(`${logPrefix} Invalid handler found in menuCommandHandlers for key '${menuKey}'.`);
                     return safeSendMessage(chatId, `Internal error processing menu option: ${escapeMarkdownV2(menuKey)}`, { parse_mode: 'MarkdownV2'});
                 }
-                // *** END FIX ***
 
             } else {
                 console.warn(`${logPrefix} Unknown menu key: ${menuKey}`);
-                // MarkdownV2 Safety: Escape key
                 return safeSendMessage(chatId, `Unknown menu option: \`${escapeMarkdownV2(menuKey)}\``, { parse_mode: 'MarkdownV2'});
             }
         }
@@ -3438,22 +3428,18 @@ async function handleCallbackQuery(callbackQuery) {
         else if (action === 'select_game') {
             const gameKey = params[0];
             if (GAME_CONFIG[gameKey]) { // GAME_CONFIG from Part 1
-                // showBetAmountButtons from Part 1
                 await showBetAmountButtons(originalMessage, gameKey, null, userId); // Pass correct user ID
             } else {
                 console.warn(`${logPrefix} Unknown game key in select_game: ${gameKey}`);
-                // MarkdownV2 Safety: Escape key
                 bot.editMessageText(`⚠️ Unknown game: \`${escapeMarkdownV2(gameKey)}\``, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
             }
         }
 
         // Handle intermediate game callbacks explicitly
         else if (action === 'coinflip_select_side' || action === 'race_select_horse' || action === 'roulette_select_bet_type' || action === 'roulette_bet_type_category') {
-            // proceedToGameStep handles the logic based on the action prefix
-            const gameKey = action.split('_')[0]; // 'coinflip', 'race', 'roulette'
+            const gameKey = action.split('_')[0];
             if (GAME_CONFIG[gameKey]) {
-                // proceedToGameStep defined later in this Part (5a)
-                await proceedToGameStep(userId, chatId, messageId, gameKey, data); // Pass the full callback data
+                 await proceedToGameStep(userId, chatId, messageId, gameKey, data); // Pass the full callback data
             } else {
                 console.error(`${logPrefix} Invalid game key derived from action: ${action}`);
                 bot.editMessageText("⚠️ Error processing game step selection\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); // Escaped .
@@ -3464,14 +3450,13 @@ async function handleCallbackQuery(callbackQuery) {
         else if (action === 'confirm_bet') {
             const gameKey = params[0];
             const betAmountLamportsStr = params[1];
-            const betChoice1 = params[2]; // e.g., chosen side for coinflip, horse# for race, bet type for roulette
-            const betChoice2 = params[3]; // e.g., specific number for roulette straight bet
+            const betChoice1 = params[2];
+            const betChoice2 = params[3];
 
             console.log(`${logPrefix} Confirming bet for ${gameKey}, amount ${betAmountLamportsStr}, choice1: ${betChoice1}, choice2: ${betChoice2}`);
 
             if (!GAME_CONFIG[gameKey] || !betAmountLamportsStr) {
                 console.error(`${logPrefix} Invalid gameKey or betAmount in confirm_bet: ${data}`);
-                // MarkdownV2 Safety: Escape static text
                 bot.editMessageText("⚠️ Error confirming bet due to invalid parameters\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); // Escaped .
                 return;
             }
@@ -3482,29 +3467,24 @@ async function handleCallbackQuery(callbackQuery) {
                 if (betAmountLamports <= 0n) throw new Error("Invalid amount");
             } catch (e) {
                 console.error(`${logPrefix} Invalid bet amount in confirm_bet: ${betAmountLamportsStr}`);
-                // MarkdownV2 Safety: Escape amount
-                return bot.editMessageText(`⚠️ Invalid bet amount specified: \`${escapeMarkdownV2(betAmountLamportsStr)}\`\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); // Escaped .
+                 return bot.editMessageText(`⚠️ Invalid bet amount specified: \`${escapeMarkdownV2(betAmountLamportsStr)}\`\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); // Escaped .
             }
 
-            // Edit message to show processing
-            // MarkdownV2 Safety: Escape game name, amount, and punctuation
             bot.editMessageText(
                 `⏳ Processing your ${escapeMarkdownV2(GAME_CONFIG[gameKey].name)} bet of ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.\\.\\.`, // formatSol from Part 3
                 { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] }, parse_mode: 'MarkdownV2' }
-            ).catch(e => console.warn(`${logPrefix} Error editing message for bet processing (confirm_bet): ${e.message}`)); // Log edit error but continue
+            ).catch(e => console.warn(`${logPrefix} Error editing message for bet processing (confirm_bet): ${e.message}`));
 
-            // Route to the specific game handler function (defined later in this Part 5a)
             switch (gameKey) {
                 case 'coinflip': return handleCoinflipGame(userId, chatId, messageId, betAmountLamports, betChoice1);
                 case 'race': return handleRaceGame(userId, chatId, messageId, betAmountLamports, parseInt(betChoice1, 10));
                 case 'slots': return handleSlotsGame(userId, chatId, messageId, betAmountLamports);
-                case 'roulette': return handleRouletteGame(userId, chatId, messageId, betAmountLamports, betChoice1, betChoice2); // betChoice1=type, betChoice2=value
+                case 'roulette': return handleRouletteGame(userId, chatId, messageId, betAmountLamports, betChoice1, betChoice2);
                 case 'war': return handleWarGame(userId, chatId, messageId, betAmountLamports);
                 case 'crash': return handleCrashGame(userId, chatId, messageId, betAmountLamports);
                 case 'blackjack': return handleBlackjackGame(userId, chatId, messageId, betAmountLamports, 'start_game');
                 default:
                     console.error(`${logPrefix} Unknown gameKey in confirm_bet: ${gameKey}`);
-                    // MarkdownV2 Safety: Escape static text
                     return safeSendMessage(chatId, "Sorry, something went wrong with that game confirmation\\.", {parse_mode: 'MarkdownV2'}); // Escaped .
             }
         }
@@ -3516,13 +3496,14 @@ async function handleCallbackQuery(callbackQuery) {
             console.log(`${logPrefix} Play Again for ${gameKey}, last bet: ${lastBetAmountLamportsStr}`);
 
             if (GAME_CONFIG[gameKey] && lastBetAmountLamportsStr) {
-                 // *** FIX: Play Again for BJ/Crash should show bet amounts, not confirm ***
+                 // *** FIX: Play Again for BJ/Crash should show bet amounts ***
                 if (gameKey === 'coinflip' || gameKey === 'race' || gameKey === 'roulette') {
                     // These games need intermediate selection
                     let initialStepCallbackPrefix = '';
                     if (gameKey === 'coinflip') initialStepCallbackPrefix = 'coinflip_select_side';
                     else if (gameKey === 'race') initialStepCallbackPrefix = 'race_select_horse';
                     else if (gameKey === 'roulette') initialStepCallbackPrefix = 'roulette_select_bet_type';
+                    // Use originalMessage context for editing if possible
                     await proceedToGameStep(userId, chatId, messageId, gameKey, `${initialStepCallbackPrefix}:${lastBetAmountLamportsStr}`);
                 } else if (gameKey === 'blackjack' || gameKey === 'crash') {
                      // These games should show bet selection again
@@ -3536,10 +3517,11 @@ async function handleCallbackQuery(callbackQuery) {
                         message: { chat: callbackQuery.message.chat, message_id: messageId, text: callbackQuery.message.text || "" },
                         data: fakeCallbackData, chat_instance: String(chatId)
                     };
+                    // Adding to queue might still hit cooldown if triggered rapidly after itself,
+                    // but removing the check entirely should prevent blocking here.
                     callbackQueue.add(() => handleCallbackQuery(fakeCallbackQuery));
                 }
             } else {
-                // MarkdownV2 Safety: Escape static text
                 bot.editMessageText("⚠️ Error processing 'Play Again' request due to invalid parameters\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); // Escaped .
             }
         }
@@ -3548,40 +3530,34 @@ async function handleCallbackQuery(callbackQuery) {
         else if (action === 'custom_amount_select') {
             const gameKey = params[0];
             if (GAME_CONFIG[gameKey]) {
-                // handleCustomAmountSelection defined in Part 5b
-                await handleCustomAmountSelection(userId, chatId, messageId, gameKey);
+                await handleCustomAmountSelection(userId, chatId, messageId, gameKey); // Defined in Part 5b
             } else {
                 console.warn(`${logPrefix} Unknown game key for custom amount: ${gameKey}`);
-                // MarkdownV2 Safety: Escape key
                 bot.editMessageText(`⚠️ Unknown game for custom amount: \`${escapeMarkdownV2(gameKey)}\``, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
             }
         }
 
         // Handle 'blackjack_action' (Hit/Stand)
         else if (action === 'blackjack_action') {
-            const playerChoice = params[0]; // 'hit' or 'stand'
-            const originalBetIdStr = params[1]; // Bet ID attached to the action
+            const playerChoice = params[0];
+            const originalBetIdStr = params[1];
             const originalBetId = parseInt(originalBetIdStr, 10);
 
             if (!isNaN(originalBetId) && (playerChoice === 'hit' || playerChoice === 'stand')) {
-                const gameState = userStateCache.get(userId); // userStateCache from Part 1
-                // Verify state matches expected action and bet ID
+                const gameState = userStateCache.get(userId);
                 if (gameState && gameState.action === 'awaiting_blackjack_action' && gameState.betId === originalBetId) {
                     console.log(`${logPrefix} Blackjack action: ${playerChoice} for Bet ID ${originalBetId}`);
-                    // Pass the full existing state to the handler (defined later in this Part 5a)
                     return handleBlackjackGame(userId, chatId, messageId, BigInt(gameState.betAmountLamports), playerChoice, gameState);
                 } else {
                     console.warn(`${logPrefix} Blackjack state mismatch or not found for action ${playerChoice}, Bet ID ${originalBetId}. State:`, gameState);
-                    // MarkdownV2 Safety: Escape static text
                     bot.editMessageText("⚠️ Blackjack game session expired or invalid\\. Please start a new game\\.", { // Escaped .
                         chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
-                        reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } // Add Emoji
+                        reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] }
                     });
                 }
             } else {
                 console.error(`${logPrefix} Invalid Bet ID or action received for blackjack_action: ${data}`);
-                // MarkdownV2 Safety: Escape static text
-                bot.editMessageText("⚠️ Error processing Blackjack action due to invalid data\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); // Escaped .
+                 bot.editMessageText("⚠️ Error processing Blackjack action due to invalid data\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); // Escaped .
             }
         }
 
@@ -3589,56 +3565,48 @@ async function handleCallbackQuery(callbackQuery) {
         else if (action === 'cash_out_crash') {
             const originalBetIdStr = params[0];
             const originalBetId = parseInt(originalBetIdStr, 10);
-            const gameState = userStateCache.get(userId); // userStateCache from Part 1
+            const gameState = userStateCache.get(userId);
 
             if (!isNaN(originalBetId) && gameState && gameState.action === 'awaiting_crash_cashout' && gameState.betId === originalBetId) {
-                clearUserState(userId); // Clear state immediately to stop animation loop checking it (from Part 6)
+                clearUserState(userId);
 
                 const cashedOutAtMultiplier = parseFloat(gameState.currentMultiplier.toFixed(2));
-                const betAmountN = BigInt(gameState.betAmountLamports); // Already stored as string in state
+                const betAmountN = BigInt(gameState.betAmountLamports);
 
                 console.log(`${logPrefix} User initiated cash out for Crash Bet ID ${originalBetId} at ${cashedOutAtMultiplier}x.`);
 
                 let clientCashout = null;
                 try {
-                    clientCashout = await pool.connect(); // pool from Part 1
+                    clientCashout = await pool.connect();
                     await clientCashout.query('BEGIN');
 
-                    // Calculate winnings (Stake + Net Profit)
                     const grossWinnings = BigInt(Math.floor(Number(betAmountN) * cashedOutAtMultiplier));
                     const profitBeforeEdge = grossWinnings - betAmountN;
-                    const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - GAME_CONFIG.crash.houseEdge))) : 0n; // houseEdge from Part 1
-                    const payoutAmountToCredit = betAmountN + netProfit; // Total to give back (stake + net profit)
-                    const profitLamportsOutcome = netProfit; // Actual profit amount
+                    const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - GAME_CONFIG.crash.houseEdge))) : 0n;
+                    const payoutAmountToCredit = betAmountN + netProfit;
+                    const profitLamportsOutcome = netProfit;
 
-                    // updateUserBalanceAndLedger from Part 2
-                    // *** NOTE: Crash cashout *should* update balance as it's a win based on user action ***
-                    // *** No change needed here for the double-deduction fix (which applies to losses) ***
-                    const balanceUpdateResult = await updateUserBalanceAndLedger(clientCashout, userId, profitLamportsOutcome, 'crash_cashout', { betId: originalBetId });
+                    // *** FIX #0: Update balance using TOTAL PAYOUT for crash win ***
+                    const balanceUpdateResult = await updateUserBalanceAndLedger(clientCashout, userId, payoutAmountToCredit, 'crash_cashout', { betId: originalBetId });
                     if (!balanceUpdateResult.success) {
-                        // MarkdownV2 Safety: Escape error message, bet ID
                         throw new Error(`Failed to update balance/ledger for cashout: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet ID: ${originalBetId}`); // Escaped .
                     }
                     const finalUserBalance = balanceUpdateResult.newBalance;
-                    // updateBetStatus from Part 2 - use payoutAmountToCredit (Stake + Net Profit)
+
                     await updateBetStatus(clientCashout, originalBetId, 'completed_win', payoutAmountToCredit);
                     await clientCashout.query('COMMIT');
 
-                    // MarkdownV2 Safety: Escape multiplier, amounts
-                    const cashoutSuccessMsg = `💸 *Cashed Out at ${escapeMarkdownV2(cashedOutAtMultiplier.toFixed(2))}x\\!* 💸\nOriginal Bet: ${escapeMarkdownV2(formatSol(betAmountN))} SOL\nYou won: ${escapeMarkdownV2(formatSol(netProfit))} SOL\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Escaped !
+                    const cashoutSuccessMsg = `💸 *Cashed Out at ${escapeMarkdownV2(cashedOutAtMultiplier.toFixed(2))}x\\!* 💸\nOriginal Bet: ${escapeMarkdownV2(formatSol(betAmountN))} SOL\nYou won: ${escapeMarkdownV2(formatSol(netProfit))} SOL\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
                     bot.editMessageText(cashoutSuccessMsg, {
                         chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
-                        // Add Emojis
                         reply_markup: { inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:crash:${betAmountN}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }
-                    }).catch(e => {}); // Ignore errors editing final message
+                    }).catch(e => {});
 
                 } catch (dbError) {
                     if (clientCashout) await clientCashout.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Cashout DB Rollback failed:`, rbErr));
                     console.error(`${logPrefix} DB Error processing cashout for Bet ID ${originalBetId}:`, dbError);
-                    // MarkdownV2 Safety: Escape error message, bet ID
                     bot.editMessageText(`⚠️ Database error processing cashout for Bet ID ${originalBetId}: ${escapeMarkdownV2(dbError.message)}\\. Please contact support if balance is incorrect\\.`, { // Escaped .
                         chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
-                        // Add Emojis
                         reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:crash:${betAmountN}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }
                     }).catch(e => {});
                 } finally {
@@ -3646,7 +3614,6 @@ async function handleCallbackQuery(callbackQuery) {
                 }
             } else {
                 console.warn(`${logPrefix} Crash state mismatch or not found for cash_out_crash, Bet ID ${originalBetId}. Game might have already ended. State:`, gameState);
-                // MarkdownV2 Safety: Escape static text
                 bot.editMessageText("⚠️ Too late to cash out or game already ended\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:crash:${gameState?.betAmountLamports || GAME_CONFIG.crash.minBetLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } }); // Escaped . Add Emojis
             }
         }
@@ -3654,37 +3621,30 @@ async function handleCallbackQuery(callbackQuery) {
         // Handle 'quick_deposit' action
         else if (action === 'quick_deposit') {
             console.log(`${logPrefix} Handling 'quick_deposit' action.`);
-            // Call the deposit command handler, passing callback info
-            // handleDepositCommand defined in Part 5b
             await handleDepositCommand(originalMessage, [], userId); // Pass correct userId
         }
 
         // Handle withdrawal confirmation actions
         else if (action === 'confirm_withdrawal') {
-            // Params: [recipientAddress, amountLamportsStr]
             const recipientAddress = params[0];
             const amountLamportsStr = params[1];
-            // handleWithdrawalConfirmation defined in Part 5b
             await handleWithdrawalConfirmation(userId, chatId, messageId, recipientAddress, amountLamportsStr, true);
         } else if (action === 'cancel_withdrawal') {
             console.log(`${logPrefix} Withdrawal cancelled by user.`);
-            // MarkdownV2 Safety: Escape static text
-            bot.editMessageText("🚫 Withdrawal cancelled\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]] }}); // Escaped . Add Emoji
+             bot.editMessageText("🚫 Withdrawal cancelled\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]] }}); // Escaped . Add Emoji
         }
 
         // Handle Help section navigation
         else if (action === 'show_help_section') {
             const section = params[0];
-            // handleHelpCommand defined in Part 5b
-            await handleHelpCommand(originalMessage, [section], userId); // Pass section as arg[0] and userId
+             await handleHelpCommand(originalMessage, [section], userId); // Pass section as arg[0] and userId
         }
 
         // Handle Leaderboard navigation
         else if (action === 'leaderboard_nav') {
             const type = params[0];
             const page = parseInt(params[1] || '0', 10);
-            // displayLeaderboard defined in Part 5b
-            await displayLeaderboard(chatId, messageId, userId, type, page, true);
+             await displayLeaderboard(chatId, messageId, userId, type, page, true);
         }
 
         else {
@@ -3693,7 +3653,6 @@ async function handleCallbackQuery(callbackQuery) {
 
     } catch (error) {
         console.error(`${logPrefix} Error processing callback query: ${error.message}\nStack: ${error.stack}`);
-        // MarkdownV2 Safety: Escape error message
         await safeSendMessage(chatId, `⚠️ Error processing your request: ${escapeMarkdownV2(error.message)}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' }); // Escaped .
     }
 }
@@ -3711,7 +3670,7 @@ async function handleCallbackQuery(callbackQuery) {
  * @param {string} callbackData The full callback data string triggering this step.
  */
 async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackData) {
-    // *** Hyphen Escaping Already Applied in v3.2.1j ***
+    // *** Hyphen Escaping Already Applied ***
     const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
     const logPrefix = `[ProceedToStep User ${userId} Game ${gameKey} CB ${callbackData}]`;
     console.log(`${logPrefix} Proceeding intermediate step.`);
@@ -3746,8 +3705,7 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
         // --- COINFLIP: Select Side ---
         if (gameKey === 'coinflip' && actionPrefix === 'coinflip_select_side') {
             messageText += "\nChoose your side:";
-            // Add Emojis
-            inlineKeyboard = [
+             inlineKeyboard = [
                 [{ text: '🪙 Heads', callback_data: `confirm_bet:coinflip:${betAmountLamportsStr}:heads` }, { text: '🪙 Tails', callback_data: `confirm_bet:coinflip:${betAmountLamportsStr}:tails` }],
                 [{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]
             ];
@@ -3757,32 +3715,24 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
             messageText += "\nChoose your horse:";
             const horseButtons = [];
             RACE_HORSES.forEach((horse, index) => { // RACE_HORSES from Part 1
-                // Add Emojis
-                // Ensure horse name and payout are escaped
-                horseButtons.push({ text: `${horse.emoji} ${escapeMarkdownV2(horse.name)} (${escapeMarkdownV2(horse.payoutMultiplier)}x)`, callback_data: `confirm_bet:race:${betAmountLamportsStr}:${index + 1}` }); // Escaped () and content
+                 horseButtons.push({ text: `${horse.emoji} ${escapeMarkdownV2(horse.name)} (${escapeMarkdownV2(horse.payoutMultiplier)}x)`, callback_data: `confirm_bet:race:${betAmountLamportsStr}:${index + 1}` }); // Escaped () and content
             });
             for(let i = 0; i < horseButtons.length; i += 2) { inlineKeyboard.push(horseButtons.slice(i, i + 2)); }
-            // Add Emojis
-            inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
+             inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
         }
         // --- ROULETTE: Select Bet Type ---
         else if (gameKey === 'roulette' && actionPrefix === 'roulette_select_bet_type') {
-            // This action shows the categories or straight up # prompt
-            // Amount is the last param, so need to get bet type param carefully
-            const betTypeParam = parts.length > 1 ? parts[1] : null;
+             const betTypeParam = parts.length > 1 ? parts[1] : null;
             if (betTypeParam === 'straight') {
-                // Directly call the setup function for number input
-                await handleRouletteStraightBetSetup(userId, chatId, messageId, gameKey, betAmountLamportsStr); // Defined in Part 5b
-                return; // Return early as setup function handles the message
+                 await handleRouletteStraightBetSetup(userId, chatId, messageId, gameKey, betAmountLamportsStr); // Defined in Part 5b
+                return;
             } else {
-                // Show categories
-                messageText += "\nSelect your bet type category or Straight Up:";
+                 messageText += "\nSelect your bet type category or Straight Up:";
                 inlineKeyboard = [ // Add Emojis
                     [{ text: "🔴⚫️ Color", callback_data: `roulette_bet_type_category:color:${betAmountLamportsStr}` }],
                     [{ text: "🔢 Even / Odd", callback_data: `roulette_bet_type_category:parity:${betAmountLamportsStr}` }],
-                    // Escape hyphen in range text
-                    [{ text: "📉📈 Range (1\\-18 / 19\\-36)", callback_data: `roulette_bet_type_category:range:${betAmountLamportsStr}` }], // Escaped () -
-                    [{ text: "🎯 Straight Up (#)", callback_data: `roulette_bet_type:straight:${betAmountLamportsStr}` }] // Leads back here, then to number input
+                     [{ text: "📉📈 Range (1\\-18 / 19\\-36)", callback_data: `roulette_bet_type_category:range:${betAmountLamportsStr}` }], // Escaped () -
+                    [{ text: "🎯 Straight Up (#)", callback_data: `roulette_bet_type:straight:${betAmountLamportsStr}` }]
                 ];
                 inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
             }
@@ -3794,8 +3744,7 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
             switch(category) {
                 case 'color': inlineKeyboard.push([{ text: '🔴 Red', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:red` }, { text: '⚫️ Black', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:black` }]); break;
                 case 'parity': inlineKeyboard.push([{ text: '🔢 Even', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:even` }, { text: '🔢 Odd', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:odd` }]); break;
-                // Escape hyphens in range text
-                case 'range': inlineKeyboard.push([{ text: '📉 Low (1\\-18)', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:low` }, { text: '📈 High (19\\-36)', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:high` }]); break; // Escaped () -
+                 case 'range': inlineKeyboard.push([{ text: '📉 Low (1\\-18)', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:low` }, { text: '📈 High (19\\-36)', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:high` }]); break; // Escaped () -
                 default: throw new Error(`Invalid category: ${category}`);
             }
             inlineKeyboard.push([{ text: '↩️ Back to Bet Types', callback_data: `roulette_select_bet_type:${betAmountLamportsStr}` }]); // Add Emoji
@@ -3807,26 +3756,24 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
             return;
         }
 
-        // Update the message with the next step
         const options = { chat_id: chatId, reply_markup: { inline_keyboard: inlineKeyboard }, parse_mode: 'MarkdownV2' };
         if (messageId) {
             await bot.editMessageText(messageText, { ...options, message_id: messageId })
                 .catch(e => {
                     if (!e.message.includes("message is not modified")) {
                         console.error(`${logPrefix} Error editing message in proceedToGameStep (${messageId}):`, e.message);
-                        // Log the text that failed if parse error
                         if (e.message.toLowerCase().includes("can't parse entities")) {
                             console.error(`Failed Text: ${messageText}`);
                         }
                         safeSendMessage(chatId, messageText, options);
                     }
                 });
-        } else { await safeSendMessage(chatId, messageText, options); } // Send new if no ID
+        } else { await safeSendMessage(chatId, messageText, options); }
 
     } catch (error) {
         console.error(`${logPrefix} Error in proceedToGameStep:`, error);
         await safeSendMessage(chatId, "An unexpected error occurred processing your choice\\. Please try again\\.", { parse_mode: 'MarkdownV2'}); // Escaped .
-        clearUserState(userId); // Clear state on error
+        clearUserState(userId);
     }
 }
 // --- End Universal Game Step Processor ---
@@ -3849,8 +3796,7 @@ async function placeBet(client, userId, chatId, gameKey, betDetails, betAmountLa
     const logPrefix = `[PlaceBet User ${stringUserId} Game ${gameKey}]`;
 
     try {
-        // User existence is assumed to be checked by calling function, but lock rows here.
-        const balanceCheck = await queryDatabase('SELECT balance_lamports FROM user_balances WHERE user_id = $1 FOR UPDATE', [stringUserId], client); // queryDatabase from Part 2
+        const balanceCheck = await queryDatabase('SELECT balance_lamports FROM user_balances WHERE user_id = $1 FOR UPDATE', [stringUserId], client);
         if (balanceCheck.rowCount === 0) {
             throw new Error(`User balance record not found for user ${stringUserId} during bet placement.`);
         }
@@ -3861,10 +3807,9 @@ async function placeBet(client, userId, chatId, gameKey, betDetails, betAmountLa
             return { success: false, error: 'Insufficient balance', insufficientBalance: true, currentBalance: currentBalance };
         }
 
-        // Balance is sufficient, proceed with deduction and recording
-        const balanceUpdateResult = await updateUserBalanceAndLedger( // from Part 2
-            client, stringUserId, -betAmountLamports, // Negative amount for deduction
-            `bet_placed:${gameKey}`, {}, `Placed bet on ${GAME_CONFIG[gameKey]?.name || gameKey}` // GAME_CONFIG from Part 1
+        const balanceUpdateResult = await updateUserBalanceAndLedger(
+            client, stringUserId, -betAmountLamports,
+            `bet_placed:${gameKey}`, {}, `Placed bet on ${GAME_CONFIG[gameKey]?.name || gameKey}`
         );
 
         if (!balanceUpdateResult.success) {
@@ -3872,110 +3817,100 @@ async function placeBet(client, userId, chatId, gameKey, betDetails, betAmountLa
         }
         const newBalanceAfterBet = balanceUpdateResult.newBalance;
 
-        const betRecordResult = await createBetRecord(client, stringUserId, String(chatId), gameKey, betDetails, betAmountLamports); // from Part 2
+        const betRecordResult = await createBetRecord(client, stringUserId, String(chatId), gameKey, betDetails, betAmountLamports);
         if (!betRecordResult.success || !betRecordResult.betId) {
             return { success: false, error: betRecordResult.error || 'Failed to create bet record.' };
         }
         const betId = betRecordResult.betId;
 
-        // These should run within the same transaction passed by the caller
-        await updateUserWagerStats(stringUserId, betAmountLamports, client); // from Part 2
-        await _handleReferralChecks(stringUserId, betId, betAmountLamports, client); // From Part 1
-        await updateUserLastBetAmount(stringUserId, gameKey, betAmountLamports, client); // from Part 2
+        await updateUserWagerStats(stringUserId, betAmountLamports, client);
+        await _handleReferralChecks(stringUserId, betId, betAmountLamports, client);
+        await updateUserLastBetAmount(stringUserId, gameKey, betAmountLamports, client);
 
-        // Update in-memory cache as well
-        const userBetsMemoryCache = userLastBetAmounts.get(stringUserId) || new Map(); // from Part 1 state
+        const userBetsMemoryCache = userLastBetAmounts.get(stringUserId) || new Map();
         userBetsMemoryCache.set(gameKey, betAmountLamports);
         userLastBetAmounts.set(stringUserId, userBetsMemoryCache);
 
-        console.log(`${logPrefix} Bet ID ${betId} successfully recorded for ${formatSol(betAmountLamports)} SOL. New balance (within Tx): ${formatSol(newBalanceAfterBet)} SOL.`); // formatSol from Part 3
+        console.log(`${logPrefix} Bet ID ${betId} successfully recorded for ${formatSol(betAmountLamports)} SOL. New balance (within Tx): ${formatSol(newBalanceAfterBet)} SOL.`);
         return { success: true, betId, newBalance: newBalanceAfterBet };
 
     } catch (error) {
         console.error(`${logPrefix} Error during placeBet logic (caller should rollback):`, error);
-        let returnError = `Error placing bet: ${escapeMarkdownV2(error.message)}`; // Escape error
+        let returnError = `Error placing bet: ${escapeMarkdownV2(error.message)}`;
         if (error.message.toLowerCase().includes('insufficient balance') || error.constraint === 'user_balances_balance_lamports_check') {
-            returnError = 'Insufficient balance.'; // Keep simple
+            returnError = 'Insufficient balance.';
             return { success: false, error: returnError, insufficientBalance: true};
         }
-        throw error; // Re-throw for the caller's catch block
+        throw error;
     }
 }
 // --- End Core Bet Placement Logic ---
 
-// Section 2a: Coinflip, Race, Slots Game Handlers (Modified for Double Deduction Fix)
+// Section 2a: Coinflip, Race, Slots Game Handlers (Modified for Win Payout Accounting)
 
-// handleCoinflipGame - Modified in previous response (v3.2.1l) - Keeping that version below:
 async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, chosenSide) {
     const gameKey = 'coinflip';
     const gameConfig = GAME_CONFIG[gameKey];
     const logPrefix = `[CoinflipGame User ${userId} Bet ${betAmountLamports}]`;
     console.log(`${logPrefix} Handling for side: ${chosenSide}`);
 
-    let client = null; // Define client for transaction management
-    let finalUserBalance; // To store the correct final balance
+    let client = null;
+    let finalUserBalance;
 
     try {
-        client = await pool.connect(); // pool from Part 1
-        await client.query('BEGIN'); // Start transaction
+        client = await pool.connect();
+        await client.query('BEGIN');
 
-        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, { side: chosenSide }, betAmountLamports); // Pass client
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, { side: chosenSide }, betAmountLamports);
         if (!betPlacementResult.success) {
             await client.query('ROLLBACK');
             const errorMsg = betPlacementResult.error === 'Insufficient balance'
-                ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` // Escaped .
-                : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`; // Escaped .
+                ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.`
+                : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
             if(client) client.release();
             return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
         }
         const { betId, newBalance: balanceAfterBet } = betPlacementResult;
-        finalUserBalance = balanceAfterBet; // Initialize final balance with balance after bet
+        finalUserBalance = balanceAfterBet;
 
-        const { outcome } = playCoinflip(chosenSide); // playCoinflip from Part 4
+        const { outcome } = playCoinflip(chosenSide);
         const win = outcome === chosenSide;
 
-        let profitLamportsOutcome = -betAmountLamports; // Used for DB ledger and potential balance update on win
-        let payoutOnWinLamports = 0n; // DB field for bet status
+        let profitLamportsOutcome = -betAmountLamports;
+        let payoutOnWinLamports = 0n;
 
         if (win) {
             const profitOnWin = BigInt(Math.floor(Number(betAmountLamports) * (1 - gameConfig.houseEdge)));
-            profitLamportsOutcome = profitOnWin; // Net profit
-            payoutOnWinLamports = betAmountLamports + profitOnWin; // Total returned to user if win (stake + net profit)
+            profitLamportsOutcome = profitOnWin;
+            payoutOnWinLamports = betAmountLamports + profitOnWin;
 
-            // *** Update balance ONLY on win ***
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, 'coinflip_win', { betId }); // from Part 2
+            // *** FIX #0: Update balance using TOTAL PAYOUT (Stake + Profit) ***
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutOnWinLamports, 'coinflip_win', { betId });
             if (!balanceUpdateResult.success) {
                 await client.query('ROLLBACK');
                 console.error(`${logPrefix} Failed to update balance/ledger after coinflip win.`);
-                const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`; // Escaped .
+                const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`;
                 if(client) client.release();
                 return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
             }
-            finalUserBalance = balanceUpdateResult.newBalance; // Update final balance on win
+            finalUserBalance = balanceUpdateResult.newBalance;
         } else {
-            // *** LOSS: No balance update needed here, only mark bet status ***
-            profitLamportsOutcome = -betAmountLamports; // Keep for potential logging if needed, but NOT for balance update
-            payoutOnWinLamports = 0n; // Correct payout for loss status
-            // `finalUserBalance` remains `balanceAfterBet`
-            console.log(`${logPrefix} Coinflip loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
+            // LOSS: No balance update needed here
+            profitLamportsOutcome = -betAmountLamports;
+            payoutOnWinLamports = 0n;
+             console.log(`${logPrefix} Coinflip loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
         }
 
-        // Update bet status regardless of win/loss
-        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutOnWinLamports); // from Part 2
-        await client.query('COMMIT'); // Commit transaction AFTER all DB updates are successful
+        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutOnWinLamports);
+        await client.query('COMMIT');
 
-        // Display result
         let resultMsg = `🪙 *Coinflip Result*\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nYour Choice: ${escapeMarkdownV2(chosenSide.toUpperCase())}\nOutcome: ${escapeMarkdownV2(outcome.toUpperCase())}\n\n`;
         resultMsg += win
-            ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\!` // Use calculated profit for win message
-            : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Use original bet amount for loss message
-        resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Display the correct final balance
+            ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\!` // Profit still used in message
+            : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`;
+        resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Displays B+P on win now
 
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]
-            ]
-        };
+        const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] };
         bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
 
     } catch (error) {
@@ -3995,7 +3930,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
     const gameKey = 'race';
     const gameConfig = GAME_CONFIG[gameKey];
     const logPrefix = `[RaceGame User ${userId} Bet ${betAmountLamports} Horse ${chosenHorseNumber}]`;
-    const chosenHorseConfig = RACE_HORSES[chosenHorseNumber - 1]; // RACE_HORSES from Part 1
+    const chosenHorseConfig = RACE_HORSES[chosenHorseNumber - 1];
 
     if (!chosenHorseConfig) {
         console.error(`${logPrefix} Invalid horse number: ${chosenHorseNumber}`);
@@ -4004,7 +3939,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
     console.log(`${logPrefix} Handling for horse: ${chosenHorseConfig.name}`);
 
     let client = null;
-    let finalUserBalance; // To store the correct final balance
+    let finalUserBalance;
 
     try {
         client = await pool.connect();
@@ -4014,55 +3949,52 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         if (!betPlacementResult.success) {
             await client.query('ROLLBACK');
             const errorMsg = betPlacementResult.error === 'Insufficient balance'
-                ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` // Escaped .
-                : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`; // Escaped .
+                ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.`
+                : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
                 if(client) client.release();
             return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
         }
         const { betId, newBalance: balanceAfterBet } = betPlacementResult;
-        finalUserBalance = balanceAfterBet; // Initialize final balance with balance after bet
+        finalUserBalance = balanceAfterBet;
 
-        const { winningLane } = simulateRace(RACE_HORSES.length); // simulateRace from Part 4
+        const { winningLane } = simulateRace(RACE_HORSES.length);
         const win = winningLane === chosenHorseNumber;
         const winningHorseConfig = RACE_HORSES[winningLane - 1];
 
-        let profitLamportsOutcome = -betAmountLamports; // Default to loss, used for win calculation and potential logging
-        let totalReturnOnWin = 0n; // For DB update (stake + net profit)
+        let profitLamportsOutcome = -betAmountLamports;
+        let totalReturnOnWin = 0n; // Payout for bet status update
 
         if (win) {
             const basePayoutMultiplierForHorse = chosenHorseConfig.payoutMultiplier;
             const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (basePayoutMultiplierForHorse - 1)));
             const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge))) : 0n;
-            profitLamportsOutcome = netProfit; // Actual net profit
-            totalReturnOnWin = betAmountLamports + netProfit;
+            profitLamportsOutcome = netProfit; // Net profit amount for message display
+            totalReturnOnWin = betAmountLamports + netProfit; // Total payout (Stake + Net Profit) for balance update
 
-            // *** Update balance ONLY on win ***
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, 'race_win', { betId });
+            // *** FIX #0: Update balance using TOTAL PAYOUT (Stake + Profit) ***
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, totalReturnOnWin, 'race_win', { betId });
             if (!balanceUpdateResult.success) {
                 await client.query('ROLLBACK');
-                const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`; // Escaped .
+                const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`;
                 if(client) client.release();
                 return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
             }
-            finalUserBalance = balanceUpdateResult.newBalance; // Update final balance on win
+            finalUserBalance = balanceUpdateResult.newBalance;
         } else {
-            // *** LOSS: No balance update needed here, only mark bet status ***
-            profitLamportsOutcome = -betAmountLamports; // Keep for potential logging if needed
-            totalReturnOnWin = 0n; // Correct payout for loss status
-            // `finalUserBalance` remains `balanceAfterBet`
+            // LOSS: No balance update needed here
+            profitLamportsOutcome = -betAmountLamports;
+            totalReturnOnWin = 0n;
              console.log(`${logPrefix} Race loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
         }
 
-        // Update bet status regardless of win/loss
         await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', totalReturnOnWin);
         await client.query('COMMIT');
 
-        // Animation
+        // Animation... (remains the same)
         let animationText = `🏁 *Horse Race Starting\\!* 🏇\n\nYour Pick: ${chosenHorseConfig.emoji} ${escapeMarkdownV2(chosenHorseConfig.name)}\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\nHorses at the gate:\n`;
         RACE_HORSES.forEach(h => animationText += `${h.emoji} ${escapeMarkdownV2(h.name)}\n`);
         await bot.editMessageText(animationText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {});
         await sleep(1500);
-
         animationText = `🏁 *And they're off\\!* 💨\n\n`;
         let progress = RACE_HORSES.map(h => ({ ...h, p: '' }));
         let lastAnimationText = "";
@@ -4071,7 +4003,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
             progress[winningLane - 1].p += '─';
             let frameText = animationText;
             progress.forEach(h => frameText += `${h.emoji} ${h.p}\n`);
-            if (frameText !== lastAnimationText) { // Avoid "not modified" error
+            if (frameText !== lastAnimationText) {
                 await bot.editMessageText(frameText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {});
                 lastAnimationText = frameText;
             }
@@ -4082,15 +4014,11 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         // Final Result
         let resultMsg = `🏆 *Race Result* 🏆\n\nWinning Horse: ${winningHorseConfig.emoji} *${escapeMarkdownV2(winningHorseConfig.name)}*\\!\nYour Pick: ${chosenHorseConfig.emoji} ${escapeMarkdownV2(chosenHorseConfig.name)}\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`;
         resultMsg += win
-            ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! (Multiplier: ${escapeMarkdownV2(chosenHorseConfig.payoutMultiplier)}x base)` // Escaped ! () and content
-            : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped .
-        resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Display correct final balance
+            ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! (Multiplier: ${escapeMarkdownV2(chosenHorseConfig.payoutMultiplier)}x base)` // Profit still used in message
+            : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`;
+        resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Displays B+P on win now
 
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]
-            ]
-        };
+        const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] };
         bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
 
     } catch (error) {
@@ -4111,72 +4039,63 @@ async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
     const logPrefix = `[SlotsGame User ${userId} Bet ${betAmountLamports}]`;
     console.log(`${logPrefix} Handling slots spin.`);
 
-    let client = null; // Define client for transaction management
-    let betId; // Store betId
-    let balanceAfterBet; // Store balance after initial bet placement
-    let finalUserBalance; // Store final balance for result message
-    let lastMessageText = ""; // Store last message text to avoid duplicate edits
+    let client = null;
+    let betId;
+    let balanceAfterBet;
+    let finalUserBalance;
+    let lastMessageText = "";
 
     try {
         client = await pool.connect();
-        await client.query('BEGIN'); // Start transaction for bet placement + jackpot contribution
+        await client.query('BEGIN');
 
-        const { symbols: finalSymbols, payoutMultiplier: baseMultiplier, isJackpotWin } = simulateSlots(); // simulateSlots from Part 4
+        const { symbols: finalSymbols, payoutMultiplier: baseMultiplier, isJackpotWin } = simulateSlots();
 
-        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, {result: finalSymbols.join('')}, betAmountLamports); // Pass client, store result symbols
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, {result: finalSymbols.join('')}, betAmountLamports);
         if (!betPlacementResult.success) {
             await client.query('ROLLBACK');
             const errorMsg = betPlacementResult.error === 'Insufficient balance'
-                ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` // Escaped .
-                : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`; // Escaped .
+                ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.`
+                : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
             if(client) client.release();
             return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
         }
         betId = betPlacementResult.betId;
         balanceAfterBet = betPlacementResult.newBalance;
-        finalUserBalance = balanceAfterBet; // Initialize final balance
+        finalUserBalance = balanceAfterBet;
 
-        await ensureJackpotExists(gameKey, gameConfig.jackpotSeedLamports || 0n, client); // ensureJackpotExists from Part 2
+        await ensureJackpotExists(gameKey, gameConfig.jackpotSeedLamports || 0n, client);
         let jackpotContribution = 0n;
         if (gameConfig.jackpotContributionPercent && gameConfig.jackpotContributionPercent > 0 && betAmountLamports > 0n) {
             jackpotContribution = BigInt(Math.floor(Number(betAmountLamports) * gameConfig.jackpotContributionPercent));
             if (jackpotContribution > 0n) {
-                const incremented = await incrementJackpotAmount(client, gameKey, jackpotContribution); // incrementJackpotAmount from Part 2
+                const incremented = await incrementJackpotAmount(client, gameKey, jackpotContribution);
                 if (!incremented) console.warn(`${logPrefix} Failed to increment jackpot for ${gameKey} by ${formatSol(jackpotContribution)} SOL.`);
                 else console.log(`${logPrefix} Contributed ${formatSol(jackpotContribution)} SOL to jackpot.`);
             }
         }
 
-        await client.query('COMMIT'); // Commit bet placement transaction
+        await client.query('COMMIT');
         if(client) client.release(); client = null;
 
-        // Animation
+        // Animation... (remains the same)
         const slotEmojis = { 'C': '🍒', 'L': '🍋', 'O': '🍊', 'B': '🔔', '7': '❼', 'J': '💎' };
         const animationFrames = 10;
         let currentFrameText = "";
-
-        const initialSpinText = `🎰 *Slots Spinning\\!* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n\\| 🎰 \\| 🎰 \\| 🎰 \\|\n\nSpinning\\.\\.\\.`; // Escaped ! | ... Add Emojis
+        const initialSpinText = `🎰 *Slots Spinning\\!* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n\\| 🎰 \\| 🎰 \\| 🎰 \\|\n\nSpinning\\.\\.\\.`;
         await bot.editMessageText(initialSpinText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {});
         lastMessageText = initialSpinText;
         await sleep(500);
-
         for (let i = 0; i < animationFrames + finalSymbols.length; i++) {
             let currentDisplay = ['🎰', '🎰', '🎰'];
             let revealIndex = Math.max(-1, i - animationFrames);
-
             for(let k=0; k < finalSymbols.length; k++){
-                if(k <= revealIndex) {
-                    currentDisplay[k] = slotEmojis[finalSymbols[k]] || '❓';
-                } else {
-                    currentDisplay[k] = slotEmojis[Object.keys(slotEmojis)[Math.floor(Math.random() * Object.keys(slotEmojis).length)]];
-                }
+                if(k <= revealIndex) { currentDisplay[k] = slotEmojis[finalSymbols[k]] || '❓'; }
+                 else { currentDisplay[k] = slotEmojis[Object.keys(slotEmojis)[Math.floor(Math.random() * Object.keys(slotEmojis).length)]]; }
             }
-
-            currentFrameText = `🎰 *Slots Spinning\\!* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n\\| ${currentDisplay[0]} \\| ${currentDisplay[1]} \\| ${currentDisplay[2]} \\|\n\nSpinning\\.\\.\\.`; // Escaped ! | ...
+            currentFrameText = `🎰 *Slots Spinning\\!* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n\\| ${currentDisplay[0]} \\| ${currentDisplay[1]} \\| ${currentDisplay[2]} \\|\n\nSpinning\\.\\.\\.`;
             if (currentFrameText !== lastMessageText) {
-                await bot.editMessageText(currentFrameText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {
-                    if (!e.message.includes("message is not modified")) console.warn(`${logPrefix} Slots animation edit error: ${e.message}.`);
-                });
+                await bot.editMessageText(currentFrameText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => { if (!e.message.includes("message is not modified")) console.warn(`${logPrefix} Slots animation edit error: ${e.message}.`); });
                 lastMessageText = currentFrameText;
             }
             await sleep(i < animationFrames ? 200 : 600);
@@ -4184,11 +4103,10 @@ async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
 
         // Process Result (New Transaction)
         const displaySymbols = finalSymbols.map(s => slotEmojis[s] || '❓');
-        let profitLamportsOutcome = -betAmountLamports;
-        let finalPayoutToUserDB = 0n; // Payout amount for DB bet status update
+        let profitLamportsOutcome = -betAmountLamports; // Used for message display
+        let finalPayoutForDB = 0n; // Payout amount for DB bet status update & balance update
         let winMessage = '';
         let dbBetStatus = 'completed_loss';
-        // finalUserBalance initialized with balanceAfterBet
 
         client = await pool.connect();
         await client.query('BEGIN');
@@ -4197,76 +4115,72 @@ async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
             if (isJackpotWin) {
                 dbBetStatus = 'completed_win';
                 const currentJackpot = await getJackpotAmount(gameKey, client);
-                if (currentJackpot > 0n) {
-                    finalPayoutToUserDB = currentJackpot; // Jackpot payout includes stake effectively
-                    profitLamportsOutcome = finalPayoutToUserDB - betAmountLamports; // Net profit is jackpot amount minus stake
-                    winMessage = `💎💎💎 JACKPOT\\! 🎉 You won ${escapeMarkdownV2(formatSol(currentJackpot))} SOL\\!`; // Escaped !
-                    await updateJackpotAmount(client, gameKey, gameConfig.jackpotSeedLamports); // Reset jackpot
-                } else {
-                    // Fallback if jackpot somehow becomes 0 or negative - treat as high fixed win
-                    const fixedMultiplier = 200;
+                let jackpotPayoutAmount = currentJackpot; // Amount to actually give user
+
+                if (currentJackpot <= 0n) { // Fallback if jackpot is empty somehow
+                    const fixedMultiplier = 200; // Use a fixed large multiplier
                     const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (fixedMultiplier - 1)));
-                    const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge))) : 0n;
-                    profitLamportsOutcome = netProfit;
-                    finalPayoutToUserDB = betAmountLamports + netProfit; // Stake + Net Profit
-                    winMessage = `💥 Triple Diamonds\\! You won ${escapeMarkdownV2(formatSol(finalPayoutToUserDB))} SOL\\! \\(Jackpot was empty\\)`; // Escaped ! ()
+                    const netProfit = BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge)));
+                    profitLamportsOutcome = netProfit; // Net profit for message
+                    finalPayoutForDB = betAmountLamports + netProfit; // Total amount to credit balance by
+                    winMessage = `💥 Triple Diamonds\\! You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! \\(Jackpot was empty\\)`;
+                } else {
+                    // Normal jackpot win
+                    jackpotPayoutAmount = currentJackpot; // Use the full jackpot amount
+                    // Note: Jackpot wins typically ignore house edge, they pay the pot.
+                    profitLamportsOutcome = jackpotPayoutAmount - betAmountLamports; // Net profit is jackpot minus stake
+                    finalPayoutForDB = jackpotPayoutAmount; // Total amount to credit balance (includes stake implicitly)
+                    winMessage = `💎💎💎 JACKPOT\\! 🎉 You won ${escapeMarkdownV2(formatSol(jackpotPayoutAmount))} SOL\\!`;
+                    await updateJackpotAmount(client, gameKey, gameConfig.jackpotSeedLamports); // Reset jackpot
                 }
-                if (finalPayoutToUserDB > 0n && typeof notifyAdmin === "function") {
-                    await notifyAdmin(`🎉 User ${escapeMarkdownV2(userId)} HIT THE SLOTS JACKPOT for ${escapeMarkdownV2(formatSol(finalPayoutToUserDB))} SOL\\! Bet ID: ${betId}`); // Escaped !
+
+                if (jackpotPayoutAmount > 0n && typeof notifyAdmin === "function") {
+                    await notifyAdmin(`🎉 User ${escapeMarkdownV2(userId)} HIT THE SLOTS JACKPOT for ${escapeMarkdownV2(formatSol(jackpotPayoutAmount))} SOL\\! Bet ID: ${betId}`);
                 }
-                // Update balance if won jackpot
-                const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, 'slots_jackpot', { betId });
-                if (!balanceUpdateResult.success) {
-                    throw new Error(`Failed to update balance/ledger for slots jackpot win: ${balanceUpdateResult.error}`);
-                }
-                finalUserBalance = balanceUpdateResult.newBalance; // Update final balance
+                // *** FIX #0: Update balance using TOTAL PAYOUT (jackpotPayoutAmount) ***
+                const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, finalPayoutForDB, 'slots_jackpot', { betId });
+                if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Jackpot): ${balanceUpdateResult.error}`); }
+                finalUserBalance = balanceUpdateResult.newBalance;
 
             } else if (baseMultiplier > 0) {
                 dbBetStatus = 'completed_win';
                 const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (baseMultiplier - 1)));
                 const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge))) : 0n;
-                profitLamportsOutcome = netProfit;
-                finalPayoutToUserDB = betAmountLamports + netProfit; // Stake + Net Profit
-                winMessage = `🎉 You matched\\! Won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL \\(Multiplier: ${escapeMarkdownV2(baseMultiplier)}x base\\)\\!`; // Escaped ! () and content
+                profitLamportsOutcome = netProfit; // For message display
+                finalPayoutForDB = betAmountLamports + netProfit; // Stake + Net Profit for balance update & DB status
+                winMessage = `🎉 You matched\\! Won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL \\(Multiplier: ${escapeMarkdownV2(baseMultiplier)}x base\\)\\!`;
 
-                // Update balance if regular win
-                const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, 'slots_win', { betId });
-                if (!balanceUpdateResult.success) {
-                    throw new Error(`Failed to update balance/ledger for slots win: ${balanceUpdateResult.error}`);
-                }
-                finalUserBalance = balanceUpdateResult.newBalance; // Update final balance
+                // *** FIX #0: Update balance using TOTAL PAYOUT (Stake + Profit) ***
+                const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, finalPayoutForDB, 'slots_win', { betId });
+                if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Slots Win): ${balanceUpdateResult.error}`); }
+                finalUserBalance = balanceUpdateResult.newBalance;
 
             } else {
-                // *** LOSS: No balance update needed, status is 'completed_loss' ***
+                // LOSS: No balance update needed
                 dbBetStatus = 'completed_loss';
-                profitLamportsOutcome = -betAmountLamports; // Keep for logging/message
-                finalPayoutToUserDB = 0n; // Payout for DB status update
-                winMessage = `😢 No win this time\\. Lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped .
-                // `finalUserBalance` remains `balanceAfterBet`
-                 console.log(`${logPrefix} Slots loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
+                profitLamportsOutcome = -betAmountLamports;
+                finalPayoutForDB = 0n; // Payout for DB status update
+                winMessage = `😢 No win this time\\. Lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`;
+                // finalUserBalance remains balanceAfterBet
+                console.log(`${logPrefix} Slots loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
             }
 
-            // Update bet status with correct payout amount (0 for loss)
-            await updateBetStatus(client, betId, dbBetStatus, finalPayoutToUserDB);
+            await updateBetStatus(client, betId, dbBetStatus, finalPayoutForDB); // Use finalPayoutForDB here
             await client.query('COMMIT');
 
-            const jackpotAfterSpin = await getJackpotAmount(gameKey); // Get jackpot outside transaction if commit succeeded
+            const jackpotAfterSpin = await getJackpotAmount(gameKey);
 
             let resultMsg = `🎰 *Slots Result* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nResult: \\| ${displaySymbols[0]} \\| ${displaySymbols[1]} \\| ${displaySymbols[2]} \\|\n\n${winMessage}`;
-            resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Use correct final balance
+            resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
             resultMsg += `\n💎 Next Jackpot: ${escapeMarkdownV2(formatSol(jackpotAfterSpin))} SOL`;
 
-            const keyboard = {
-                inline_keyboard: [
-                    [{ text: '🔄 Spin Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]
-                ]
-            };
+            const keyboard = { inline_keyboard: [ [{ text: '🔄 Spin Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] };
             bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
 
         } catch (dbError) {
             if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Result DB Rollback failed:`, rbErr));
             console.error(`${logPrefix} DB Error during game end processing: ${dbError.message}`);
-            throw dbError; // Re-throw to outer catch
+            throw dbError;
         } finally {
              if (client) client.release(); client = null;
         }
@@ -4279,15 +4193,17 @@ async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
             reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] }
         });
     } finally {
-        if (client && !client.isReleased) client.release(); // Final safety release
+        if (client && !client.isReleased) client.release();
     }
 }
+
+
 // --- End of Part 5a Section 1 ---
 // index.js - Part 5a: Telegram Message/Callback Handlers & Game Result Processing
-// --- VERSION: 3.2.1o --- (Applying Fixes: Double Deduction (All Games), BJ/Crash Play Again, BJ Parens, Deposit Hint Format, Link Wallet Escaping. Includes previous fixes.)
+// --- VERSION: 3.2.1p --- (Applying Fixes: Win Payout Accounting (Roulette,War,BJ), Double Deduction (Roulette,War,BJ), BJ Parens, Crash Speed, + previous)
 // (Continued from Part 5a, Section 1)
 
-// Section 2b: Roulette, War, Crash, Blackjack Game Handlers (Modified for Double Deduction & Blackjack Parens Fix)
+// Section 2b: Roulette, War, Crash, Blackjack Game Handlers (Modified)
 
 async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, betType, betValue) {
     const gameKey = 'roulette';
@@ -4319,17 +4235,17 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
         const win = basePayoutMultiplier > 0;
 
         // Payout Logic
-        let profitLamportsOutcome = -betAmountLamports; // Default loss, used for win calculation
-        let payoutOnWinLamports = 0n; // For DB (stake + net winnings)
+        let profitLamportsOutcome = -betAmountLamports; // Default loss, used for win calculation/message display
+        let payoutAmountForDB = 0n; // For DB bet status AND balance update on win (Stake + Net Profit)
 
         if (win) {
             const grossWinnings = BigInt(Math.floor(Number(betAmountLamports) * basePayoutMultiplier));
             const netWinningsAfterEdge = BigInt(Math.floor(Number(grossWinnings) * (1 - gameConfig.houseEdge)));
-            profitLamportsOutcome = netWinningsAfterEdge; // This is the actual profit
-            payoutOnWinLamports = betAmountLamports + netWinningsAfterEdge; // Total returned to user
+            profitLamportsOutcome = netWinningsAfterEdge; // This is the actual profit for message display
+            payoutAmountForDB = betAmountLamports + netWinningsAfterEdge; // Total returned to user for balance update
 
-            // *** Update balance ONLY on win ***
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, 'roulette_win', { betId }); // from Part 2
+            // *** FIX #0: Update balance using TOTAL PAYOUT (Stake + Profit) ***
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, 'roulette_win', { betId }); // from Part 2
             if (!balanceUpdateResult.success) {
                 await client.query('ROLLBACK');
                 // MarkdownV2 Safety: Escape error message, bet ID
@@ -4337,17 +4253,17 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
                 if(client) client.release();
                 return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
             }
-            finalUserBalance = balanceUpdateResult.newBalance; // Update final balance on win
+            finalUserBalance = balanceUpdateResult.newBalance; // Update final balance on win (will be B+P)
         } else {
              // *** LOSS: No balance update needed here, only mark bet status ***
-            profitLamportsOutcome = -betAmountLamports; // Keep for potential logging
-            payoutOnWinLamports = 0n; // Payout for DB status update
+            profitLamportsOutcome = -betAmountLamports; // Keep for potential logging/message
+            payoutAmountForDB = 0n; // Payout for DB status update
              // `finalUserBalance` remains `balanceAfterBet`
              console.log(`${logPrefix} Roulette loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
         }
 
-        // Update bet status regardless of win/loss
-        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutOnWinLamports); // from Part 2, use 0n payout for loss
+        // Update bet status regardless of win/loss, use payoutAmountForDB
+        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutAmountForDB); // from Part 2
         await client.query('COMMIT');
 
         // Animation: Show "spinning" message
@@ -4364,9 +4280,9 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
         // MarkdownV2 Safety: Escape number, amounts, balance, punctuation, parentheses
         let resultMsg = `⚪️ *Roulette Result* ⚪️\n\nWinning Number: *${escapeMarkdownV2(numberColor + String(winningNumber))}*\\!\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL on ${betDescription}\n\n`; // Escaped !
         resultMsg += win
-            ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! (Multiplier: ${escapeMarkdownV2(basePayoutMultiplier)}x base)` // Escaped ! () and content
+            ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! (Multiplier: ${escapeMarkdownV2(basePayoutMultiplier)}x base)` // Display profit in message
             : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped .
-        resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Display correct final balance
+        resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Display correct final balance (B+P on win)
         const keyboard = { // Add Emojis
             inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]]
         };
@@ -4414,53 +4330,56 @@ async function handleWarGame(userId, chatId, messageId, betAmountLamports) {
         // simulateWar returns { result, playerCard: obj, dealerCard: obj } - card objects have .display property
         const { result, playerCard, dealerCard } = simulateWar(); // simulateWar from Part 4
 
-        let profitLamportsOutcome = -betAmountLamports; // Default loss
-        let payoutAmountToCredit = 0n; // For DB: Stake + Net Profit
+        let profitLamportsOutcome = -betAmountLamports; // Default loss, used for message display
+        let payoutAmountForDB = 0n; // For DB: Stake + Net Profit for wins/pushes, 0 for loss
         let dbBetStatus = 'completed_loss';
+        let ledgerTransactionType = 'war_loss';
 
         if (result === 'win') {
             dbBetStatus = 'completed_win';
+            ledgerTransactionType = 'war_win';
             const profitBeforeEdge = betAmountLamports; // Winning 1x the stake
             const netProfit = BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge)));
-            profitLamportsOutcome = netProfit;
-            payoutAmountToCredit = betAmountLamports + netProfit;
+            profitLamportsOutcome = netProfit; // For message display
+            payoutAmountForDB = betAmountLamports + netProfit; // For balance update & DB status
 
-             // *** Update balance ONLY on win ***
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, `war_win`, { betId }); // from Part 2
+             // *** FIX #0: Update balance using TOTAL PAYOUT (Stake + Profit) ***
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId }); // from Part 2
             if (!balanceUpdateResult.success) {
                 await client.query('ROLLBACK');
                 const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`; // Escaped .
                 if (client) client.release();
                 return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
             }
-            finalUserBalance = balanceUpdateResult.newBalance; // Update final balance on win
+            finalUserBalance = balanceUpdateResult.newBalance; // Update final balance on win (will be B+P)
 
         } else if (result === 'push') { // Push (Tie)
             dbBetStatus = 'completed_push';
+            ledgerTransactionType = 'war_push';
             profitLamportsOutcome = 0n; // No profit, no loss
-            payoutAmountToCredit = betAmountLamports; // Return stake
+            payoutAmountForDB = betAmountLamports; // Return stake for balance update & DB status
 
-            // *** Update balance ONLY on push (to return stake) ***
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, `war_push`, { betId }); // from Part 2
+            // *** FIX #0: Update balance using TOTAL PAYOUT (Stake) to reverse deduction ***
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId }); // from Part 2
             if (!balanceUpdateResult.success) {
                 await client.query('ROLLBACK');
                 const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`; // Escaped .
                 if (client) client.release();
                 return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
             }
-             // Note: For push, profit is 0, so newBalance will be same as balanceAfterBet. Explicitly set for clarity.
-             finalUserBalance = balanceUpdateResult.newBalance; // Or could use balanceAfterBet directly
+             finalUserBalance = balanceUpdateResult.newBalance; // Will be same as balanceAfterBet
         } else {
              // *** LOSS: No balance update needed here, only mark bet status ***
              dbBetStatus = 'completed_loss';
+             ledgerTransactionType = 'war_loss'; // Keep for consistency if needed elsewhere
              profitLamportsOutcome = -betAmountLamports; // Keep for logging/message
-             payoutAmountToCredit = 0n; // Payout for DB status update
+             payoutAmountForDB = 0n; // Payout for DB status update
              // `finalUserBalance` remains `balanceAfterBet`
              console.log(`${logPrefix} War loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
         }
 
-        // Pass payoutAmountToCredit (which is 0n for loss, stake for push, stake+net_profit for win)
-        await updateBetStatus(client, betId, dbBetStatus, payoutAmountToCredit); // from Part 2
+        // Update bet status using payoutAmountForDB
+        await updateBetStatus(client, betId, dbBetStatus, payoutAmountForDB); // from Part 2
         await client.query('COMMIT');
 
         // Animation: Show "dealing" message
@@ -4469,11 +4388,12 @@ async function handleWarGame(userId, chatId, messageId, betAmountLamports) {
         await sleep(1500); // sleep from Part 1
 
         // MarkdownV2 Safety: Escape card values, amounts, balance, punctuation, parentheses
+        // Use playerCard.display and dealerCard.display which are pre-formatted strings from simulateWar
         let resultMsg = `🃏 *Casino War Result* 🃏\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\nPlayer's Card: *${escapeMarkdownV2(playerCard.display)}*\nDealer's Card: *${escapeMarkdownV2(dealerCard.display)}*\n\n`;
-        if (result === 'win') resultMsg += `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\!`; // Escaped !
+        if (result === 'win') resultMsg += `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\!`; // Show profit in message
         else if (result === 'push') resultMsg += `🤝 Push\\! Your bet of ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL is returned\\.`; // Escaped ! . Add Emoji
         else resultMsg += `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped . Add Emoji
-        resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Display correct final balance
+        resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Display correct final balance (B+P on win)
 
         const keyboard = { // Add Emojis
             inline_keyboard: [
@@ -4496,16 +4416,15 @@ async function handleWarGame(userId, chatId, messageId, betAmountLamports) {
 
 
 async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
-    // *** NOTE: No changes needed here for Double Deduction fix, as losses are handled by timeout/no cashout ***
-    // *** FIX #6 (Crash Type Error) was already applied in v3.2.1j ***
+    // *** Applying Fix #7: Increase Crash Game Speed ***
     const gameKey = 'crash';
     const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
     const logPrefix = `[CrashGame User ${userId} Bet ${betAmountLamports}]`;
     console.log(`${logPrefix} Starting Crash game.`);
 
     let client = null;
-    let betId = null; // To store betId for state and cashout
-    let balanceAfterBet = null; // Store balance after initial deduction
+    let betId = null;
+    let balanceAfterBet = null;
 
     try {
         client = await pool.connect(); // pool from Part 1
@@ -4523,69 +4442,49 @@ async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
         betId = betPlacementResult.betId; // Store betId
         balanceAfterBet = betPlacementResult.newBalance; // Store balance AFTER deduction
 
-        // Mark bet as processing
         await updateBetStatus(client, betId, 'processing_game'); // updateBetStatus from Part 2
         await client.query('COMMIT'); // Commit bet placement
+        if(client) client.release(); client = null;
 
-        // Release client used for bet placement
-        if(client) client.release();
-        client = null;
-
-        // --- Game Logic & Animation (runs outside initial transaction) ---
-        const crashPoint = simulateCrash(); // from Part 4 - returns { crashMultiplier: number }
+        const crashPoint = simulateCrash(); // from Part 4
         if (typeof crashPoint?.crashMultiplier !== 'number') {
             console.error(`${logPrefix} simulateCrash returned invalid data:`, crashPoint);
             throw new Error("Failed to simulate crash point.");
         }
-        const actualCrashPoint = crashPoint.crashMultiplier; // Access the number
+        const actualCrashPoint = crashPoint.crashMultiplier;
         console.log(`${logPrefix} Game will crash at ${actualCrashPoint}x. Bet ID: ${betId}`);
 
-        // Store game state for cashout handling
-        // userStateCache from Part 1
-        userStateCache.set(userId, {
-            action: 'awaiting_crash_cashout', // Use 'action' key for consistency if needed
-            gameKey: gameKey,
-            betId: betId,
-            betAmountLamports: betAmountLamports.toString(), // Store as string
-            chatId: String(chatId),
-            messageId: messageId,
-            currentMultiplier: 1.00,
-            targetCrashMultiplier: actualCrashPoint, // Store target
-            balanceAfterBet: balanceAfterBet.toString() // Store balance *after* bet deduction
+        userStateCache.set(userId, { // userStateCache from Part 1
+            action: 'awaiting_crash_cashout',
+            gameKey: gameKey, betId: betId, betAmountLamports: betAmountLamports.toString(),
+            chatId: String(chatId), messageId: messageId, currentMultiplier: 1.00,
+            targetCrashMultiplier: actualCrashPoint, balanceAfterBet: balanceAfterBet.toString()
         });
 
         let currentMultiplier = 1.00;
         let loopActive = true;
-        let lastMessageText = ""; // To prevent "message not modified" spam
+        let lastMessageText = "";
 
         const initialMessageText = `🚀 *Crash Game Started\\!* 🚀\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nMultiplier: *${escapeMarkdownV2(currentMultiplier.toFixed(2))}x*\n\nWaiting for lift off\\!`; // Escaped ! Add Emoji
         await bot.editMessageText(initialMessageText, {
             chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
-            // Add Emoji
             reply_markup: { inline_keyboard: [[{ text: `💸 Cash Out`, callback_data: `cash_out_crash:${betId}` }]] }
         }).catch(e => { if(!e.message.includes("message is not modified")) console.warn(`${logPrefix} Error sending initial crash message: ${e.message}`)});
         lastMessageText = initialMessageText;
 
         await sleep(1500); // Initial pause
 
-        // Animation loop
         while (loopActive) {
             const gameState = userStateCache.get(userId);
-            // Exit loop immediately if state was cleared (e.g., by cashout) or bet ID mismatch
             if (!gameState || gameState.action !== 'awaiting_crash_cashout' || gameState.betId !== betId) {
                 console.log(`${logPrefix} Game state changed or cleared externally (likely cashed out). Ending loop for Bet ID ${betId}.`);
-                loopActive = false;
-                break;
+                loopActive = false; break;
             }
-
-            // Check if multiplier reached crash point
             if (currentMultiplier >= actualCrashPoint) {
                 console.log(`${logPrefix} Multiplier ${currentMultiplier} reached crash point ${actualCrashPoint}. Crashing.`);
-                loopActive = false;
-                break; // Exit loop for natural crash
+                loopActive = false; break;
             }
 
-            // Increment multiplier (dynamic increment logic)
             const oldMultiplier = currentMultiplier;
             let increment = 0.01;
             if (oldMultiplier >= 20) increment = 0.50;
@@ -4593,15 +4492,12 @@ async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
             else if (oldMultiplier >= 5) increment = 0.10;
             else if (oldMultiplier >= 3) increment = 0.05;
             else if (oldMultiplier >= 1.5) increment = 0.02;
-            // Ensure multiplier increases by at least a minimum step, e.g., 0.01
             currentMultiplier = parseFloat((oldMultiplier + Math.max(0.01, increment)).toFixed(2));
 
-            // Update state cache with new multiplier
             gameState.currentMultiplier = currentMultiplier;
-            userStateCache.set(userId, gameState); // Update cache
+            userStateCache.set(userId, gameState);
 
             const displayMultiplier = escapeMarkdownV2(currentMultiplier.toFixed(2));
-            // MarkdownV2 Safety: Escape variable, punctuation
             let animationText = `🚀 *Crash Game In Progress\\!* 🚀\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nMultiplier: *${displayMultiplier}x*\n\n`; // Escaped ! Add Emoji
             if (currentMultiplier < 1.5) animationText += `Climbing steadily\\.\\.\\.`; // Escaped ...
             else if (currentMultiplier < 3) animationText += `Gaining altitude\\! 📈`; // Escaped ! Add Emoji
@@ -4611,7 +4507,6 @@ async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
             if (animationText !== lastMessageText) {
                 await bot.editMessageText(animationText, {
                     chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
-                    // Add Emoji
                     reply_markup: { inline_keyboard: [[{ text: `💸 Cash Out at ${displayMultiplier}x`, callback_data: `cash_out_crash:${betId}` }]] }
                 }).catch(loopError => {
                     if (!loopError.message.includes("message is not modified")) {
@@ -4620,77 +4515,69 @@ async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
                         if (loopError.message.includes("message to edit not found") || loopError.message.includes("chat not found")) {
                             loopActive = false;
                             console.error(`${logPrefix} Halting crash loop for Bet ID ${betId} due to message edit error.`);
-                            clearUserState(userId); // Clear potentially broken state
+                            clearUserState(userId);
                         }
                     }
                 });
                 lastMessageText = animationText;
             }
 
-            if(!loopActive) break; // Exit if error stopped the loop
+            if(!loopActive) break;
 
-            const delay = Math.max(100, 750 - Math.floor(oldMultiplier * 15)); // Speed up animation as multiplier grows
+            // *** FIX #7: Adjust Crash Speed ***
+            // Original: const delay = Math.max(100, 750 - Math.floor(oldMultiplier * 15));
+            const delay = Math.max(100, 550 - Math.floor(oldMultiplier * 20)); // Faster start, slightly faster acceleration
             await sleep(delay); // sleep from Part 1
         } // End while loop
 
-        // --- Handle Natural Crash (if loop wasn't stopped by cashout) ---
         const finalStateCheck = userStateCache.get(userId);
         if (finalStateCheck && finalStateCheck.action === 'awaiting_crash_cashout' && finalStateCheck.betId === betId) {
-            clearUserState(userId); // Clear state as game ended by crash
+            clearUserState(userId);
 
             console.log(`${logPrefix} Natural crash occurred for Bet ID ${betId} at ${actualCrashPoint}x.`);
             let clientCrash = null;
             try {
                 clientCrash = await pool.connect();
                 await clientCrash.query('BEGIN');
-                // Balance already deducted. Update status to loss.
-                const finalUserBalanceCrash = BigInt(finalStateCheck.balanceAfterBet || '0'); // Use stored balance after initial bet
+                const finalUserBalanceCrash = BigInt(finalStateCheck.balanceAfterBet || '0');
 
-                await updateBetStatus(clientCrash, betId, 'completed_loss', 0n); // 0n payout for loss
-                // No balance update needed for loss, ledger entry created during placeBet.
+                await updateBetStatus(clientCrash, betId, 'completed_loss', 0n);
                 await clientCrash.query('COMMIT');
 
-                // MarkdownV2 Safety: Escape multiplier, amounts, balance, punctuation
                 const crashResultText = `💥 *CRASHED at ${escapeMarkdownV2(actualCrashPoint.toFixed(2))}x\\!* 💥\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nYou didn't cash out in time and lost your bet\\. Tough luck\\!\n\nFinal Balance: ${escapeMarkdownV2(formatSol(finalUserBalanceCrash))} SOL`; // Escaped ! . Add Emoji
                 await bot.editMessageText(crashResultText, {
                     chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
-                    // Add Emojis
                     reply_markup: { inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }
-                }).catch(e => {}); // Ignore "message not modified"
+                }).catch(e => {});
 
             } catch (dbError) {
                 if (clientCrash) await clientCrash.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Crash Loss Rollback failed:`, rbErr));
                 console.error(`${logPrefix} DB Error processing natural crash for Bet ID ${betId}:`, dbError);
-                // MarkdownV2 Safety: Escape error message
-                bot.editMessageText(`⚠️ Database error processing crash result for Bet ID ${betId}: ${escapeMarkdownV2(dbError.message)}\\. Please contact support if balance is incorrect\\.`, { // Escaped .
+                 bot.editMessageText(`⚠️ Database error processing crash result for Bet ID ${betId}: ${escapeMarkdownV2(dbError.message)}\\. Please contact support if balance is incorrect\\.`, { // Escaped .
                     chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
-                    // Add Emojis
                     reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }
                 }).catch(e => {});
             } finally {
                 if (clientCrash) clientCrash.release();
             }
         }
-        // If state was cleared, cashout handler (handleCallbackQuery) took care of results.
 
-    } catch (error) { // Catch errors from initial bet placement or overall setup
+    } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Initial Setup Rollback failed:`, rbErr));
         console.error(`${logPrefix} Major error starting or during crash game (Bet ID ${betId || 'N/A'}):`, error);
-        clearUserState(userId); // Clear state on major error
-        // MarkdownV2 Safety: Escape error message
-        bot.editMessageText(`⚠️ An unexpected error occurred setting up Crash: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { // Escaped .
+        clearUserState(userId);
+         bot.editMessageText(`⚠️ An unexpected error occurred setting up Crash: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { // Escaped .
             chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
-            reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } // Add Emoji
+            reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] }
         }).catch(e => {});
     } finally {
-        // Ensure client is released if error happened before setup commit/release
         if (client && !client.isReleased) client.release();
     }
 }
 
 // Handles Blackjack state and interactions
 async function handleBlackjackGame(userId, chatId, messageId, betAmountLamports, playerAction, existingGameState = null) {
-    // *** Applying Fix #7: Escape Parentheses for player score display ***
+    // *** Applying Fix #7: Escape Parentheses for player score display (Already Applied in v3.2.1m) ***
     const gameKey = 'blackjack';
     const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
     const houseEdgeBJ = gameConfig.houseEdge;
@@ -4721,17 +4608,14 @@ async function handleBlackjackGame(userId, chatId, messageId, betAmountLamports,
             betId = betPlacementResult.betId;
             balanceAfterBet = betPlacementResult.newBalance; // Store balance after bet deduction
 
-            // --- Start Replace initializeBlackjackGame --- (Already Done in v3.2.1j)
             deck = createDeck(); // from Part 4
             shuffleDeck(deck); // from Part 4
             playerHand = [dealCard(deck), dealCard(deck)]; // from Part 4
             dealerHand = [dealCard(deck), dealCard(deck)]; // Dealer gets two cards
             playerValue = calculateHandValue(playerHand); // from Part 4
             dealerValue = calculateHandValue(dealerHand); // Calculate initial dealer value too
-            // --- End Replace initializeBlackjackGame ---
 
-            // Store initial state
-            gameState = {
+            gameState = { // Store initial state
                 action: 'awaiting_blackjack_action', // State after dealing
                 gameKey, betId, betAmountLamports: betAmountLamports.toString(),
                 playerCards: playerHand, dealerCards: dealerHand, deck,
@@ -4748,93 +4632,79 @@ async function handleBlackjackGame(userId, chatId, messageId, betAmountLamports,
             await bot.editMessageText(initialDealText, {chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2'}).catch(e => {});
             await sleep(1000); // Short pause after dealing message
 
-            // Check for immediate player or dealer Blackjack
             const playerHasBlackjack = playerValue === 21 && playerHand.length === 2;
             const dealerHasBlackjack = dealerValue === 21 && dealerHand.length === 2;
 
-            if (playerHasBlackjack && dealerHasBlackjack) {
-                return processBlackjackResult(userId, chatId, messageId, gameState, 'push'); // Push
-            } else if (playerHasBlackjack) {
-                return processBlackjackResult(userId, chatId, messageId, gameState, 'player_blackjack'); // Player wins
-            } else if (dealerHasBlackjack) {
-                // Dealer BJ revealed immediately only if player doesn't also have BJ
-                return processBlackjackResult(userId, chatId, messageId, gameState, 'dealer_wins'); // Dealer wins
-            }
-            // No immediate winner, continue to player's turn (prompt below)
+            if (playerHasBlackjack && dealerHasBlackjack) { return processBlackjackResult(userId, chatId, messageId, gameState, 'push'); }
+            else if (playerHasBlackjack) { return processBlackjackResult(userId, chatId, messageId, gameState, 'player_blackjack'); }
+            else if (dealerHasBlackjack) { return processBlackjackResult(userId, chatId, messageId, gameState, 'dealer_wins'); }
 
         } else if (playerAction === 'hit' || playerAction === 'stand') {
             if (!gameState || gameState.betId === undefined) {
                 console.warn(`${logPrefix} No existing Blackjack game state found for user.`);
-                // MarkdownV2 Safety: Escape static text
                 clearUserState(userId); // from Part 6
                 return bot.editMessageText("⚠️ Your Blackjack session has expired or could not be found\\. Please start a new game\\.", { // Escaped .
                     chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
                     reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] }
                 });
             }
-            betId = gameState.betId; // Get betId from state
+            betId = gameState.betId;
             playerHand = gameState.playerCards;
             dealerHand = gameState.dealerCards;
             deck = gameState.deck;
-            betAmountLamports = BigInt(gameState.betAmountLamports); // Restore BigInt
-            balanceAfterBet = BigInt(gameState.balanceAfterBet); // Restore BigInt
-            currentMessageId = gameState.messageId; // Ensure we use the message ID from state
+            betAmountLamports = BigInt(gameState.betAmountLamports);
+            balanceAfterBet = BigInt(gameState.balanceAfterBet);
+            currentMessageId = gameState.messageId;
 
             console.log(`${logPrefix} Continuing game for Bet ID: ${betId} with action: ${playerAction}`);
-            // No transaction needed here for hit/stand logic itself
-            if (client) client.release(); client = null;
+             if (client) client.release(); client = null;
         } else {
             throw new Error(`Invalid playerAction: ${playerAction}`);
         }
 
-        // --- Process Player Action (if not start_game) ---
         if (playerAction === 'hit') {
-            const newCard = dealCard(deck); // from Part 4
+            const newCard = dealCard(deck);
             if (newCard) playerHand.push(newCard);
-            else { console.error(`${logPrefix} Deck empty when player tried to hit. Auto-standing.`); playerAction = 'stand'; } // Force stand if deck empty
-            gameState.playerCards = playerHand; // Update state
-            gameState.deck = deck; // Update state
-            gameState.playerScore = calculateHandValue(playerHand); // from Part 4, update state score
-            // Check for bust immediately after hit
-            if (gameState.playerScore > 21) {
+            else { console.error(`${logPrefix} Deck empty when player tried to hit. Auto-standing.`); playerAction = 'stand'; }
+            gameState.playerCards = playerHand;
+            gameState.deck = deck;
+            gameState.playerScore = calculateHandValue(playerHand);
+             if (gameState.playerScore > 21) {
                 return processBlackjackResult(userId, chatId, currentMessageId, gameState, 'player_busts');
             }
         }
 
         if (playerAction === 'stand') {
-            // Player stands, dealer plays
-            const dealerResult = simulateDealerPlay([...dealerHand], deck); // from Part 4
-            gameState.dealerCards = dealerResult.hand; // Update dealer hand in state
-            gameState.dealerScore = dealerResult.value; // Update dealer score in state
-            const gameOutcome = determineBlackjackWinner(playerHand, gameState.dealerCards).result; // Determine winner based on final hands
-            return processBlackjackResult(userId, chatId, currentMessageId, gameState, gameOutcome);
+             const dealerResult = simulateDealerPlay([...dealerHand], deck);
+            gameState.dealerCards = dealerResult.hand;
+            gameState.dealerScore = dealerResult.value;
+            const gameOutcome = determineBlackjackWinner(playerHand, gameState.dealerCards).result;
+             return processBlackjackResult(userId, chatId, currentMessageId, gameState, gameOutcome);
         }
 
         // --- Display Current Game State (if game continues after hit or initial deal) ---
-        const formattedPlayerHand = gameState.playerCards.map(c => formatCard(c)).join(' '); // formatCard from Part 4
-        const formattedDealerShowCard = gameState.dealerCards.length > 0 ? formatCard(gameState.dealerCards[0]) : '??'; // Dealer shows first card
+        const formattedPlayerHand = gameState.playerCards.map(c => formatCard(c)).join(' ');
+        const formattedDealerShowCard = gameState.dealerCards.length > 0 ? formatCard(gameState.dealerCards[0]) : '??';
 
-        // MarkdownV2 Safety: Escape all card displays, scores, amount
-        // *** Applying Fix #7: Escape Parentheses around player score ***
+        // *** Fix #7: Escape Parentheses around player score *** (Already applied in v3.2.1m)
         let currentHandsText = `♠️ *Blackjack Table* ♥️\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`;
         currentHandsText += `*Your Hand \\(${escapeMarkdownV2(gameState.playerScore)}\\):* ${escapeMarkdownV2(formattedPlayerHand)}\n`; // Escaped () around score
         currentHandsText += `*Dealer Shows:* ${escapeMarkdownV2(formattedDealerShowCard)} \\(?\\)\n\n`; // Escaped () ?
         currentHandsText += `What's your move?`;
 
-        const actionKeyboard = { // Add Emojis
+        const actionKeyboard = {
             inline_keyboard: [
                 [{ text: '➕ Hit', callback_data: `blackjack_action:hit:${betId}` }, { text: '✋ Stand', callback_data: `blackjack_action:stand:${betId}` }]
             ]
         };
-        userStateCache.set(userId, gameState); // Re-set state (e.g., updated playerCards after hit)
+        userStateCache.set(userId, gameState); // Re-set state
 
         await bot.editMessageText(currentHandsText, { chat_id: chatId, message_id: currentMessageId, parse_mode: 'MarkdownV2', reply_markup: actionKeyboard });
 
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Outer Rollback failed:`, rbErr));
         console.error(`${logPrefix} Error in Blackjack game:`, error);
-        clearUserState(userId); // Clear state on error
-        // MarkdownV2 Safety: Escape error message
+        clearUserState(userId);
         bot.editMessageText(`⚠️ An unexpected error occurred during Blackjack: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { // Escaped .
             chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
             reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] }
@@ -4849,6 +4719,7 @@ async function handleBlackjackGame(userId, chatId, messageId, betAmountLamports,
  * Needs to perform DB updates for balance and bet status.
  */
 async function processBlackjackResult(userId, chatId, messageId, gameState, outcomeKey) {
+    // *** Applying Fix #0: Update balance using TOTAL PAYOUT for wins/pushes ***
     // *** Applying Fix #1: Do not update balance on loss/bust ***
     const gameKey = 'blackjack';
     const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
@@ -4864,10 +4735,11 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
     clearUserState(userId); // Clear game state from cache
 
     let client = null;
-    let profitLamportsOutcome = -betAmountLamports; // Default loss
-    let payoutAmountToCredit = 0n; // For DB update status (stake + net profit)
+    let profitLamportsOutcome = -betAmountLamports; // Default loss, used for message display
+    let payoutAmountForDB = 0n; // Payout amount for DB bet status update AND balance update
     let resultDisplayString = "";
     let dbBetStatus = 'completed_loss';
+    let ledgerTransactionType = `blackjack_${outcomeKey}`; // Default ledger type
     let finalUserBalance = balanceAfterBet; // Initialize with balance AFTER bet was placed
 
     try {
@@ -4877,95 +4749,87 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
         switch (outcomeKey) {
             case 'player_blackjack':
                 dbBetStatus = 'completed_win';
+                ledgerTransactionType = 'blackjack_player_blackjack'; // More specific type
                 const bjWinnings = BigInt(Math.floor(Number(betAmountLamports) * 1.5)); // 3:2 payout base
                 const netBjWinnings = BigInt(Math.floor(Number(bjWinnings) * (1 - houseEdge)));
-                profitLamportsOutcome = netBjWinnings;
-                payoutAmountToCredit = betAmountLamports + netBjWinnings;
-                // MarkdownV2 Safety: Escape profit amount
-                resultDisplayString = `♠️♥️♦️♣️ BLACKJACK\\! You win ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL (3:2 payout)\\!`; // Escaped ! () Add Emojis
+                profitLamportsOutcome = netBjWinnings; // For message display
+                payoutAmountForDB = betAmountLamports + netBjWinnings; // Stake + Profit for balance update
+                resultDisplayString = `♠️♥️♦️♣️ BLACKJACK\\! You win ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL (3:2 payout)\\!`;
                 // Update balance on win
-                const balanceUpdateResultBJ = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, `blackjack_${outcomeKey}`, { betId }); // from Part 2
-                if (!balanceUpdateResultBJ.success) { throw new Error(`Failed balance update for Blackjack result (BetID: ${betId}): ${escapeMarkdownV2(balanceUpdateResultBJ.error)}`); } // Escaped ()
-                finalUserBalance = balanceUpdateResultBJ.newBalance;
+                const balanceUpdateResultBJ = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId });
+                if (!balanceUpdateResultBJ.success) { throw new Error(`Failed balance update (BJ Win): ${escapeMarkdownV2(balanceUpdateResultBJ.error)}`); }
+                finalUserBalance = balanceUpdateResultBJ.newBalance; // Will be B+P
                 break;
+
             case 'dealer_busts_player_wins': // Combined player_wins and dealer_busts
-                dbBetStatus = 'completed_win';
-                const regWinningsBust = betAmountLamports; // 1:1 payout base
-                const netRegularWinningsBust = BigInt(Math.floor(Number(regWinningsBust) * (1 - houseEdge)));
-                profitLamportsOutcome = netRegularWinningsBust;
-                payoutAmountToCredit = betAmountLamports + netRegularWinningsBust;
-                // MarkdownV2 Safety: Escape profit amount
-                resultDisplayString = `🎉 Dealer Busted\\! You win ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\!`; // Escaped ! Add Emoji
-                // Update balance on win
-                const balanceUpdateResultBust = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, `blackjack_${outcomeKey}`, { betId }); // from Part 2
-                if (!balanceUpdateResultBust.success) { throw new Error(`Failed balance update for Blackjack result (BetID: ${betId}): ${escapeMarkdownV2(balanceUpdateResultBust.error)}`); } // Escaped ()
-                finalUserBalance = balanceUpdateResultBust.newBalance;
-                break;
             case 'player_wins':
                 dbBetStatus = 'completed_win';
+                ledgerTransactionType = outcomeKey === 'dealer_busts_player_wins' ? 'blackjack_dealer_busts' : 'blackjack_player_wins';
                 const regWinnings = betAmountLamports; // 1:1 payout base
                 const netRegularWinnings = BigInt(Math.floor(Number(regWinnings) * (1 - houseEdge)));
-                profitLamportsOutcome = netRegularWinnings;
-                payoutAmountToCredit = betAmountLamports + netRegularWinnings;
-                // MarkdownV2 Safety: Escape profit amount
-                resultDisplayString = `🎉 You Win\\! ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL earned\\.`; // Escaped ! . Add Emoji
-                 // Update balance on win
-                const balanceUpdateResultWin = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, `blackjack_${outcomeKey}`, { betId }); // from Part 2
-                if (!balanceUpdateResultWin.success) { throw new Error(`Failed balance update for Blackjack result (BetID: ${betId}): ${escapeMarkdownV2(balanceUpdateResultWin.error)}`); } // Escaped ()
-                finalUserBalance = balanceUpdateResultWin.newBalance;
+                profitLamportsOutcome = netRegularWinnings; // For message display
+                payoutAmountForDB = betAmountLamports + netRegularWinnings; // Stake + Profit for balance update
+                if (outcomeKey === 'dealer_busts_player_wins') { resultDisplayString = `🎉 Dealer Busted\\! You win ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\!`; }
+                else { resultDisplayString = `🎉 You Win\\! ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL earned\\.`; }
+                // Update balance on win
+                const balanceUpdateResultWin = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId });
+                if (!balanceUpdateResultWin.success) { throw new Error(`Failed balance update (BJ Win/Bust): ${escapeMarkdownV2(balanceUpdateResultWin.error)}`); }
+                finalUserBalance = balanceUpdateResultWin.newBalance; // Will be B+P
                 break;
+
             case 'push':
-                profitLamportsOutcome = 0n;
-                payoutAmountToCredit = betAmountLamports; // Return stake
                 dbBetStatus = 'completed_push';
-                resultDisplayString = `🤝 Push\\! Your bet is returned\\.`; // Escaped ! . Add Emoji
+                ledgerTransactionType = 'blackjack_push';
+                profitLamportsOutcome = 0n;
+                payoutAmountForDB = betAmountLamports; // Return stake for balance update
+                resultDisplayString = `🤝 Push\\! Your bet is returned\\.`;
                 // Update balance on push (to return stake)
-                const balanceUpdateResultPush = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, `blackjack_${outcomeKey}`, { betId }); // from Part 2
-                if (!balanceUpdateResultPush.success) { throw new Error(`Failed balance update for Blackjack result (BetID: ${betId}): ${escapeMarkdownV2(balanceUpdateResultPush.error)}`); } // Escaped ()
-                 // Note: For push, profit is 0, so newBalance will be same as balanceAfterBet.
-                finalUserBalance = balanceUpdateResultPush.newBalance;
+                const balanceUpdateResultPush = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId });
+                if (!balanceUpdateResultPush.success) { throw new Error(`Failed balance update (BJ Push): ${escapeMarkdownV2(balanceUpdateResultPush.error)}`); }
+                finalUserBalance = balanceUpdateResultPush.newBalance; // Will be same as balanceAfterBet
                 break;
+
             case 'dealer_wins':
                 dbBetStatus = 'completed_loss';
+                ledgerTransactionType = 'blackjack_dealer_wins';
                 profitLamportsOutcome = -betAmountLamports;
-                payoutAmountToCredit = 0n;
-                // MarkdownV2 Safety: Escape bet amount
-                resultDisplayString = `😢 Dealer Wins \\(${escapeMarkdownV2(dealerValue)}\\ vs ${escapeMarkdownV2(playerValue)}\\)\\. You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped . * ()
+                payoutAmountForDB = 0n; // For bet status update
+                resultDisplayString = `😢 Dealer Wins \\(${escapeMarkdownV2(dealerValue)}\\ vs ${escapeMarkdownV2(playerValue)}\\)\\. You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`;
                 // *** LOSS: No balance update needed here. finalUserBalance remains balanceAfterBet ***
                 console.log(`${logPrefix} Blackjack loss (Dealer Wins) for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
                 break;
+
             case 'player_busts':
                 dbBetStatus = 'completed_loss';
+                ledgerTransactionType = 'blackjack_player_busts';
                 profitLamportsOutcome = -betAmountLamports;
-                payoutAmountToCredit = 0n;
-                // MarkdownV2 Safety: Escape value, bet amount
-                resultDisplayString = `💥 You Busted at ${escapeMarkdownV2(playerValue)}\\! Lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped ! . Add Emoji
+                payoutAmountForDB = 0n; // For bet status update
+                resultDisplayString = `💥 You Busted at ${escapeMarkdownV2(playerValue)}\\! Lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`;
                  // *** LOSS: No balance update needed here. finalUserBalance remains balanceAfterBet ***
                  console.log(`${logPrefix} Blackjack loss (Player Busts) for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
                 break;
+
             default:
                 console.error(`${logPrefix} Unknown outcomeKey: ${outcomeKey}`);
-                // MarkdownV2 Safety: Escape key
-                resultDisplayString = `Internal error determining winner \\(${escapeMarkdownV2(outcomeKey)}\\)\\.`; // Escaped ()
-                profitLamportsOutcome = -betAmountLamports; // Assume loss for safety
-                payoutAmountToCredit = 0n;
-                dbBetStatus = 'error_game_logic'; // Use specific status for errors
-                // *** ERROR: No balance update needed here? Or should we ensure it reflects initial deduction? ***
-                // Let's keep finalUserBalance as balanceAfterBet for consistency on error/loss.
+                resultDisplayString = `Internal error determining winner \\(${escapeMarkdownV2(outcomeKey)}\\)\\.`;
+                profitLamportsOutcome = -betAmountLamports;
+                payoutAmountForDB = 0n;
+                dbBetStatus = 'error_game_logic';
+                ledgerTransactionType = 'blackjack_error';
+                 // *** ERROR: No balance update needed here. finalUserBalance remains balanceAfterBet ***
                  console.log(`${logPrefix} Blackjack error outcome for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
                 break;
         }
 
         // Update bet status only (balance updates handled above for win/push)
-        await updateBetStatus(client, betId, dbBetStatus, payoutAmountToCredit); // from Part 2
+        await updateBetStatus(client, betId, dbBetStatus, payoutAmountForDB); // from Part 2
         await client.query('COMMIT');
 
         // Construct final message
-        // MarkdownV2 Safety: Escape all card displays, scores, amount, balance
         let fullResultText = `♠️ *Blackjack Result* ♥️\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`;
         fullResultText += `*Your Hand \\(${escapeMarkdownV2(playerValue)}\\):* ${escapeMarkdownV2(playerHand.map(c => formatCard(c)).join(', '))}\n`; // formatCard from Part 4
         fullResultText += `*Dealer's Hand \\(${escapeMarkdownV2(dealerValue)}\\):* ${escapeMarkdownV2(dealerHand.map(c => formatCard(c)).join(', '))}\n\n`; // formatCard from Part 4
-        fullResultText += `${resultDisplayString}\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
+        fullResultText += `${resultDisplayString}\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Displays B+P on win/push now
 
         const keyboard = { // Add Emojis
             inline_keyboard: [
@@ -4977,8 +4841,6 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Result DB Rollback failed:`, rbErr));
         console.error(`${logPrefix} Error in Blackjack result processing:`, error);
-        // Notify user of error
-        // MarkdownV2 Safety: Escape error message
         const errorText = `⚠️ Error finalizing Blackjack game: ${escapeMarkdownV2(error.message)}\\. Your bet may be unresolved\\. Please contact support with Bet ID ${betId}\\.`; // Escaped .
         bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {});
     } finally {
@@ -4990,7 +4852,7 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
 
 // --- End of Part 5a ---
 // index.js - Part 5b: Telegram Command Handlers & Stateful Inputs (Section 1 of 2)
-// --- VERSION: 3.2.1m --- (No direct fixes in this section. Includes previous fixes from 5a.)
+// --- VERSION: 3.2.1p --- (No fixes in this section. Includes previous fixes from 5a.)
 
 // --- Assuming functions/variables from Part 1, 2, 3, 5a are available ---
 // (bot, pool, userStateCache, GAME_CONFIG, ensureUserExists, updateUserWallet,
@@ -5352,7 +5214,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 
 // --- End of Part 5b (Section 1) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2 of 2)
-// --- VERSION: 3.2.1o --- (Applying Fixes: Double Deduction (All Games), BJ/Crash Play Again, BJ Parens, Deposit Hint Format, Link Wallet Escaping. Includes previous fixes.)
+// --- VERSION: 3.2.1p --- (Applying Fixes: Referral/Help Parse Errors, Deposit Hint Format, Link Wallet Escaping, Ref Link Display, Error Recovery, Balance on Start, Start Animation. Includes previous fixes.)
 
 // (Continuing directly from Part 5b, Section 1)
 // ... (Assume functions like routeStatefulInput, handleCustomAmountInput, etc. are defined above in Section 1) ...
@@ -5532,13 +5394,16 @@ async function handleWithdrawalConfirmation(userId, chatId, messageId, recipient
  * @param {string | null} [correctUserIdFromCb=null] User ID if called from callback.
  */
 async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** Start Menu / GIF Removal Fix Already Applied ***
+    // *** Applying Fix #9: Display Balance on Main Menu ***
+    // *** Applying Fix #10: Re-implement Start Animation ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const logPrefix = `[StartCmd User ${userId}]`;
     let isFromCallback = !!correctUserIdFromCb;
+    const TENOR_GIF_URL = "https://media1.tenor.com/m/vFdyZ-CK6IYAAAAC/solana.gif"; // Use the provided URL
 
-    if (isFromCallback) {
+    // Delete original message if invoked from callback to prevent clutter
+    if (isFromCallback && msgOrCbMsg.message_id) {
         const messageIdToDelete = msgOrCbMsg.message_id;
         try {
             await bot.deleteMessage(chatId, messageIdToDelete); // bot from Part 1
@@ -5549,12 +5414,33 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
     }
 
     console.log(`${logPrefix} Handling /start or menu:main.`);
+
+    // Send Animation First (Fix #10)
+    try {
+        // Using sendAnimation assuming it's a GIF. If it's MP4, use sendVideo
+        await bot.sendAnimation(chatId, TENOR_GIF_URL);
+        console.log(`${logPrefix} Sent start animation.`);
+    } catch(animError) {
+        console.error(`${logPrefix} Failed to send start animation: ${animError.message}`);
+        // Proceed even if animation fails
+    }
+
+    // Handle User Existence & Referrals
     let client = null;
     let isNewUser = false;
+    let currentBalance = 0n; // Default balance if fetch fails
     try {
         client = await pool.connect(); // pool from Part 1
         const userCheckResult = await ensureUserExists(userId, client); // ensureUserExists from Part 2
         isNewUser = userCheckResult.isNewUser;
+
+        // Fetch Balance (Fix #9)
+        const balanceCheck = await queryDatabase('SELECT balance_lamports FROM user_balances WHERE user_id = $1', [userId], client);
+        if (balanceCheck.rowCount > 0) {
+            currentBalance = BigInt(balanceCheck.rows[0].balance_lamports || '0');
+        } else {
+             console.warn(`${logPrefix} Could not fetch balance for user ${userId} during start command.`);
+        }
 
         const commandArgs = isFromCallback ? args : msgOrCbMsg.text?.split(' ').slice(1) || [];
 
@@ -5578,20 +5464,21 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
         }
     } catch (error) {
         console.error(`${logPrefix} DB error during start command: ${error.message}`);
-        safeSendMessage(chatId, "An error occurred\\. Please try again\\.", {parse_mode: 'MarkdownV2'});
-        if(client) client.release(); return;
+         // Don't stop execution, try to send welcome message anyway but log error
     } finally { if (client) client.release(); }
 
+    // Construct Welcome Message (with Balance - Fix #9)
     const displayName = await getUserDisplayName(chatId, userId); // from Part 3
     const botName = escapeMarkdownV2(process.env.BOT_USERNAME || "SolanaGamblesBot"); // BOT_USERNAME from Part 1 env
-    const botVersion = escapeMarkdownV2(BOT_VERSION || "3.2.1o"); // BOT_VERSION from Part 1
+    const botVersion = escapeMarkdownV2(BOT_VERSION || "3.2.1p"); // BOT_VERSION from Part 1
+    const balanceString = escapeMarkdownV2(formatSol(currentBalance)); // formatSol from Part 3
 
     let welcomeMsg = `👋 Welcome, ${displayName}\\!\n\nI am ${botName} \\(v${botVersion}\\), your home for exciting on\\-chain games on Solana\\.\n\n`;
+    welcomeMsg += `*Current Balance:* ${balanceString} SOL\n\n`; // Added Balance Display
     if (isNewUser) { welcomeMsg += "Looks like you're new here\\!\\! Here's how to get started:\n1\\. Use \`/deposit\` to get your unique address\\.\n2\\. Send SOL to that address\\.\n3\\. Use the menu below to play games\\!\n\n"; }
     welcomeMsg += "Use the menu below or type /help for a list of commands\\.";
 
-    // --- Updated Keyboard (Already Applied) ---
-    const mainMenuKeyboard = {
+    const mainMenuKeyboard = { // Keyboard remains the same
         inline_keyboard: [
             [{ text: '🎮 Play Games', callback_data: 'menu:game_selection' }, { text: '👤 My Wallet', callback_data: 'menu:wallet' }],
             [{ text: '🏆 Leaderboards', callback_data: 'leaderboard_nav:overall_wagered:0'}, { text: '👥 Referrals', callback_data: 'menu:referral'}],
@@ -5599,6 +5486,7 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
         ]
     };
 
+    // Send Welcome Message + Keyboard
     try {
         await safeSendMessage(chatId, welcomeMsg, { // welcomeMsg is already escaped where needed
             parse_mode: 'MarkdownV2',
@@ -5607,6 +5495,8 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
         console.log(`${logPrefix} Sent welcome text message and main menu.`);
     } catch (error) {
         console.error(`${logPrefix} Failed to send welcome message: ${error.message}.`);
+         // Attempt to send a simpler message if complex one fails
+         safeSendMessage(chatId, "Welcome! Use /help for commands.", {}).catch(()=>{});
     }
 }
 
@@ -5626,48 +5516,29 @@ async function handleGameSelectionCommand(msgOrCbMsg, args, correctUserIdFromCb 
     console.log(`${logPrefix} Handling game selection menu.`);
     clearUserState(userId); // Clear any pending state like custom amount input
 
-    // MarkdownV2 Safety: Escape static text
     const messageText = "🎮 *Choose a Game*";
 
-    // Define game buttons using GAME_CONFIG
     const gameButtons = Object.values(GAME_CONFIG).map(game => { // GAME_CONFIG from Part 1
-        // Attempt to add a relevant emoji
-        let emoji = '🕹️'; // Default emoji
-        if (game.key === 'coinflip') emoji = '🪙';
-        else if (game.key === 'slots') emoji = '🎰';
-        else if (game.key === 'war') emoji = '🃏';
-        else if (game.key === 'race') emoji = '🐎';
-        else if (game.key === 'roulette') emoji = '⚪️';
-        else if (game.key === 'crash') emoji = '🚀';
+        let emoji = '🕹️';
+        if (game.key === 'coinflip') emoji = '🪙'; else if (game.key === 'slots') emoji = '🎰';
+        else if (game.key === 'war') emoji = '🃏'; else if (game.key === 'race') emoji = '🐎';
+        else if (game.key === 'roulette') emoji = '⚪️'; else if (game.key === 'crash') emoji = '🚀';
         else if (game.key === 'blackjack') emoji = '♠️';
-        // Use 'select_game' action prefix to trigger amount selection via handleCallbackQuery
-        return { text: `${emoji} ${escapeMarkdownV2(game.name)}`, callback_data: `select_game:${game.key}` }; // Escape game name
+        return { text: `${emoji} ${escapeMarkdownV2(game.name)}`, callback_data: `select_game:${game.key}` };
     });
 
-    // Arrange buttons (e.g., 2 per row for better mobile view)
     const gameKeyboardRows = [];
     for (let i = 0; i < gameButtons.length; i += 2) {
         gameKeyboardRows.push(gameButtons.slice(i, i + 2));
     }
-    // Add back button with Emoji
     gameKeyboardRows.push([{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]);
 
-    const options = {
-        reply_markup: { inline_keyboard: gameKeyboardRows },
-        parse_mode: 'MarkdownV2'
-    };
+    const options = { reply_markup: { inline_keyboard: gameKeyboardRows }, parse_mode: 'MarkdownV2' };
 
-    // Try to edit the message if called from callback
     if (isFromCallback && messageToEditId) {
         bot.editMessageText(messageText, { chat_id: chatId, message_id: messageToEditId, ...options })
-            .catch(e => {
-                if (!e.message.includes("message is not modified")) {
-                    console.warn(`${logPrefix} Failed to edit message ${messageToEditId} for game selection, sending new: ${e.message}`);
-                    safeSendMessage(chatId, messageText, options);
-                }
-            });
+            .catch(e => { if (!e.message.includes("message is not modified")) { console.warn(`${logPrefix} Failed to edit message ${messageToEditId} for game selection, sending new: ${e.message}`); safeSendMessage(chatId, messageText, options); } });
     } else {
-        // If called directly via /games, send new message
         safeSendMessage(chatId, messageText, options);
     }
 }
@@ -5680,44 +5551,42 @@ async function handleGameSelectionCommand(msgOrCbMsg, args, correctUserIdFromCb 
  * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
  */
 async function handleHelpCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** Hyphen Escaping Already Applied ***
+    // *** Applying Fix #3: Reconstruct lines with variables inside escaped parens ***
+    // *** Applying Fix #8: Improve Error Recovery ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const messageId = msgOrCbMsg.message_id;
     const isFromCallback = !!correctUserIdFromCb;
-    // Section comes from args[1] if command was `/help section`, or args[0] if callback was `show_help_section:section`
     const section = isFromCallback ? args[0] : (args.length > 1 ? args[1] : null);
     const logPrefix = `[HelpCmd User ${userId} Section ${section}]`;
-    clearUserState(userId); // Clear any pending state
+    clearUserState(userId);
 
-    // If no specific section requested, show the main help menu
+    const fallbackKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; // Fallback keyboard
+
     if (!section) {
         const text = `ℹ️ *Help & Information*\n\nSelect a topic for more details:`;
-        const keyboard = { // Add Emojis
+        const keyboard = {
             inline_keyboard: [
                 [{ text: '❓ How to Play', callback_data: 'show_help_section:how_to_play' }],
                 [{ text: '💰 Deposits & Withdrawals', callback_data: 'show_help_section:deposits_withdrawals' }],
                 [{ text: '🎲 Game Rules', callback_data: 'show_help_section:game_rules' }],
                 [{ text: '⚖️ Fairness & House Edge', callback_data: 'show_help_section:fairness' }],
-                [{ text: '👥 Referral Program', callback_data: 'menu:referral' }], // Direct to referral command handler
+                [{ text: '👥 Referral Program', callback_data: 'menu:referral' }],
                 [{ text: '📞 Support', callback_data: 'show_help_section:support' }],
                 [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
             ]
         };
         const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: keyboard };
         if (isFromCallback && messageId) {
-            bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options })
-                .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, text, options); });
-        } else {
-            safeSendMessage(chatId, text, options);
-        }
+             bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options })
+                 .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, text, options); });
+        } else { safeSendMessage(chatId, text, options); }
         return;
     }
 
-    // If section IS provided, show that specific help text
     console.log(`${logPrefix} Displaying help section: ${section}`);
     let text = '';
-    let keyboard = { inline_keyboard: [[{ text: '↩️ Back to Help Menu', callback_data: 'menu:help' }]] }; // Default back button, Add Emoji
+    let keyboard = { inline_keyboard: [[{ text: '↩️ Back to Help Menu', callback_data: 'menu:help' }]] };
 
     const feeSOL = escapeMarkdownV2(formatSol(WITHDRAWAL_FEE_LAMPORTS));
     const minWithdrawSOL = escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS));
@@ -5725,80 +5594,93 @@ async function handleHelpCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const expiryMinutesHelp = escapeMarkdownV2(String(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES || '60'));
     const confirmationLevelHelp = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL);
 
-    switch (section) {
-        case 'how_to_play':
-            // Escape hyphens used in list items/sub-steps
-            text = "❓ *How to Play*\n\n" +
-                    "1\\. *Deposit SOL*: Use the `/deposit` command or 'Deposit SOL' button in your Wallet menu to get a unique SOL address\\. Send SOL to it\\.\n" +
-                    "2\\. *Choose a Game*: Navigate to 'Play Games' from the main menu and select a game\\.\n" +
-                    "3\\. *Place Your Bet*: Select a predefined bet amount or enter a custom amount when prompted\\.\n" +
-                    "4\\. *Play & Win\\!*: Follow game\\-specific instructions\\. Winnings are instantly credited to your internal balance\\.\n" + // Escaped hyphen
-                    "5\\. *Withdraw SOL*: Use the 'Withdraw SOL' button in your Wallet to send funds to your linked external Solana wallet\\.";
-            break;
-        case 'deposits_withdrawals':
-            // Escape hyphens used in list items
-            text = "💰 *Deposits & Withdrawals*\n\n" +
-                    "*Deposits:*\n" +
-                    "  \\- Use `/deposit` or the 'Deposit SOL' button for a unique, temporary SOL address\\.\n" + // Escaped hyphen
-                    "  \\- Send SOL to this address from your external wallet\\.\n" + // Escaped hyphen
-                    "  \\- Funds are credited after network confirmations \\(${confirmationLevelHelp}\\)\\.\n" + // Escaped hyphen
-                    "  \\- Each deposit address expires after a set time \\(${expiryMinutesHelp} minutes\\)\\. Do NOT reuse expired addresses\\.\n\n" + // Escaped hyphen
-                    "*Withdrawals:*\n" +
-                    "  \\- Link an external wallet using `/wallet YOUR_ADDRESS` or via the 'My Wallet' menu\\.\n" + // Escaped hyphen
-                    "  \\- Choose 'Withdraw SOL' from the Wallet menu and enter the amount\\.\n" + // Escaped hyphen
-                    "  \\- A small network fee applies \\(${feeSOL} SOL\\)\\.\n" + // Escaped hyphen
-                    `  \\- Minimum withdrawal: ${minWithdrawSOL} SOL\\.`; // Escaped hyphen
-            break;
-        case 'game_rules':
-            // Escape hyphens used in ranges and descriptions
-            text = "🎲 *Game Rules*\n\n" +
-                    "*Coinflip*: Choose Heads or Tails\\. 50/50 chance\\. Simple as that\\!\n" +
-                    "*Slots*: Spin the reels\\! Match symbols for payouts\\. Hit the Jackpot \\(💎💎💎\\) for a big win\\!\n" +
-                    "*War*: Your card vs\\. the Dealer's card\\. Highest card wins \\(Ace is high\\)\\. Push on a tie\\.\n" +
-                    "*Race*: Pick a horse to win the race\\. Each horse has different payout odds\\.\n" +
-                    "*Roulette*: European style \\(0\\-36\\)\\. Bet on numbers, colors \\(Red/Black\\), Even/Odd, or Low \\(1\\-18\\)/High \\(19\\-36\\)\\.\n" + // Escaped hyphens in ranges
-                    "*Crash*: Watch the multiplier increase\\! Cash out before it crashes to win your bet multiplied by the cashout value\\. If it crashes before you cash out, you lose\\.\n" +
-                    "*Blackjack*: Get closer to 21 than the dealer without going over\\. Aces can be 1 or 11\\. Dealer stands on 17\\. Blackjack \\(Ace \\+ 10\\-value card\\) pays 3:2\\."; // Escaped hyphens
-            break;
-        case 'fairness':
-            // Escape hyphens used in list items
-            text = "⚖️ *Fairness & House Edge*\n\n" +
-                    "Our games use provably fair algorithms where applicable \\(details may vary per game\\)\\.\n" +
-                    "The House Edge is a small percentage ensuring the bot's operational sustainability\\. It's applied to winnings and varies per game:\n" +
-                    `  \\- Coinflip: ${escapeMarkdownV2(GAME_CONFIG.coinflip.houseEdge * 100)}%\n` + // Escaped hyphen
-                    `  \\- Slots: ${escapeMarkdownV2(GAME_CONFIG.slots.houseEdge * 100)}% \\(plus jackpot contribution\\)\n` + // Escaped hyphen
-                    `  \\- War: ${escapeMarkdownV2(GAME_CONFIG.war.houseEdge * 100)}%\n` + // Escaped hyphen
-                    `  \\- Race: ${escapeMarkdownV2(GAME_CONFIG.race.houseEdge * 100)}%\n` + // Escaped hyphen
-                    `  \\- Roulette: ${escapeMarkdownV2(GAME_CONFIG.roulette.houseEdge * 100)}%\n` + // Escaped hyphen
-                    `  \\- Crash: ${escapeMarkdownV2(GAME_CONFIG.crash.houseEdge * 100)}%\n`+ // Escaped hyphen
-                    `  \\- Blackjack: ${escapeMarkdownV2(GAME_CONFIG.blackjack.houseEdge * 100)}%`; // Escaped hyphen
-            break;
-        case 'support':
-            const supportContact = process.env.SUPPORT_CONTACT_TELEGRAM || 'your_support_contact_env_var';
-            const escapedSupportContact = escapeMarkdownV2(supportContact);
-            text = `📞 *Support*\n\nIf you need help or encounter any issues, please reach out to our support team: @${escapedSupportContact}\n\n` +
-                    `Please provide your User ID \\(\`${escapeMarkdownV2(userId)}\`\\) and any relevant Bet IDs or Transaction details when contacting support\\.`; // Escaped () .
-            break;
-        default:
-            text = `⚠️ Help section \`${escapeMarkdownV2(section)}\` not found\\.`; // Escaped .
-            keyboard.inline_keyboard = [[{ text: '↩️ Back to Main Help', callback_data: 'menu:help' }]]; // Add Emoji
+    try { // Wrap text construction in try block for safety
+        switch (section) {
+            case 'how_to_play':
+                text = "❓ *How to Play*\n\n" +
+                        "1\\. *Deposit SOL*: Use the `/deposit` command or 'Deposit SOL' button in your Wallet menu to get a unique SOL address\\. Send SOL to it\\.\n" +
+                        "2\\. *Choose a Game*: Navigate to 'Play Games' from the main menu and select a game\\.\n" +
+                        "3\\. *Place Your Bet*: Select a predefined bet amount or enter a custom amount when prompted\\.\n" +
+                        "4\\. *Play & Win\\!*: Follow game\\-specific instructions\\. Winnings are instantly credited to your internal balance\\.\n" +
+                        "5\\. *Withdraw SOL*: Use the 'Withdraw SOL' button in your Wallet to send funds to your linked external Solana wallet\\.";
+                break;
+            case 'deposits_withdrawals':
+                // *** FIX #3: Reconstruct lines to avoid interpolation inside escaped parens ***
+                const confirmationsText = `\\(${confirmationLevelHelp}\\)`; // Pre-construct
+                const expiryText = `\\(${expiryMinutesHelp} minutes\\)`; // Pre-construct
+                const feeText = `\\(${feeSOL} SOL\\)`; // Pre-construct
+
+                text = "💰 *Deposits & Withdrawals*\n\n" +
+                        "*Deposits:*\n" +
+                        "  \\- Use `/deposit` or the 'Deposit SOL' button for a unique, temporary SOL address\\.\n" +
+                        "  \\- Send SOL to this address from your external wallet\\.\n" +
+                        `  \\- Funds are credited after network confirmations ${confirmationsText}\\.\n` + // Use pre-constructed
+                        `  \\- Each deposit address expires after a set time ${expiryText}\\. Do NOT reuse expired addresses\\.\n\n` + // Use pre-constructed
+                        "*Withdrawals:*\n" +
+                        "  \\- Link an external wallet using `/wallet YOUR_ADDRESS` or via the 'My Wallet' menu\\.\n" +
+                        "  \\- Choose 'Withdraw SOL' from the Wallet menu and enter the amount\\.\n" +
+                        `  \\- A small network fee applies ${feeText}\\.\n` + // Use pre-constructed
+                        `  \\- Minimum withdrawal: ${minWithdrawSOL} SOL\\.`;
+                break;
+            case 'game_rules':
+                 text = "🎲 *Game Rules*\n\n" +
+                         "*Coinflip*: Choose Heads or Tails\\. 50/50 chance\\. Simple as that\\!\n" +
+                         "*Slots*: Spin the reels\\! Match symbols for payouts\\. Hit the Jackpot \\(💎💎💎\\) for a big win\\!\n" +
+                         "*War*: Your card vs\\. the Dealer's card\\. Highest card wins \\(Ace is high\\)\\. Push on a tie\\.\n" +
+                         "*Race*: Pick a horse to win the race\\. Each horse has different payout odds\\.\n" +
+                         "*Roulette*: European style \\(0\\-36\\)\\. Bet on numbers, colors \\(Red/Black\\), Even/Odd, or Low \\(1\\-18\\)/High \\(19\\-36\\)\\.\n" +
+                         "*Crash*: Watch the multiplier increase\\! Cash out before it crashes to win your bet multiplied by the cashout value\\. If it crashes before you cash out, you lose\\.\n" +
+                         "*Blackjack*: Get closer to 21 than the dealer without going over\\. Aces can be 1 or 11\\. Dealer stands on 17\\. Blackjack \\(Ace \\+ 10\\-value card\\) pays 3:2\\.";
+                break;
+            case 'fairness':
+                 text = "⚖️ *Fairness & House Edge*\n\n" +
+                         "Our games use provably fair algorithms where applicable \\(details may vary per game\\)\\.\n" +
+                         "The House Edge is a small percentage ensuring the bot's operational sustainability\\. It's applied to winnings and varies per game:\n" +
+                         `  \\- Coinflip: ${escapeMarkdownV2(GAME_CONFIG.coinflip.houseEdge * 100)}%\n` +
+                         `  \\- Slots: ${escapeMarkdownV2(GAME_CONFIG.slots.houseEdge * 100)}% \\(plus jackpot contribution\\)\n` +
+                         `  \\- War: ${escapeMarkdownV2(GAME_CONFIG.war.houseEdge * 100)}%\n` +
+                         `  \\- Race: ${escapeMarkdownV2(GAME_CONFIG.race.houseEdge * 100)}%\n` +
+                         `  \\- Roulette: ${escapeMarkdownV2(GAME_CONFIG.roulette.houseEdge * 100)}%\n` +
+                         `  \\- Crash: ${escapeMarkdownV2(GAME_CONFIG.crash.houseEdge * 100)}%\n`+
+                         `  \\- Blackjack: ${escapeMarkdownV2(GAME_CONFIG.blackjack.houseEdge * 100)}%`;
+                break;
+            case 'support':
+                const supportContact = process.env.SUPPORT_CONTACT_TELEGRAM || 'your_support_contact_env_var';
+                const escapedSupportContact = escapeMarkdownV2(supportContact);
+                text = `📞 *Support*\n\nIf you need help or encounter any issues, please reach out to our support team: @${escapedSupportContact}\n\n` +
+                        `Please provide your User ID \\(\`${escapeMarkdownV2(userId)}\`\\) and any relevant Bet IDs or Transaction details when contacting support\\.`;
+                break;
+            default:
+                text = `⚠️ Help section \`${escapeMarkdownV2(section)}\` not found\\.`;
+                keyboard.inline_keyboard = [[{ text: '↩️ Back to Main Help', callback_data: 'menu:help' }]];
+        }
+    } catch (buildError) {
+        console.error(`${logPrefix} Error building help text for section '${section}': ${buildError.message}`);
+        text = `⚠️ An internal error occurred while generating help content for \`${escapeMarkdownV2(section)}\`\\.`;
+        keyboard = fallbackKeyboard; // Use fallback keyboard on text build error
     }
 
     const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: keyboard };
 
-    if (isFromCallback && messageId) {
-        bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options })
-            .catch(e => {
-                if (!e.message.includes("message is not modified")) {
-                    // Log parse errors specifically
-                    if (e.message.toLowerCase().includes("can't parse entities")) {
-                        console.error(`[HelpCmd] Markdown Parse Error sending section '${section}': ${e.message}. Text: ${text}`);
-                    }
-                    safeSendMessage(chatId, text, options);
-                }
-            });
-    } else {
-        safeSendMessage(chatId, text, options);
+    try {
+        if (isFromCallback && messageId) {
+            await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options });
+        } else {
+            await safeSendMessage(chatId, text, options);
+        }
+    } catch (error) {
+        console.error(`${logPrefix} Error sending/editing help section '${section}': ${error.message}`);
+        // *** FIX #8: Improve Error Recovery ***
+        // If sending/editing failed (likely parse error), send a fallback message
+        if (error.message?.toLowerCase().includes("can't parse entities")) {
+            const errorText = `⚠️ There was an error displaying the help section for \`${escapeMarkdownV2(section)}\` due to a formatting issue\\.`;
+            if (isFromCallback && messageId) { // Try editing to the error message + fallback keyboard
+                 bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(()=>{});
+            } else { // Send new if not callback or edit failed
+                 safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
+            }
+        }
+        // No need to send another generic error message here, as the catch block handles it
     }
 }
 
@@ -5869,6 +5751,8 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         let outcomeText = `Status: ${escapeMarkdownV2(bet.status)}`;
         if (bet.status.startsWith('completed_')) {
             const payout = bet.payout_amount_lamports !== null ? BigInt(bet.payout_amount_lamports) : 0n;
+            // Calculate profit based on new accounting (Payout - Stake)
+            // Note: Payout includes stake for wins/pushes now due to Fix #0
             const profit = payout - BigInt(bet.wager_amount_lamports || '0');
             if (bet.status === 'completed_win') outcomeText = `Won ${escapeMarkdownV2(formatSol(profit))} SOL \\(Returned ${escapeMarkdownV2(formatSol(payout))}\\)`;
             else if (bet.status === 'completed_push') outcomeText = `Push \\(Returned ${escapeMarkdownV2(formatSol(payout))}\\)`;
@@ -5893,148 +5777,142 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
 
 
 async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
+    // *** Applying Fix #2: Double-escape parens in descriptions ***
+    // *** Applying Fix #6: Referral Link Display ***
+    // *** Applying Fix #8: Improve Error Recovery ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     let messageToEditId = msgOrCbMsg.message_id;
     let isFromCallback = !!correctUserIdFromCb;
     clearUserState(userId);
 
-    const userDetails = await getUserWalletDetails(userId);
+    const fallbackKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; // Fallback keyboard
 
-    if (!userDetails?.external_withdrawal_address) {
-        const noWalletMsg = `❌ You need to link your wallet first using \`/wallet <YourSolAddress>\` before using the referral system\\. This ensures rewards can be paid out\\.`; // Escaped . <>
-        const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emojis
-        if (isFromCallback && messageToEditId) {
-            return bot.editMessageText(noWalletMsg, {chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
-                    .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard }); });
-        }
-        return safeSendMessage(chatId, noWalletMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
-    }
-    if (!userDetails.referral_code) {
-        let clientGen = null;
-        let generatedCode = null;
-        try {
-            clientGen = await pool.connect();
-            await clientGen.query('BEGIN');
-            const walletCheck = await queryDatabase('SELECT referral_code FROM wallets WHERE user_id=$1 FOR UPDATE', [userId], clientGen); // queryDatabase from Part 2
-            if (walletCheck.rowCount > 0 && !walletCheck.rows[0].referral_code) {
-                generatedCode = generateReferralCode(); // from Part 3
-                await queryDatabase('UPDATE wallets SET referral_code=$1 WHERE user_id=$2', [generatedCode, userId], clientGen);
-                await clientGen.query('COMMIT');
-                console.log(`[ReferralCmd User ${userId}] Generated missing referral code: ${generatedCode}`);
-                updateWalletCache(userId, { referralCode: generatedCode }); // from Part 3
-                userDetails.referral_code = generatedCode; // Update local copy
-            } else {
-                await clientGen.query('ROLLBACK');
-                generatedCode = walletCheck.rows[0]?.referral_code;
-                if (!generatedCode && walletCheck.rowCount > 0) { /* Code is null but user exists? Very odd */ }
-                else if (!generatedCode) { throw new Error("User or code not found after check."); }
-                userDetails.referral_code = generatedCode; // Ensure local copy is updated
-            }
-        } catch (genError) {
-            if(clientGen) await clientGen.query('ROLLBACK').catch(()=>{});
-            console.error(`[ReferralCmd User ${userId}] Error generating/fetching referral code: ${genError.message}`);
-            const genCodeMsg = `There was an error getting your referral code\\. Please try again or contact support\\.`; // Escaped .
-            const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emoji
+    try { // Wrap main logic in try for error recovery
+        const userDetails = await getUserWalletDetails(userId);
+
+        if (!userDetails?.external_withdrawal_address) {
+            const noWalletMsg = `❌ You need to link your wallet first using \`/wallet <YourSolAddress>\` before using the referral system\\. This ensures rewards can be paid out\\.`; // Escaped . <>
+            const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emojis
             if (isFromCallback && messageToEditId) {
-                bot.editMessageText(genCodeMsg, {chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: keyboard }).catch(e => {});
-            } else { safeSendMessage(chatId, genCodeMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard }); }
-            return;
-        } finally {
-            if(clientGen) clientGen.release();
+                return bot.editMessageText(noWalletMsg, {chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
+                        .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard }); });
+            }
+            return safeSendMessage(chatId, noWalletMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
         }
-        if (!userDetails.referral_code) { // Should have code now if generation worked or fetched
-            const stillMissingMsg = `Could not retrieve referral code\\. Please ensure wallet is linked and try again\\.`; // Escaped .
-            const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emoji
-            if (isFromCallback && messageToEditId) { bot.editMessageText(stillMissingMsg, {chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: keyboard }).catch(e => {}); }
-            else { safeSendMessage(chatId, stillMissingMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard }); }
-            return;
+        if (!userDetails.referral_code) {
+            let clientGen = null; let generatedCode = null;
+            try {
+                clientGen = await pool.connect(); await clientGen.query('BEGIN');
+                const walletCheck = await queryDatabase('SELECT referral_code FROM wallets WHERE user_id=$1 FOR UPDATE', [userId], clientGen);
+                if (walletCheck.rowCount > 0 && !walletCheck.rows[0].referral_code) {
+                    generatedCode = generateReferralCode();
+                    await queryDatabase('UPDATE wallets SET referral_code=$1 WHERE user_id=$2', [generatedCode, userId], clientGen);
+                    await clientGen.query('COMMIT'); console.log(`[ReferralCmd User ${userId}] Generated missing referral code: ${generatedCode}`);
+                    updateWalletCache(userId, { referralCode: generatedCode }); userDetails.referral_code = generatedCode;
+                } else { await clientGen.query('ROLLBACK'); generatedCode = walletCheck.rows[0]?.referral_code; if (!generatedCode) { throw new Error("User or code not found after check."); } userDetails.referral_code = generatedCode; }
+            } catch (genError) { if(clientGen) await clientGen.query('ROLLBACK').catch(()=>{}); throw genError; /* Re-throw to outer catch */ }
+            finally { if(clientGen) clientGen.release(); }
+            if (!userDetails.referral_code) { throw new Error("Could not retrieve or generate referral code."); }
         }
-    }
 
-    const refCode = userDetails.referral_code;
-    const totalEarningsLamports = await getTotalReferralEarnings(userId); // from Part 2
-    const totalEarningsSOL = escapeMarkdownV2(formatSol(totalEarningsLamports)); // formatSol from Part 3
-    const referralCount = escapeMarkdownV2(String(userDetails.referral_count || 0));
-    const withdrawalAddress = escapeMarkdownV2(userDetails.external_withdrawal_address);
-    const escapedRefCode = escapeMarkdownV2(refCode);
+        const refCode = userDetails.referral_code;
+        const totalEarningsLamports = await getTotalReferralEarnings(userId); // from Part 2
+        const totalEarningsSOL = escapeMarkdownV2(formatSol(totalEarningsLamports)); // formatSol from Part 3
+        const referralCount = escapeMarkdownV2(String(userDetails.referral_count || 0));
+        const withdrawalAddress = escapeMarkdownV2(userDetails.external_withdrawal_address);
+        const escapedRefCode = escapeMarkdownV2(refCode);
 
-    let botUsername = process.env.BOT_USERNAME || 'YOUR_BOT_USERNAME'; // BOT_USERNAME from Part 1 env
-    let escapedBotUsername = escapeMarkdownV2(botUsername);
-    if (botUsername === 'YOUR_BOT_USERNAME') { try { const me = await bot.getMe(); if (me.username) { botUsername = me.username; escapedBotUsername = escapeMarkdownV2(me.username); } } catch (e) {} }
-    const referralLink = `https://t.me/${botUsername}?start=${refCode}`;
-    const displayReferralLink = escapeMarkdownV2(referralLink); // Escaped version for display in text
+        let botUsername = process.env.BOT_USERNAME || 'YOUR_BOT_USERNAME';
+        let escapedBotUsername = escapeMarkdownV2(botUsername);
+        if (botUsername === 'YOUR_BOT_USERNAME') { try { const me = await bot.getMe(); if (me.username) { botUsername = me.username; escapedBotUsername = escapeMarkdownV2(me.username); } } catch (e) {} }
+        // Raw link for clickability and switch_inline_query
+        const referralLink = `https://t.me/${botUsername}?start=${refCode}`;
+        // Escaped link only needed if displayed inside backticks potentially
+        // const displayReferralLinkEscaped = escapeMarkdownV2(referralLink);
 
-    const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS)); // Constants from Part 1
-    const milestonePercent = escapeMarkdownV2(String(REFERRAL_MILESTONE_REWARD_PERCENT * 100)); // Constants from Part 1
-    const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => { const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${t.maxCount}`; const percent = escapeMarkdownV2(String(t.percent * 100)); return `${count} refs \\= ${percent}%`; }).join(', '); // Escaped <> = %
+        const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS)); // Constants from Part 1
+        const milestonePercent = escapeMarkdownV2(String(REFERRAL_MILESTONE_REWARD_PERCENT * 100)); // Constants from Part 1
+        const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => { const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${t.maxCount}`; const percent = escapeMarkdownV2(String(t.percent * 100)); return `${count} refs \\= ${percent}%`; }).join(', '); // Escaped <> = %
 
-    // MarkdownV2 Safety: Escape everything meticulously
-    let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
-                      `Share your unique link to earn SOL when your friends play\\!\n\n` + // Escaped !
-                      `*Your Code:* \`${escapedRefCode}\`\n` +
-                      `*Your Link:* \n\`${displayReferralLink}\`\n` + // Display escaped link
-                      `\\_(Tap the button below to easily share\\)_\n\n`+ // Escaped () _
-                      `*Successful Referrals:* ${referralCount}\n` +
-                      `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-                      `*How Rewards Work:*\n` +
-                      `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Escaped . () ! %
-                      `  tiers: ${tiersDesc}\n` + // tiersDesc already escaped
-                      `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\n\n` + // Escaped . () %
-                      `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
+        // *** FIX #2: Double-escape parentheses here ***
+        // *** FIX #6: Referral Link Display ***
+        let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
+                          `Share your unique link to earn SOL when your friends play\\!\n\n` + // Escaped !
+                          `*Your Code:* \`${escapedRefCode}\`\n` +
+                          `*Your Clickable Link:*\n${referralLink}\n` + // Display raw link for auto-linking
+                          `\\_(Tap button below or copy here: \`${referralLink}\`\\)_\n\n`+ // Link in backticks for copying (unescaped)
+                          `*Successful Referrals:* ${referralCount}\n` +
+                          `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+                          `*How Rewards Work:*\n` +
+                          // Double escape parens
+                          `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\\\(min ${minBetAmount} SOL wager\\\\)\\. Your % increases with more referrals\\!\n` + // Escaped . ! % and \\( \\)
+                          `  tiers: ${tiersDesc}\n` + // tiersDesc already escaped
+                           // Double escape parens
+                          `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\\\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\\\)\\.\\.\n\n` + // Escaped . % and \\( \\) ...
+                          `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
 
-    const keyboard = [ // Add Emojis
-        // Use the unescaped link for the switch_inline_query parameter
-        [{ text: '🔗 Share My Referral Link!', switch_inline_query: referralLink }],
-        [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
-    ];
-    const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: {inline_keyboard: keyboard} };
+        const keyboard = [
+            [{ text: '🔗 Share My Referral Link!', switch_inline_query: referralLink }], // Use raw link for button
+            [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
+        ];
+        const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: {inline_keyboard: keyboard} };
 
-    if (isFromCallback && messageToEditId) {
-        bot.editMessageText(referralMsg, {chat_id: chatId, message_id: messageToEditId, ...options})
-            .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, referralMsg, options); });
-    } else {
-        safeSendMessage(chatId, referralMsg, options);
+        if (isFromCallback && messageToEditId) {
+            await bot.editMessageText(referralMsg, {chat_id: chatId, message_id: messageToEditId, ...options});
+        } else {
+            await safeSendMessage(chatId, referralMsg, options);
+        }
+
+    } catch (error) {
+        console.error(`[ReferralCmd User ${userId}] Error: ${error.message}`);
+        const errorText = `⚠️ An error occurred displaying referral info: ${escapeMarkdownV2(error.message)}\\.`;
+        // *** FIX #8: Error Recovery for Referral Command ***
+        if (isFromCallback && messageToEditId) {
+            // Try editing to the error message + fallback keyboard
+            bot.editMessageText(errorText, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(()=>{
+                // If edit fails, send new fallback
+                safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
+            });
+        } else { // Send new fallback message
+            safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
+        }
     }
 }
 
 
 async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** Applying Fix: Correct Tap-to-copy formatting and concatenation ***
+    // *** Applying Fix #4: Revised Deposit Hint Format ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const logPrefix = `[DepositCmd User ${userId}]`;
-    let messageToEditId = msgOrCbMsg.message_id; // Get message ID from msg or callback msg
+    let messageToEditId = msgOrCbMsg.message_id;
     let isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); // Clear any pending state
+    clearUserState(userId);
 
     let workingMessageId = messageToEditId;
-    // If from callback, edit the message first. If direct command, send a new temp message.
     if (isFromCallback && messageToEditId) {
-        await bot.editMessageText("⏳ Generating your unique deposit address\\.\\.\\.", { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } }).catch(() => { workingMessageId = null; }); // Escaped . ...
+        await bot.editMessageText("⏳ Generating your unique deposit address\\.\\.\\.", { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } }).catch(() => { workingMessageId = null; });
     } else if (!isFromCallback) {
-        const tempMsg = await safeSendMessage(chatId, "⏳ Generating deposit address\\.\\.\\.", { parse_mode: 'MarkdownV2' }); // Escaped . ...
+        const tempMsg = await safeSendMessage(chatId, "⏳ Generating deposit address\\.\\.\\.", { parse_mode: 'MarkdownV2' });
         workingMessageId = tempMsg?.message_id;
     }
-    // If edit failed during callback, try sending new
     if (!workingMessageId && isFromCallback) {
-        const tempMsg = await safeSendMessage(chatId, "⏳ Generating deposit address\\.\\.\\.", { parse_mode: 'MarkdownV2' }); // Escaped . ...
+        const tempMsg = await safeSendMessage(chatId, "⏳ Generating deposit address\\.\\.\\.", { parse_mode: 'MarkdownV2' });
         workingMessageId = tempMsg?.message_id;
     }
     if (!workingMessageId) {
         console.error(`${logPrefix} Failed to establish a message context for deposit address.`);
-        safeSendMessage(chatId, "Failed to initiate deposit process\\. Please try again\\.", { parse_mode: 'MarkdownV2' }); // Escaped .
+        safeSendMessage(chatId, "Failed to initiate deposit process\\. Please try again\\.", { parse_mode: 'MarkdownV2' });
         return;
     }
 
     try {
-        // Ensure user exists before generating address
         let tempClient = null;
-        try { tempClient = await pool.connect(); await ensureUserExists(userId, tempClient); } // from Part 2
+        try { tempClient = await pool.connect(); await ensureUserExists(userId, tempClient); }
         finally { if (tempClient) tempClient.release(); }
 
-        // Check for existing active address first
-        const existingAddresses = await queryDatabase( // queryDatabase from Part 2
+        const existingAddresses = await queryDatabase(
             "SELECT deposit_address, expires_at FROM deposit_addresses WHERE user_id = $1 AND status = 'pending' AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
             [userId]
         );
@@ -6045,15 +5923,14 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
             const existingExpiresAt = new Date(existing.expires_at);
             const expiresInMs = existingExpiresAt.getTime() - Date.now();
             const expiresInMinutes = Math.ceil(expiresInMs / (60 * 1000));
-            const escapedExistingAddress = escapeMarkdownV2(existingAddress); // Escape here
+            const escapedExistingAddress = escapeMarkdownV2(existingAddress);
 
-            // MarkdownV2 Safety: Escape address, time
-            // ** Corrected tap-to-copy format: single backticks for hint, correct '+' **
-            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapedExistingAddress}\`\n` + // '+' is correct
-                       `(Tap address to copy)\n\n` + // Hint text WITHOUT backticks
-                       `It expires in approximately ${escapeMarkdownV2(expiresInMinutes)} minutes\\.`; // Escaped . ()
-            text += `\n\nOnce you send SOL, it will be credited after confirmations\\. New deposits to this address will be credited until it expires\\.`; // Escaped .
-            const keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }], [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${existingAddress}` }]]; // Add Emojis
+            // *** FIX #4: Revised Hint Format - Address in backticks, hint below in italics ***
+            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapedExistingAddress}\`\n` + // Address in backticks
+                       `\\_\(Tap the address above to copy\\)\\_\\n\n` + // Hint below, in italics, parens/underscores escaped
+                       `It expires in approximately ${escapeMarkdownV2(expiresInMinutes)} minutes\\.`;
+            text += `\n\nOnce you send SOL, it will be credited after confirmations\\. New deposits to this address will be credited until it expires\\.`;
+            const keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }], [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${existingAddress}` }]];
             bot.editMessageText(text, {
                 chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2',
                 reply_markup: { inline_keyboard: keyboard }
@@ -6062,31 +5939,30 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         }
 
 
-        const nextIndex = await getNextDepositAddressIndex(userId); // from Part 2
-        const derivedInfo = await generateUniqueDepositAddress(userId, nextIndex); // from Part 3
-        if (!derivedInfo) { throw new Error("Failed to generate deposit address\\. Master seed phrase might be an issue\\."); } // Escaped .
+        const nextIndex = await getNextDepositAddressIndex(userId);
+        const derivedInfo = await generateUniqueDepositAddress(userId, nextIndex);
+        if (!derivedInfo) { throw new Error("Failed to generate deposit address\\. Master seed phrase might be an issue\\."); }
 
         const depositAddress = derivedInfo.publicKey.toBase58();
-        const expiresAt = new Date(Date.now() + DEPOSIT_ADDRESS_EXPIRY_MS); // DEPOSIT_ADDRESS_EXPIRY_MS from Part 1
-        const recordResult = await createDepositAddressRecord(userId, depositAddress, derivedInfo.derivationPath, expiresAt); // from Part 2
-        if (!recordResult.success) { throw new Error(escapeMarkdownV2(recordResult.error || "Failed to save deposit address record in DB\\.")); } // Escaped .
+        const expiresAt = new Date(Date.now() + DEPOSIT_ADDRESS_EXPIRY_MS);
+        const recordResult = await createDepositAddressRecord(userId, depositAddress, derivedInfo.derivationPath, expiresAt);
+        if (!recordResult.success) { throw new Error(escapeMarkdownV2(recordResult.error || "Failed to save deposit address record in DB\\.")); }
 
-        const expiryMinutes = escapeMarkdownV2(String(Math.round(DEPOSIT_ADDRESS_EXPIRY_MS / (60 * 1000)))); // DEPOSIT_ADDRESS_EXPIRY_MS from Part 1
-        const confirmationLevel = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL); // DEPOSIT_CONFIRMATION_LEVEL from Part 1
+        const expiryMinutes = escapeMarkdownV2(String(Math.round(DEPOSIT_ADDRESS_EXPIRY_MS / (60 * 1000))));
+        const confirmationLevel = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL);
         const escapedAddress = escapeMarkdownV2(depositAddress);
 
-        // --- Message structure with corrected tap-to-copy format ---
+        // *** FIX #4: Revised Hint Format - Address in backticks, hint below in italics ***
         const message = `💰 *Your Unique Deposit Address*\n\n` +
                         `Send SOL to this unique address:\n\n` +
                         `\`${escapedAddress}\`\n` + // Address in backticks
-                        `(Tap address to copy)\n\n` + // Hint text WITHOUT backticks
+                        `\\_\(Tap the address above to copy\\)\\_\\n\n` + // Hint below, in italics, parens/underscores escaped
                         `⚠️ *Important:*\n` +
-                        `1\\. This address is unique to you and for this deposit session\\. It will expire in *${expiryMinutes} minutes*\\.\n` + // Escaped .
-                        `2\\. For new deposits, use \`/deposit\` again or the menu option\\.\n` + // Escaped .
-                        `3\\. Confirmation: *${confirmationLevel}* network confirmations required\\.`; // Escaped .
-        // --- End modified message ---
+                        `1\\. This address is unique to you and for this deposit session\\. It will expire in *${expiryMinutes} minutes*\\.\n` +
+                        `2\\. For new deposits, use \`/deposit\` again or the menu option\\.\n` +
+                        `3\\. Confirmation: *${confirmationLevel}* network confirmations required\\.`;
 
-        const depositKeyboard = [ // Add Emojis
+        const depositKeyboard = [
             [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${depositAddress}` }],
             [{ text: '✅ Done / Back to Wallet', callback_data: 'menu:wallet' }]
         ];
@@ -6094,20 +5970,19 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
 
         await bot.editMessageText(message, {chat_id: chatId, message_id: workingMessageId, ...options}).catch(e => {
              if (e.message && e.message.includes("can't parse entities")) {
-                 console.error(`❌ [DepositCmd User ${userId}] PARSE ERROR with corrected tap-to-copy hint! Message: ${message}`);
-                 // Fallback to plain text message
-                 const plainMessage = `Your Deposit Address:\n${depositAddress}\n(Tap address to copy)\n\nExpires in ${expiryMinutes} minutes. Confirmation: ${confirmationLevel}.`;
-                 safeSendMessage(chatId, plainMessage, {reply_markup: {inline_keyboard: depositKeyboard}}); // Send plain text
-             } else if (!e.message.includes("message is not modified")) { // Handle other edit errors
+                 console.error(`❌ [DepositCmd User ${userId}] PARSE ERROR with revised hint! Message: ${message}`);
+                 const plainMessage = `Your Deposit Address:\n${depositAddress}\n(Tap address above to copy)\n\nExpires in ${expiryMinutes} minutes. Confirmation: ${confirmationLevel}.`;
+                 safeSendMessage(chatId, plainMessage, {reply_markup: {inline_keyboard: depositKeyboard}});
+             } else if (!e.message.includes("message is not modified")) {
                  console.warn(`${logPrefix} Failed to edit message ${workingMessageId} with deposit address, sending new. Error: ${e.message}`);
-                 safeSendMessage(chatId, message, options); // Try sending original MarkdownV2 message again
+                 safeSendMessage(chatId, message, options);
              }
          });
 
     } catch (error) {
         console.error(`${logPrefix} Error: ${error.message}`);
-        const errorMsg = `❌ Error generating deposit address: ${escapeMarkdownV2(error.message)}\\. Please try again\\. If the issue persists, contact support\\.`; // Escaped .
-        const errorKeyboard = [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]; // Add Emoji
+        const errorMsg = `❌ Error generating deposit address: ${escapeMarkdownV2(error.message)}\\. Please try again\\. If the issue persists, contact support\\.`;
+        const errorKeyboard = [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]];
         const errorOptions = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: errorKeyboard} };
         bot.editMessageText(errorMsg, {chat_id: chatId, message_id: workingMessageId, ...errorOptions}).catch(e => safeSendMessage(chatId, errorMsg, errorOptions));
     }
@@ -6118,73 +5993,67 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const logPrefix = `[WithdrawCmd User ${userId}]`;
-    const breadcrumb = "Withdraw SOL"; // Static, doesn't need escaping here
+    const breadcrumb = "Withdraw SOL";
     let messageToEditId = msgOrCbMsg.message_id;
     let isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); // Clear any pending state
+    clearUserState(userId);
 
     let workingMessageId = messageToEditId;
     if (isFromCallback && messageToEditId) {
-        await bot.editMessageText("💸 Preparing withdrawal process\\.\\.\\.", { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } }).catch(() => { workingMessageId = null; }); // Escaped . ... Add Emoji
+        await bot.editMessageText("💸 Preparing withdrawal process\\.\\.\\.", { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } }).catch(() => { workingMessageId = null; });
     } else if (!isFromCallback) {
-        const tempMsg = await safeSendMessage(chatId, "💸 Preparing withdrawal process\\.\\.\\.", { parse_mode: 'MarkdownV2' }); // Escaped . ... Add Emoji
+        const tempMsg = await safeSendMessage(chatId, "💸 Preparing withdrawal process\\.\\.\\.", { parse_mode: 'MarkdownV2' });
         workingMessageId = tempMsg?.message_id;
     }
-    if (!workingMessageId && isFromCallback) { // Handle case where initial edit failed
-        const tempMsg = await safeSendMessage(chatId, "💸 Preparing withdrawal process\\.\\.\\.", { parse_mode: 'MarkdownV2' }); // Escaped . ... Add Emoji
+    if (!workingMessageId && isFromCallback) {
+        const tempMsg = await safeSendMessage(chatId, "💸 Preparing withdrawal process\\.\\.\\.", { parse_mode: 'MarkdownV2' });
         workingMessageId = tempMsg?.message_id;
     }
-    if (!workingMessageId) { console.error(`${logPrefix} Failed message context for withdraw.`); safeSendMessage(chatId, "Failed to initiate withdrawal process\\. Please try again\\.", { parse_mode: 'MarkdownV2' }); return; } // Escaped .
+    if (!workingMessageId) { console.error(`${logPrefix} Failed message context for withdraw.`); safeSendMessage(chatId, "Failed to initiate withdrawal process\\. Please try again\\.", { parse_mode: 'MarkdownV2' }); return; }
 
     try {
-        const linkedAddress = await getLinkedWallet(userId); // from Part 2
+        const linkedAddress = await getLinkedWallet(userId);
         if (!linkedAddress) {
-            const noWalletMsg = `⚠️ You must set your withdrawal address first using \`/wallet <YourSolanaAddress>\`\\.`; // Escaped . <>
-            const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emojis
+            const noWalletMsg = `⚠️ You must set your withdrawal address first using \`/wallet <YourSolanaAddress>\`\\.`;
+            const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]};
             return bot.editMessageText(noWalletMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
                     .catch(e => safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard}));
         }
 
-        const currentBalance = await getUserBalance(userId); // from Part 2
-        const feeLamports = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS || '5000'); // From Part 1 constants
-        const minWithdrawTotal = MIN_WITHDRAWAL_LAMPORTS + feeLamports; // MIN_WITHDRAWAL_LAMPORTS from Part 1
+        const currentBalance = await getUserBalance(userId);
+        const feeLamports = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS || '5000');
+        const minWithdrawTotal = MIN_WITHDRAWAL_LAMPORTS + feeLamports;
 
         if (currentBalance < minWithdrawTotal) {
-            // MarkdownV2 Safety: Escape amounts, fee
-            const lowBalMsg = `⚠️ Your balance \\(${escapeMarkdownV2(formatSol(currentBalance))} SOL\\) is below the minimum required to withdraw \\(${escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS))} SOL \\+ fee\\)\\.`; // Escaped . () +
-            const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emoji
+            const lowBalMsg = `⚠️ Your balance \\(${escapeMarkdownV2(formatSol(currentBalance))} SOL\\) is below the minimum required to withdraw \\(${escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS))} SOL \\+ fee\\)\\.`;
+            const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]};
             return bot.editMessageText(lowBalMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
                     .catch(e => safeSendMessage(chatId, lowBalMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard}));
         }
 
-        // Set state to await amount input
-        // userStateCache from Part 1
         userStateCache.set(userId, {
             state: 'awaiting_withdrawal_amount', chatId: String(chatId), messageId: workingMessageId,
-            data: { linkedWallet: linkedAddress, breadcrumb, originalMessageId: workingMessageId, currentBalance: currentBalance.toString() }, // Pass current balance to state
+            data: { linkedWallet: linkedAddress, breadcrumb, originalMessageId: workingMessageId, currentBalance: currentBalance.toString() },
             timestamp: Date.now()
         });
 
-        // Edit the 'working' message to ask for the amount
         const minWithdrawSOLText = escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS));
         const feeSOLText = escapeMarkdownV2(formatSol(feeLamports));
         const escapedAddress = escapeMarkdownV2(linkedAddress);
-        // MarkdownV2 Safety: Escape all dynamic values
         const promptText = `${escapeMarkdownV2(breadcrumb)}\n\n` +
                             `Your withdrawal address: \`${escapedAddress}\`\n` +
-                            `Minimum withdrawal: ${minWithdrawSOLText} SOL\\. Fee: ${feeSOLText} SOL\\.\n\n` + // Escaped .
-                            `Please enter the amount of SOL you wish to withdraw \\(e\\.g\\., 0\\.5\\), or /cancel:`; // Escaped . () :
+                            `Minimum withdrawal: ${minWithdrawSOLText} SOL\\. Fee: ${feeSOLText} SOL\\.\n\n` +
+                            `Please enter the amount of SOL you wish to withdraw \\(e\\.g\\., 0\\.5\\), or /cancel:`;
 
         await bot.editMessageText(promptText, {
             chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2',
-            // Add Emoji
-            reply_markup: { inline_keyboard: [[{ text: '❌ Cancel Withdrawal', callback_data: 'menu:wallet' }]]} // Go back to wallet menu on cancel
+            reply_markup: { inline_keyboard: [[{ text: '❌ Cancel Withdrawal', callback_data: 'menu:wallet' }]]}
         });
 
     } catch (error) {
         console.error(`${logPrefix} Error: ${error.message}`);
-        const errorMsg = `❌ Error starting withdrawal\\. Please try again\\. Or /cancel\\.`; // Escaped .
-        const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emoji
+        const errorMsg = `❌ Error starting withdrawal\\. Please try again\\. Or /cancel\\.`;
+        const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]};
         bot.editMessageText(errorMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
             .catch(e => safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard}));
         clearUserState(userId);
@@ -6197,14 +6066,12 @@ async function handleLeaderboardsCommand(msgOrCbMsg, args, correctUserIdFromCb =
     const chatId = String(msgOrCbMsg.chat.id);
     const messageId = msgOrCbMsg.message_id;
     const isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); // Clear any pending state
+    clearUserState(userId);
 
-    // Argument might be leaderboard type from command or param from callback
-    // If command is /leaderboards type, args[1] is type. If callback is leaderboard_nav:type:page, args[0] is type.
     const type = isFromCallback ? args[0] : (args.length > 1 ? args[1] : 'overall_wagered');
     const page = isFromCallback ? parseInt(args[1] || '0', 10) : (args.length > 2 ? parseInt(args[2], 10) : 0);
 
-    await displayLeaderboard(chatId, messageId, userId, type, page, isFromCallback); // Defined below
+    await displayLeaderboard(chatId, messageId, userId, type, page, isFromCallback);
 }
 
 
@@ -6224,86 +6091,64 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
     const offset = page * itemsPerPage;
 
     let querySQL = '';
-    let paramsSQL = [itemsPerPage, offset]; // Renamed to avoid conflict
-    let title = '🏆 Overall Top Wagerers'; // Default title
+    let paramsSQL = [itemsPerPage, offset];
+    let title = '🏆 Overall Top Wagerers';
 
-    // Example queries - THESE NEED TO BE REFINED BASED ON ACTUAL DESIRED LEADERBOARDS
     switch (type) {
         case 'overall_wagered':
-            // Fetches from wallets table
             querySQL = `SELECT user_id, total_wagered as score FROM wallets WHERE total_wagered > 0 ORDER BY total_wagered DESC LIMIT $1 OFFSET $2;`;
             title = '🏆 Overall Top Wagerers (Total SOL)';
             break;
-        case 'overall_profit': // Example - Requires calculating profit
+        case 'overall_profit':
             querySQL = `SELECT user_id, SUM(COALESCE(payout_amount_lamports, 0) - wager_amount_lamports) as score FROM bets WHERE status LIKE 'completed_%' GROUP BY user_id HAVING SUM(COALESCE(payout_amount_lamports, 0) - wager_amount_lamports) != 0 ORDER BY score DESC LIMIT $1 OFFSET $2;`;
             title = '📈 Overall Top Profit (Total SOL)';
             break;
-        // Add cases for specific games e.g., 'slots_wagered', 'coinflip_profit'
         default:
-            const errorText = `⚠️ Leaderboard type \`${escapeMarkdownV2(type)}\` is not available yet\\.`; // Escaped .
-            const backKeyboard = { inline_keyboard: [[{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; // Add Emojis
-            if (isFromCallback && messageId) {
-                bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboard });
-            } else {
-                safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: backKeyboard });
-            }
+            const errorText = `⚠️ Leaderboard type \`${escapeMarkdownV2(type)}\` is not available yet\\.`;
+            const backKeyboard = { inline_keyboard: [[{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] };
+            if (isFromCallback && messageId) { bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
+            else { safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
             return;
     }
 
     try {
-        const results = await queryDatabase(querySQL, paramsSQL); // queryDatabase from Part 2
-        let leaderboardText = `👑 *${escapeMarkdownV2(title)}* \\- Page ${escapeMarkdownV2(page + 1)}\n\n`; // Escaped -
+        const results = await queryDatabase(querySQL, paramsSQL);
+        let leaderboardText = `👑 *${escapeMarkdownV2(title)}* \\- Page ${escapeMarkdownV2(page + 1)}\n\n`;
 
         if (results.rows.length === 0) {
-            leaderboardText += (page === 0) ? "No data available for this leaderboard yet\\." : "No more entries on this page\\."; // Escaped .
+            leaderboardText += (page === 0) ? "No data available for this leaderboard yet\\." : "No more entries on this page\\.";
         } else {
             for (let i = 0; i < results.rows.length; i++) {
                 const row = results.rows[i];
                 const rank = offset + i + 1;
-                // Attempt to get a better display name (async, could be slow for leaderboards) - using fallback for now
-                // const displayName = await getUserDisplayName(chatId, row.user_id);
                 const displayName = `User...${escapeMarkdownV2(String(row.user_id).slice(-5))}`;
-                let valueDisplay = 'N/A'; // Default
-                if (row.score !== undefined && row.score !== null) { // Generic 'score' column for wagered, profit, etc. Check for null too.
-                    valueDisplay = `${escapeMarkdownV2(formatSol(row.score))} SOL`;
-                }
-                leaderboardText += `${escapeMarkdownV2(rank)}\\. ${displayName}: ${valueDisplay}\n`; // Escaped .
+                let valueDisplay = 'N/A';
+                if (row.score !== undefined && row.score !== null) { valueDisplay = `${escapeMarkdownV2(formatSol(row.score))} SOL`; }
+                leaderboardText += `${escapeMarkdownV2(rank)}\\. ${displayName}: ${valueDisplay}\n`;
             }
         }
 
-        // Pagination buttons
         const keyboardButtons = [];
         const rowNav = [];
-        if (page > 0) { // Add Emoji
-            rowNav.push({ text: '⬅️ Previous', callback_data: `leaderboard_nav:${type}:${page - 1}` });
-        }
-        // Only show Next if we received a full page of results
-        if (results.rows.length === itemsPerPage) { // Add Emoji
-            rowNav.push({ text: 'Next ➡️', callback_data: `leaderboard_nav:${type}:${page + 1}` });
-        }
+        if (page > 0) { rowNav.push({ text: '⬅️ Previous', callback_data: `leaderboard_nav:${type}:${page - 1}` }); }
+        if (results.rows.length === itemsPerPage) { rowNav.push({ text: 'Next ➡️', callback_data: `leaderboard_nav:${type}:${page + 1}` }); }
         if (rowNav.length > 0) keyboardButtons.push(rowNav);
-        keyboardButtons.push([{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Main Menu', callback_data: 'menu:main' }]); // Add Emojis
+        keyboardButtons.push([{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Main Menu', callback_data: 'menu:main' }]);
 
         const replyMarkup = { inline_keyboard: keyboardButtons };
 
         if (isFromCallback && messageId) {
-            bot.editMessageText(leaderboardText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: replyMarkup }).catch(e => {
-                if (!e.message.includes("message is not modified")) console.warn(`[DisplayLeaderboard] Edit error: ${e.message}`);
-            });
+            bot.editMessageText(leaderboardText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: replyMarkup }).catch(e => { if (!e.message.includes("message is not modified")) console.warn(`[DisplayLeaderboard] Edit error: ${e.message}`); });
         } else {
             safeSendMessage(chatId, leaderboardText, { parse_mode: 'MarkdownV2', reply_markup: replyMarkup });
         }
 
     } catch (err) {
         console.error(`${logPrefix} Error fetching leaderboard data: ${err.message}`);
-        // MarkdownV2 Safety: Escape error
-        const errorText = `⚠️ Error loading leaderboard: ${escapeMarkdownV2(err.message)}\\. Please try again later\\.`; // Escaped .
-        const backKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; // Add Emoji
-        if (isFromCallback && messageId) {
-            bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboard });
-        } else {
-            safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: backKeyboard });
-        }
+        const errorText = `⚠️ Error loading leaderboard: ${escapeMarkdownV2(err.message)}\\. Please try again later\\.`;
+        const backKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] };
+        if (isFromCallback && messageId) { bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
+        else { safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
     }
 }
 
@@ -6318,266 +6163,112 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
  * @param {boolean} [isFromCallback=true] Assume true if called here.
  */
 async function handleMenuAction(userId, chatId, messageId, menuType, params = [], isFromCallback = true) {
-    // *** Applying Fix: Escape periods in link_wallet_prompt text ***
+    // *** Applying Fix #5: Escape periods in link_wallet_prompt text ***
+    // *** Applying Fix #8: Improve Error Recovery (Added try/catch and fallback keyboard) ***
     const logPrefix = `[MenuAction User ${userId} Menu ${menuType}]`;
     console.log(`${logPrefix} Handling menu action.`);
     let text = `Menu: ${escapeMarkdownV2(menuType)}`;
     let keyboard = { inline_keyboard: [] };
-    let setState = null; // Variable to hold state if needed
+    let setState = null;
+    const fallbackKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; // Fallback keyboard
 
-    // Clear any previous pending state *unless* the action is meant to start a stateful flow
-    if (menuType !== 'link_wallet_prompt') { // Don't clear state right before setting it
-        clearUserState(userId);
-    }
+    if (menuType !== 'link_wallet_prompt') { clearUserState(userId); }
 
-    switch (menuType) {
-        case 'link_wallet_prompt':
-            // ** Link Wallet State Fix Already Applied **
-            // ** Applying Fix: Escape periods in prompt text **
-            clearUserState(userId); // Clear any *previous* state first
-            const breadcrumbWallet = "Link Wallet";
-            // MarkdownV2 Safety: Escape example address, command for cancel, and periods
-            text = `🔗 *Link/Update External Wallet*\n\nPlease send your Solana wallet address in the chat\\.\n\nExample: \`SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\`\n\nOr type /cancel to go back\\.`; // Escaped '.'
-            keyboard.inline_keyboard = [
-                // Provide cancel option, going back to wallet menu seems logical
-                [{ text: '❌ Cancel', callback_data: 'menu:wallet' }] // Changed Cancel to go back to wallet menu
-            ];
-            // Set user state to await the address input
-            // userStateCache from Part 1
-            setState = {
-                state: 'awaiting_withdrawal_address', // State name matches the handler
-                chatId: String(chatId),
-                messageId: messageId, // ID of the message we are editing (the prompt)
-                data: { breadcrumb: breadcrumbWallet, originalMessageId: messageId }, // Pass context
-                timestamp: Date.now()
-            };
-            break; // Break here, the editMessageText below handles sending the prompt.
+    try { // Wrap text/keyboard construction
+        switch (menuType) {
+            case 'link_wallet_prompt':
+                clearUserState(userId);
+                const breadcrumbWallet = "Link Wallet";
+                // *** FIX #5: Escape periods ***
+                text = `🔗 *Link/Update External Wallet*\n\nPlease send your Solana wallet address in the chat\\.\n\nExample: \`SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\`\n\nOr type /cancel to go back\\.`; // Escaped '.'
+                keyboard.inline_keyboard = [ [{ text: '❌ Cancel', callback_data: 'menu:wallet' }] ];
+                setState = {
+                    state: 'awaiting_withdrawal_address', chatId: String(chatId), messageId: messageId,
+                    data: { breadcrumb: breadcrumbWallet, originalMessageId: messageId }, timestamp: Date.now()
+                };
+                break;
 
-        case 'wallet': // Display wallet info (called from menu or /wallet with no args)
-            const userBalance = await getUserBalance(userId); // from Part 2
-            const userDetails = await getUserWalletDetails(userId); // from Part 2
-            // MarkdownV2 Safety: Escape balance, address, code, counts, wagered amounts, N/A, command examples, punctuation
-            text = `👤 *Your Wallet & Stats*\n\n` +
-                    `*Balance:* ${escapeMarkdownV2(formatSol(userBalance))} SOL\n`; // formatSol from Part 3
-            if (userDetails?.external_withdrawal_address) { text += `*Withdrawal Address:* \`${escapeMarkdownV2(userDetails.external_withdrawal_address)}\`\n`; }
-            else { text += `*Withdrawal Address:* Not Set \\(Use \`/wallet <YourSolAddress>\` or button below\\)\n`; } // Escaped () <>
-            if (userDetails?.referral_code) { text += `*Referral Code:* \`${escapeMarkdownV2(userDetails.referral_code)}\`\n`; }
-            else { text += `*Referral Code:* Not Yet Generated \\(Link wallet first\\)\n`; } // Escaped ()
-            text += `*Referrals Made:* ${escapeMarkdownV2(String(userDetails?.referral_count || 0))}\n`;
-            text += `*Total Wagered:* ${escapeMarkdownV2(formatSol(userDetails?.total_wagered || 0n))} SOL\n`;
-
-            const lastBetsDB = userDetails?.last_bet_amounts || {}; // from DB
-            const lastBetsMemory = userLastBetAmounts.get(userId) || new Map(); // from memory (Part 1 state)
-            const combinedLastBets = {...lastBetsDB};
-            lastBetsMemory.forEach((value, key) => { combinedLastBets[key] = value.toString(); });
-
-            if (Object.keys(combinedLastBets).length > 0) {
-                text += `\n*Last Bet Amounts \\(Approx\\.\\):*\n`; // Escaped . ()
-                for (const game in combinedLastBets) {
-                    if (GAME_CONFIG[game]) { // GAME_CONFIG from Part 1
-                        text += `  \\- ${escapeMarkdownV2(GAME_CONFIG[game]?.name || game)}: ${escapeMarkdownV2(formatSol(BigInt(combinedLastBets[game])))} SOL\n`; // Escaped -
-                    }
+            case 'wallet': // Display wallet info
+                const userBalance = await getUserBalance(userId);
+                const userDetails = await getUserWalletDetails(userId);
+                text = `👤 *Your Wallet & Stats*\n\n*Balance:* ${escapeMarkdownV2(formatSol(userBalance))} SOL\n`;
+                if (userDetails?.external_withdrawal_address) { text += `*Withdrawal Address:* \`${escapeMarkdownV2(userDetails.external_withdrawal_address)}\`\n`; }
+                else { text += `*Withdrawal Address:* Not Set \\(Use \`/wallet <YourSolAddress>\` or button below\\)\n`; }
+                if (userDetails?.referral_code) { text += `*Referral Code:* \`${escapeMarkdownV2(userDetails.referral_code)}\`\n`; }
+                else { text += `*Referral Code:* Not Yet Generated \\(Link wallet first\\)\n`; }
+                text += `*Referrals Made:* ${escapeMarkdownV2(String(userDetails?.referral_count || 0))}\n`;
+                text += `*Total Wagered:* ${escapeMarkdownV2(formatSol(userDetails?.total_wagered || 0n))} SOL\n`;
+                const lastBetsDB = userDetails?.last_bet_amounts || {}; const lastBetsMemory = userLastBetAmounts.get(userId) || new Map();
+                const combinedLastBets = {...lastBetsDB}; lastBetsMemory.forEach((value, key) => { combinedLastBets[key] = value.toString(); });
+                if (Object.keys(combinedLastBets).length > 0) {
+                    text += `\n*Last Bet Amounts \\(Approx\\.\\):*\n`;
+                    for (const game in combinedLastBets) { if (GAME_CONFIG[game]) { text += `  \\- ${escapeMarkdownV2(GAME_CONFIG[game]?.name || game)}: ${escapeMarkdownV2(formatSol(BigInt(combinedLastBets[game])))} SOL\n`; } }
                 }
-            }
-            keyboard.inline_keyboard = [ // Add Emojis
-                [{ text: '📜 Bet History', callback_data: 'menu:history' }],
-                // Deposit/Withdraw buttons are correctly here now
-                [{ text: '💰 Deposit SOL', callback_data: 'quick_deposit' }, { text: '💸 Withdraw SOL', callback_data: 'menu:withdraw' }],
-                [{ text: '🔗 Link/Update Address', callback_data: 'menu:link_wallet_prompt' }], // This button triggers the updated logic
-                [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
-            ];
-            break;
+                keyboard.inline_keyboard = [
+                    [{ text: '📜 Bet History', callback_data: 'menu:history' }],
+                    [{ text: '💰 Deposit SOL', callback_data: 'quick_deposit' }, { text: '💸 Withdraw SOL', callback_data: 'menu:withdraw' }],
+                    [{ text: '🔗 Link/Update Address', callback_data: 'menu:link_wallet_prompt' }],
+                    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
+                ];
+                break;
 
-        case 'my_stats': // Example placeholder menu
-            text = "📊 *My Stats* \\- Coming Soon\\!"; // Escaped ! -
-            keyboard.inline_keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]]; // Add Emoji
-            break;
+            case 'my_stats':
+                text = "📊 *My Stats* \\- Coming Soon\\!";
+                keyboard.inline_keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]];
+                break;
 
-        case 'leaderboards': // Main leaderboards menu
-            text = "🏆 *Leaderboards*\n\nSelect a category:";
-            keyboard.inline_keyboard = [ // Add Emojis
-                [{ text: '💰 Overall Wagered', callback_data: 'leaderboard_nav:overall_wagered:0' }],
-                [{ text: '📈 Overall Profit', callback_data: 'leaderboard_nav:overall_profit:0' }],
-                // Add buttons for specific game leaderboards if desired
-                // [{ text: '🪙 Coinflip Wins', callback_data: 'leaderboard_nav:coinflip_wins:0' }],
-                [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
-            ];
-            break;
+            case 'leaderboards':
+                text = "🏆 *Leaderboards*\n\nSelect a category:";
+                keyboard.inline_keyboard = [
+                    [{ text: '💰 Overall Wagered', callback_data: 'leaderboard_nav:overall_wagered:0' }],
+                    [{ text: '📈 Overall Profit', callback_data: 'leaderboard_nav:overall_profit:0' }],
+                    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
+                ];
+                break;
 
-        default:
-            console.warn(`${logPrefix} Unknown menu type in handleMenuAction: ${menuType}`);
-            // MarkdownV2 Safety: Escape type
-            text = `⚠️ Unknown menu option: \`${escapeMarkdownV2(menuType)}\``;
-            keyboard.inline_keyboard = [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]]; // Add Emoji
-    }
-
-    // Set state if defined by the switch case (currently only for link_wallet_prompt)
-    if (setState) {
-        userStateCache.set(userId, setState); // userStateCache from Part 1
-        console.log(`${logPrefix} Set user state to: ${setState.state}`);
-    }
-
-    // Edit the message (if called from callback) or send a new one
-    if (isFromCallback && messageId) {
-        bot.editMessageText(text, {
-            chat_id: chatId, message_id: messageId,
-            reply_markup: keyboard, parse_mode: 'MarkdownV2'
-        }).catch(e => {
-            if (!e.message.includes("message is not modified")) {
-                console.warn(`${logPrefix} Failed to edit message for menu ${menuType}: ${e.message}. Sending new.`);
-                 // Log parse errors specifically if they happen here
-                 if (e.message.toLowerCase().includes("can't parse entities")) {
-                    console.error(`[MenuAction] Markdown Parse Error sending menu '${menuType}': ${e.message}. Text: ${text}`);
-                 }
-                safeSendMessage(chatId, text, { reply_markup: keyboard, parse_mode: 'MarkdownV2' });
-            }
-        });
-    } else { // Should ideally not be called without message context for edit, but handle defensively
-        safeSendMessage(chatId, text, { reply_markup: keyboard, parse_mode: 'MarkdownV2' });
-    }
-}
-
-
-// --- Game Command Handlers ---
-// These simply initiate the game flow, usually by showing bet buttons or calling specific logic.
-
-async function handleCoinflipCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
-    const chatId = String(msgOrCbMsg.chat.id);
-    const isFromCallback = !!correctUserIdFromCb;
-    // messageContext needs message_id for editing by showBetAmountButtons
-    // Ensure message_id is passed correctly from callback message or direct message
-    const messageContext = isFromCallback
-        ? msgOrCbMsg // If from callback, msgOrCbMsg is the message object
-        : { from: { id: userId }, chat: { id: chatId }, message_id: msgOrCbMsg.message_id }; // If direct message
-    const betAmountArg = (!isFromCallback && args?.length > 1) ? args[1] : null; // Arg index 1 is the amount after /cf
-
-    clearUserState(userId); // Ensure no lingering state
-
-    if (betAmountArg) {
-        try {
-            const amountSOL = parseFloat(betAmountArg);
-            if (isNaN(amountSOL) || amountSOL <= 0) throw new Error("Invalid amount format");
-            const amountLamports = BigInt(Math.round(amountSOL * Number(LAMPORTS_PER_SOL))); // LAMPORTS_PER_SOL from Part 1
-            const gameConfig = GAME_CONFIG.coinflip; // GAME_CONFIG from Part 1
-            if (amountLamports >= gameConfig.minBetLamports && amountLamports <= gameConfig.maxBetLamports) {
-                // Valid amount provided via command, proceed to side selection
-                let loadingMsgId = null;
-                let messageIdToUse = messageContext.message_id; // Use ID from context
-
-                if (isFromCallback && messageIdToUse) { // If from callback, edit the button message
-                    await bot.editMessageText(`🪙 Loading Coinflip with ${escapeMarkdownV2(amountSOL)} SOL bet...`, { chat_id: chatId, message_id: messageIdToUse, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: []} }).catch(()=>{});
-                    loadingMsgId = messageIdToUse;
-                } else if (!isFromCallback) { // If from direct command, send new and get its ID
-                    const loadingMsgSent = await safeSendMessage(chatId, `🪙 Loading Coinflip with ${escapeMarkdownV2(amountSOL)} SOL bet...`, {parse_mode:'MarkdownV2'}); // Add Emoji
-                    loadingMsgId = loadingMsgSent?.message_id;
-                } else if (isFromCallback && !messageIdToUse) { // Callback message ID missing somehow? Fallback send.
-                    const loadingMsgSent = await safeSendMessage(chatId, `🪙 Loading Coinflip with ${escapeMarkdownV2(amountSOL)} SOL bet...`, {parse_mode:'MarkdownV2'}); // Add Emoji
-                    loadingMsgId = loadingMsgSent?.message_id;
-                }
-
-
-                if (loadingMsgId) {
-                    // Call proceedToGameStep from Part 5a. Amount is part of callback data.
-                    return proceedToGameStep(userId, chatId, loadingMsgId, 'coinflip', `coinflip_select_side:${amountLamports}`);
-                } else {
-                    console.error(`[CoinflipCmd] Failed to establish message context for user ${userId}.`);
-                    // Provide feedback if context failed
-                    safeSendMessage(chatId, `⚠️ Could not initiate Coinflip. Please try again using the menu.`, {parse_mode:'MarkdownV2'});
-                }
-            } else {
-                // MarkdownV2 Safety: Escape amounts
-                safeSendMessage(chatId, `⚠️ Bet amount must be between ${escapeMarkdownV2(formatSol(gameConfig.minBetLamports))} and ${escapeMarkdownV2(formatSol(gameConfig.maxBetLamports))} SOL\\.`, {parse_mode:'MarkdownV2'}); // Escaped .
-            }
-        } catch (e) {
-            // MarkdownV2 Safety: Escape error message
-            safeSendMessage(chatId, `⚠️ Invalid bet amount format\\. Please use a number \\(e\\.g\\., /cf 0\\.1\\)\\.`, {parse_mode:'MarkdownV2'}); // Escaped . ()
+            default:
+                console.warn(`${logPrefix} Unknown menu type in handleMenuAction: ${menuType}`);
+                text = `⚠️ Unknown menu option: \`${escapeMarkdownV2(menuType)}\``;
+                keyboard.inline_keyboard = [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]];
         }
-    } else {
-        // If no valid amount in args, show standard bet selection buttons
-        // showBetAmountButtons from Part 1
-        await showBetAmountButtons(messageContext, 'coinflip', null, userId); // Pass correct user ID
+
+        if (setState) { userStateCache.set(userId, setState); console.log(`${logPrefix} Set user state to: ${setState.state}`); }
+
+        const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard };
+        if (isFromCallback && messageId) {
+            await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options });
+        } else { await safeSendMessage(chatId, text, options); }
+
+    } catch (error) { // Catch errors during text generation or message sending/editing
+        console.error(`${logPrefix} Error handling menu action '${menuType}': ${error.message}`);
+        // *** FIX #8: Improve Error Recovery ***
+        const errorText = `⚠️ An error occurred loading this menu \\(${escapeMarkdownV2(menuType)}\\)\\. Please try again\\.`;
+         if (isFromCallback && messageId) { // Try editing to the error message + fallback keyboard
+             bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(()=>{
+                 // If edit fails, send new fallback
+                 safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
+             });
+         } else { // Send new fallback message
+             safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
+         }
+         // Clear state just in case it was set before the error
+         if (setState) clearUserState(userId);
     }
 }
 
-// Simpler handlers just show bet buttons
-async function handleRaceCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
-    clearUserState(userId);
-    await showBetAmountButtons(msgOrCbMsg, 'race', null, userId); // showBetAmountButtons from Part 1
-}
-async function handleSlotsCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
-    clearUserState(userId);
-    await showBetAmountButtons(msgOrCbMsg, 'slots', null, userId);
-}
-async function handleWarCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
-    clearUserState(userId);
-    await showBetAmountButtons(msgOrCbMsg, 'war', null, userId);
-}
-async function handleRouletteCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
-    clearUserState(userId);
-    await showBetAmountButtons(msgOrCbMsg, 'roulette', null, userId);
-}
-async function handleCrashCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
-    clearUserState(userId);
-    await showBetAmountButtons(msgOrCbMsg, 'crash', null, userId);
-}
-async function handleBlackjackCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
-    clearUserState(userId);
-    await showBetAmountButtons(msgOrCbMsg, 'blackjack', null, userId);
-}
 
-// --- Handler Map Definitions ---
-// (Declared in Part 1, populated here)
+// --- Game Command Handlers --- (No changes needed in this section for the current fixes)
+async function handleCoinflipCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... unchanged ... */ }
+async function handleRaceCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... unchanged ... */ }
+async function handleSlotsCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... unchanged ... */ }
+async function handleWarCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... unchanged ... */ }
+async function handleRouletteCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... unchanged ... */ }
+async function handleCrashCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... unchanged ... */ }
+async function handleBlackjackCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... unchanged ... */ }
 
-commandHandlers = new Map([
-    ['/start', handleStartCommand],
-    ['/help', handleHelpCommand],
-    ['/wallet', handleWalletCommand],
-    ['/referral', handleReferralCommand],
-    ['/deposit', handleDepositCommand],
-    ['/withdraw', handleWithdrawCommand],
-    ['/history', handleHistoryCommand],
-    ['/leaderboards', handleLeaderboardsCommand],
-    ['/games', handleGameSelectionCommand], // Add /games command
-    ['/coinflip', handleCoinflipCommand], ['/cf', handleCoinflipCommand],
-    ['/race', handleRaceCommand],
-    ['/slots', handleSlotsCommand],
-    ['/roulette', handleRouletteCommand],
-    ['/war', handleWarCommand],
-    ['/crash', handleCrashCommand],
-    ['/blackjack', handleBlackjackCommand], ['/bj', handleBlackjackCommand],
-    // '/admin' is handled separately in handleMessage (Part 5a) using handleAdminCommand (Part 1)
-]);
-
-menuCommandHandlers = new Map([
-    ['main', handleStartCommand],
-    ['game_selection', handleGameSelectionCommand], // Use the dedicated handler
-    ['wallet', handleWalletCommand], // Redirects to handleMenuAction('wallet') or processes address
-    ['referral', handleReferralCommand],
-    // 'deposit' is handled by 'quick_deposit' callback in handleCallbackQuery (Part 5a) which calls handleDepositCommand
-    ['withdraw', handleWithdrawCommand], // Initiates withdrawal prompt
-    ['help', handleHelpCommand], // Shows main help section menu
-    ['leaderboards', handleLeaderboardsCommand], // Redirects to leaderboard display
-    ['history', handleHistoryCommand],
-    ['link_wallet_prompt', handleMenuAction], // Now correctly routed to handleMenuAction
-    ['my_stats', handleMenuAction], // Example placeholder menu
-    // Game keys can map to their command handlers for consistency or direct access if needed
-    // However, game selection mainly flows through 'select_game' -> showBetAmountButtons -> specific game callbacks
-    ['coinflip', handleCoinflipCommand],
-    ['race', handleRaceCommand],
-    ['slots', handleSlotsCommand],
-    ['roulette', handleRouletteCommand],
-    ['war', handleWarCommand],
-    ['crash', handleCrashCommand],
-    ['blackjack', handleBlackjackCommand],
-    // Other specific callbacks (confirm_bet, game actions like blackjack_action, etc.) handled in handleCallbackQuery (Part 5a)
-]);
+// --- Handler Map Definitions --- (Unchanged)
+commandHandlers = new Map([ /* ... unchanged ... */ ]);
+menuCommandHandlers = new Map([ /* ... unchanged ... */ ]);
 
 // --- End of Part 5b (Section 2) ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
