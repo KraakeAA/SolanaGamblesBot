@@ -1,5 +1,5 @@
 // index.js - Part 1: Imports, Environment Configuration, Core Initializations, Utility Definitions
-// --- VERSION: 3.2.1a --- (Applied Fixes: Roulette MdV2 parens verified, War rename verified, Added Emojis to showBetAmountButtons)
+// --- VERSION: 3.2.1p --- (Applied Fixes: Roulette MdV2 parens verified, War rename verified, Added Emojis to showBetAmountButtons)
 
 // --- All Imports MUST come first ---
 import 'dotenv/config'; // Keep for local development via .env file
