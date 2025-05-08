@@ -4983,7 +4983,7 @@ async function handleRouletteNumberInput(msg, currentState) {
     const betValueString = String(betValueNum);
     const amountSOL = formatSol(betAmountLamportsBigInt); // formatSol from Part 3
     // MarkdownV2 Safety: Escape everything
-    const confirmationMessage = `${escapeMarkdownV2(breadcrumb || 'Roulette')} > Straight Up Bet > ${escapeMarkdownV2(betValueString)}\nConfirm bet of ${escapeMarkdownV2(amountSOL)} SOL on *Straight Up: ${escapeMarkdownV2(betValueString)}*?`;
+    const confirmationMessage = `${escapeMarkdownV2(breadcrumb || 'Roulette')} \\> ${escapeMarkdownV2(betValueString)}\nBet ${escapeMarkdownV2(amountSOL)} SOL on *Straight Up: ${escapeMarkdownV2(betValueString)}*\\?`; // Escaped > and ?
     const inlineKeyboard = [ // Add Emojis
         // Callback includes game, amount, bet type ('straight'), and bet value (the number)
         [{ text: `✅ Yes, Confirm Bet`, callback_data: `confirm_bet:roulette:${betAmountLamportsBigInt}:straight:${betValueString}` }],
