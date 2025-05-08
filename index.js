@@ -6031,7 +6031,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             return `${count} refs \\= ${percent}\\%`; // Added \\%
         }).join(', ');
 
-      // *** FINAL FIX: Meticulously review and escape ., !, (), %, +, - ***
+      // *** CORRECTED VERSION: Removed unnecessary escaping for '%' ***
         let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
                           `Share your unique link to earn SOL when your friends play\\!\n\n` + // Escaped !
                           `*Your Code:* \`${escapedRefCode}\`\n` + // ` escapes content
@@ -6040,11 +6040,12 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
                           `*Successful Referrals:* ${referralCount}\n` +
                           `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
                           `*How Rewards Work:*\n` +
-                          `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Escaped . ! () %
-                          `  tiers: ${tiersDesc}\n` + // Tiers desc already escaped where needed
-                          `2\\. *Milestone Bonus:* Earn ${milestonePercent}\\% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Escaped % . () ,
+                        // Corrected: Removed '\\' before '%'
+                          `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Escaped . ! ()
+                          `  tiers: ${tiersDesc}\n` + // Tiers desc already escaped where needed (including its own '%')
+                        // Corrected: Removed '\\' before '%'
+                          `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Escaped . () , ...
                           `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``; // ` escapes content
-
 
         // Button uses the raw link for the switch_inline_query parameter
         const keyboard = [
