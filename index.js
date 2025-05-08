@@ -5278,7 +5278,7 @@ async function handleRouletteStraightBetSetup(userId, chatId, messageId, gameKey
     // *** CORRECTED '>' escaping in breadcrumb ***
     const breadcrumb = `${escapeMarkdownV2(gameConfig.name)} \\> Straight Up Bet`; // Escape > as \\> here
     // MarkdownV2 Safety: Escape breadcrumb, amount
-    const promptText = `${breadcrumb}\nBetting ${escapeMarkdownV2(formatSol(BigInt(betAmountLamportsStr)))} SOL on a Straight Up number\\.\nPlease type the number you want to bet on \\(0-36\\), or /cancel:`; // Escaped . () formatSol from Part 3
+    const promptText = `${breadcrumb}\nBetting ${escapeMarkdownV2(formatSol(BigInt(betAmountLamportsStr)))} SOL on a Straight Up number\\.\nPlease type the number you want to bet on \\(0\\-36\\), or /cancel\\:`; // Escaped . () - :
     const keyboard = { // Add Emoji
         // Go back to the bet type selection screen for the same amount
         inline_keyboard: [[{ text: '↩️ Back to Bet Types', callback_data: `roulette_select_bet_type:${betAmountLamportsStr}` }]]
