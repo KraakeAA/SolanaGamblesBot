@@ -5242,8 +5242,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 
 // --- End of Part 5b (Section 1) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2 of 2)
-// --- VERSION: 3.2.1e --- (Corrected: No stateful handlers here. Applied GIF, /wallet args, Emojis, Game Selection Menu, specific menu/action helpers, Tap to copy fix, Link Wallet flow fix)
-// --- TEMP DEBUG: Simplified deposit message in handleDepositCommand ---
+// --- VERSION: 3.2.1e --- (Corrected: No stateful handlers here. Applied GIF, /wallet args, Emojis, Game Selection Menu, specific menu/action helpers, Tap to copy fix REFINED, Link Wallet flow fix)
 
 // (Continuing directly from Part 5b, Section 1)
 // ... (Assume functions like routeStatefulInput, handleCustomAmountInput, etc. are defined above in Section 1) ...
@@ -5900,7 +5899,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
 
 async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** THIS FUNCTION INCORPORATES CHANGE #2 ***
+    // *** THIS FUNCTION INCORPORATES REFINED CHANGE #2 ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const logPrefix = `[DepositCmd User ${userId}]`;
@@ -5947,8 +5946,8 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
             const expiresInMinutes = Math.ceil(expiresInMs / (60 * 1000));
 
              // MarkdownV2 Safety: Escape address, time
-             // ** Apply Fix #2 to Tap to copy line **
-            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapeMarkdownV2(existingAddress)}\`\n\\\\_\\\\(Tap address to copy\\\\)\\\\_ \n\nIt expires in approximately ${escapeMarkdownV2(expiresInMinutes)} minutes\\.`; // Escaped . () _ Corrected escape
+             // ** Apply Refined Fix #2 to Tap to copy line (remove italics) **
+            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapeMarkdownV2(existingAddress)}\`\n\\\\(Tap address to copy\\\\) \n\nIt expires in approximately ${escapeMarkdownV2(expiresInMinutes)} minutes\\.`; // Escaped . () Corrected escape
             text += `\n\nOnce you send SOL, it will be credited after confirmations\\. New deposits to this address will be credited until it expires\\.`; // Escaped .
             const keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }], [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${existingAddress}` }]]; // Add Emojis
             bot.editMessageText(text, {
@@ -5972,20 +5971,15 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const confirmationLevel = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL); // DEPOSIT_CONFIRMATION_LEVEL from Part 1
         const escapedAddress = escapeMarkdownV2(depositAddress);
 
-        // --- TEMP DEBUGGING MESSAGE (Change #2 applied + Simplified) ---
-        /* COMMENT OUT THE ORIGINAL MESSAGE CONSTRUCTION:
+        // --- Restored original message structure with refined fix ---
         const message = `💰 *Your Unique Deposit Address*\n\n` +
                         `Send SOL to this unique address:\n\n` +
-                        `\`${escapedAddress}\`\n\\\\_\\\\(Tap address to copy\\\\)\\\\_ \n\n` + // Escaped () _ Corrected escape
+                        `\`${escapedAddress}\`\n\\\\(Tap address to copy\\\\) \n\n` + // Escaped () Corrected escape (no italics)
                         `⚠️ *Important:*\n` +
                         `1\\. This address is unique to you and for this deposit session\\. It will expire in *${expiryMinutes} minutes*\\.\n` + // Escaped .
                         `2\\. For new deposits, use \`/deposit\` again or the menu option\\.\n` + // Escaped .
                         `3\\. Confirmation: *${confirmationLevel}* network confirmations required\\.`; // Escaped .
-        */
-        // REPLACE WITH THIS SIMPLIFIED TEST MESSAGE:
-        const message = `Test Deposit Address \\(V2\\):\n\`${escapedAddress}\``;
-        // --- END TEMP DEBUGGING MESSAGE ---
-
+        // --- End restored message ---
 
         const depositKeyboard = [ // Add Emojis
             [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${depositAddress}` }],
@@ -5994,8 +5988,16 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const options = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: depositKeyboard} };
 
         bot.editMessageText(message, {chat_id: chatId, message_id: workingMessageId, ...options}).catch(e => {
-            console.warn(`${logPrefix} Failed to edit message ${workingMessageId} with deposit address, sending new. Error: ${e.message}`);
-            safeSendMessage(chatId, message, options);
+            // Check if the specific parse error still occurs
+            if (e.message && e.message.includes("Character '(' is reserved")) {
+                console.error(`❌ [DepositCmd User ${userId}] PARSE ERROR STILL OCCURRING even with refined fix! Message: ${message}`);
+                // Fallback to a plain text message without the problematic line
+                const plainMessage = `💰 Your Unique Deposit Address:\n\n${depositAddress}\n\nExpires in ${expiryMinutes} minutes. Confirmation: ${confirmationLevel}.`;
+                safeSendMessage(chatId, plainMessage, {reply_markup: {inline_keyboard: depositKeyboard}}); // Send plain text
+            } else if (!e.message.includes("message is not modified")) { // Handle other edit errors
+                console.warn(`${logPrefix} Failed to edit message ${workingMessageId} with deposit address, sending new. Error: ${e.message}`);
+                safeSendMessage(chatId, message, options); // Try sending original MarkdownV2 message again
+            }
         });
 
     } catch (error) {
