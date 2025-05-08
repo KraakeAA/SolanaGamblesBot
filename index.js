@@ -6040,11 +6040,10 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
                           `*Successful Referrals:* ${referralCount}\n` +
                           `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
                           `*How Rewards Work:*\n` +
-                        // Corrected: Removed '\\' before '%'
-                          `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Escaped . ! ()
-                          `  tiers: ${tiersDesc}\n` + // Tiers desc already escaped where needed (including its own '%')
-                        // Corrected: Removed '\\' before '%'
-                          `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Escaped . () , ...
+                        // Corrected Line Below: Added '\\(', '\\)', and '\\.' escapes
+                          `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Escaped list ., parens (), period ., exclamation !
+                          `  tiers: ${tiersDesc}\n` + // Assumes tiersDesc construction is correct now (with unescaped %)
+                          `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Escaped list ., parens (), period ., comma ,, ellipsis ...
                           `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``; // ` escapes content
 
         // Button uses the raw link for the switch_inline_query parameter
