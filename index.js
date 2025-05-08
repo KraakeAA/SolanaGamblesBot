@@ -5356,7 +5356,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 
 // --- End of Part 5b (Section 1) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2 of 2)
-// --- VERSION: 3.2.1m --- (Applying Fix: Re-add Tap-to-copy hint. Includes previous fixes from 5a.)
+// --- VERSION: 3.2.1n --- (Applying Fix: String concatenation '+' in handleDepositCommand hint. Includes previous fixes.)
 
 // (Continuing directly from Part 5b, Section 1)
 // ... (Assume functions like routeStatefulInput, handleCustomAmountInput, etc. are defined above in Section 1) ...
@@ -5588,7 +5588,7 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
 
     const displayName = await getUserDisplayName(chatId, userId); // from Part 3
     const botName = escapeMarkdownV2(process.env.BOT_USERNAME || "SolanaGamblesBot"); // BOT_USERNAME from Part 1 env
-    const botVersion = escapeMarkdownV2(BOT_VERSION || "3.2.1m"); // BOT_VERSION from Part 1
+    const botVersion = escapeMarkdownV2(BOT_VERSION || "3.2.1n"); // BOT_VERSION from Part 1
 
     let welcomeMsg = `👋 Welcome, ${displayName}\\!\n\nI am ${botName} \\(v${botVersion}\\), your home for exciting on\\-chain games on Solana\\.\n\n`;
     if (isNewUser) { welcomeMsg += "Looks like you're new here\\!\\! Here's how to get started:\n1\\. Use \`/deposit\` to get your unique address\\.\n2\\. Send SOL to that address\\.\n3\\. Use the menu below to play games\\!\n\n"; }
@@ -6009,7 +6009,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
 
 async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** Applying Fix #9: Re-add Tap-to-copy hint with code block formatting ***
+    // *** Applying Fix: Add '+' for string concatenation before hint lines ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const logPrefix = `[DepositCmd User ${userId}]`;
@@ -6057,8 +6057,9 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
             const escapedExistingAddress = escapeMarkdownV2(existingAddress); // Escape here
 
             // MarkdownV2 Safety: Escape address, time
-            // ** Adding back "(Tap address to copy)" line within code block **
-            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapedExistingAddress}\`\n`(Tap address to copy)`\n\n` + // Added Tap to copy hint in code block
+            // ** Added '+' before "(Tap address to copy)" line **
+            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapedExistingAddress}\`\n` + // Added '+'
+                       ``(Tap address to copy)`\n\n` + // Tap to copy hint in code block
                        `It expires in approximately ${escapeMarkdownV2(expiresInMinutes)} minutes\\.`; // Escaped . ()
             text += `\n\nOnce you send SOL, it will be credited after confirmations\\. New deposits to this address will be credited until it expires\\.`; // Escaped .
             const keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }], [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${existingAddress}` }]]; // Add Emojis
@@ -6083,10 +6084,11 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const confirmationLevel = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL); // DEPOSIT_CONFIRMATION_LEVEL from Part 1
         const escapedAddress = escapeMarkdownV2(depositAddress);
 
-        // --- Message structure with "(Tap address to copy)" RE-ADDED in code block ---
+        // --- Message structure with "(Tap address to copy)" RE-ADDED in code block and '+' added ---
         const message = `💰 *Your Unique Deposit Address*\n\n` +
                         `Send SOL to this unique address:\n\n` +
-                        `\`${escapedAddress}\`\n`(Tap address to copy)`\n\n` + // Added Tap to copy hint in code block
+                        `\`${escapedAddress}\`\n` + // Added '+'
+                        ``(Tap address to copy)`\n\n` + // Added Tap to copy hint in code block
                         `⚠️ *Important:*\n` +
                         `1\\. This address is unique to you and for this deposit session\\. It will expire in *${expiryMinutes} minutes*\\.\n` + // Escaped .
                         `2\\. For new deposits, use \`/deposit\` again or the menu option\\.\n` + // Escaped .
