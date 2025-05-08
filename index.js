@@ -5874,8 +5874,8 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
 
 // --- End of Part 5b (Section 2b) ---
-// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - CORRECTED v2
-// --- VERSION: 3.2.1v --- (Applying Fixes: FINAL REFERRAL FIX - Escaping '.' and other chars in handleReferralCommand message)
+// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - CORRECTED v4
+// --- VERSION: 3.2.1w --- (Applying Fixes: FINAL REFERRAL FIX v3 - Simplifying escaping in Milestone description)
 
 // (Continuing directly from Part 5b, Section 2b)
 // ... (Assume functions, dependencies etc. are available) ...
@@ -5954,7 +5954,7 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
  * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
  */
 async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** FINAL FIX: Meticulously check escaping for '.', '!', '(', ')', '%', '+', '-' ***
+    // *** FINAL FIX v3: Simplified escaping at end of Milestone line ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     let messageToEditId = msgOrCbMsg.message_id;
@@ -6024,14 +6024,14 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
         const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS)); // Constants from Part 1
         const milestonePercent = escapeMarkdownV2(String((REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(1))); // Format nicely
-        // *** FIX #2: Escape % sign in tiersDesc generation (Verified Already Present) ***
+        // Tiers description with necessary escaping
         const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => { // Constants from Part 1
             const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${t.maxCount}`; // Escape < = +
             const percent = escapeMarkdownV2(String((t.percent * 100).toFixed(1))); // Format nicely
-            return `${count} refs \\= ${percent}\\%`; // Added \\%
+            return `${count} refs \\= ${percent}\\%`; // Added \\% and escaped =
         }).join(', ');
 
-      // *** FINAL FIX: Meticulously review and escape ., !, (), %, +, - ***
+      // Construct the message string with careful escaping
         let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
                           `Share your unique link to earn SOL when your friends play\\!\n\n` + // Escaped !
                           `*Your Code:* \`${escapedRefCode}\`\n` + // ` escapes content
@@ -6040,9 +6040,11 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
                           `*Successful Referrals:* ${referralCount}\n` +
                           `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
                           `*How Rewards Work:*\n` +
-                          `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Escaped . ! () %
+                      // Corrected escaping for % and . and !
+                          `1\\. *Initial Bonus:* Earn a \\% of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your \\% increases with more referrals\\!\n` + // Escaped . ! () %
                           `  tiers: ${tiersDesc}\n` + // Tiers desc already escaped where needed
-                          `2\\. *Milestone Bonus:* Earn ${milestonePercent}\\% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Escaped % . () ,
+                      // Corrected escaping for % . () , and simplified ellipsis
+                          `2\\. *Milestone Bonus:* Earn ${milestonePercent}\\% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\n\n` + // Simplified ellipsis to single escaped period.
                           `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``; // ` escapes content
 
 
@@ -6087,7 +6089,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
              bot.editMessageText(errorText, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(()=>{
                  // If editing fails, send the error as a new message
                  safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
-             });
+        _**__The rest of the code for this file section will be generated next.__**_       });
         } else {
              // Send error as a new message if not from callback
              safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
