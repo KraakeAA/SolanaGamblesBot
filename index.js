@@ -6028,7 +6028,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => { // Constants from Part 1
             const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${t.maxCount}`; // Escape < = +
             const percent = escapeMarkdownV2(String((t.percent * 100).toFixed(1))); // Format nicely
-            return `${count} refs \\= ${percent}\\%`; // Added \\%
+            return `${count} refs \\= ${percent}%`; // Added \\%
         }).join(', ');
 
       // *** CORRECTED VERSION: Removed unnecessary escaping for '%' ***
