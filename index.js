@@ -3723,7 +3723,7 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
                         [{ text: "🔴⚫️ Color", callback_data: `roulette_bet_type_category:color:${betAmountLamportsStr}` }],
                         [{ text: "🔢 Even / Odd", callback_data: `roulette_bet_type_category:parity:${betAmountLamportsStr}` }],
                         [{ text: "📉📈 Range (1\\-18 / 19\\-36)", callback_data: `roulette_bet_type_category:range:${betAmountLamportsStr}` }],
-                        [{ text: "🎯 Straight Up (#)", callback_data: `roulette_select_bet_type:straight:${betAmountLamportsStr}` }] // This triggers the number input
+                        [{ text: "🎯 Straight Up \\(\\#\\)", callback_data: `roulette_select_bet_type:straight:${betAmountLamportsStr}` }]
                     ];
                     inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
                 }
