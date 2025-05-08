@@ -5709,8 +5709,8 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
 
 // --- End of Part 5b (Section 2b) ---
-// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4)
-// --- VERSION: 3.2.1r --- (Applying Fixes: Verifying Ref/Deposit Cmd Escaping, Referral/Help Parse Errors, Deposit Hint Format, Link Wallet Escaping, Ref Link Display, Error Recovery, Balance on Start, Start Animation + previous)
+// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - CORRECTED
+// --- VERSION: 3.2.1r --- (Applying Fixes: Corrected invalid syntax in handleReferralCommand, Verifying Ref/Deposit Cmd Escaping, Referral/Help Parse Errors, Deposit Hint Format, Link Wallet Escaping, Ref Link Display, Error Recovery, Balance on Start, Start Animation + previous)
 
 // (Continuing directly from Part 5b, Section 2b)
 // ... (Assume functions, dependencies etc. are available) ...
@@ -5870,7 +5870,8 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
         // *** FIX #6: Referral Link Display (Plain + Backticks) (Verified Already Present) ***
         // *** FIX #2: Escape % sign in Milestone line + Reverted double escaping parens (Verified Already Present) ***
-        // Carefully construct the message ensuring all dynamic parts and MarkdownV2 syntax are escaped
+      // Carefully construct the message ensuring all dynamic parts and MarkdownV2 syntax are escaped
+      // *** REMOVED INVALID SYNTAX FROM PREVIOUS VERSION ***
         let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
                           `Share your unique link to earn SOL when your friends play\\!\n\n` + // Escaped !
                           `*Your Code:* \`${escapedRefCode}\`\n` + // Escaped `
@@ -5878,7 +5879,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
                           `\\_\(Tap button below or copy here: \`${referralLink}\`\\)_\n\n`+ // Link in backticks (unescaped), parens/underscores escaped
                           `*Successful Referrals:* ${referralCount}\n` +
                           `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-                _**__The rest of the code for this file section will be generated next.__**_               `*How Rewards Work:*\n` +
+                          `*How Rewards Work:*\n` +
                           `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Escaped . ! % and standard escaped \( \)
                           `  tiers: ${tiersDesc}\n` + // Includes escaped % now
                           `2\\. *Milestone Bonus:* Earn ${milestonePercent}\\% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Added \\% + standard escaped \( \) + Escaped .
@@ -5981,7 +5982,7 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
             const existingAddress = existing.deposit_address;
             const existingExpiresAt = new Date(existing.expires_at);
             const expiresInMs = existingExpiresAt.getTime() - Date.now();
-            const expiresInMinutes = Math.ceil(expiresInMs / (60 * 1000));
+            const expiresInMinutes = Math.max(1, Math.ceil(expiresInMs / (60 * 1000))); // Show at least 1 minute
             const escapedExistingAddress = escapeMarkdownV2(existingAddress);
 
             // *** FIX #4 & #6: Hint below address, address in backticks (Verified Already Present) ***
@@ -6188,6 +6189,7 @@ async function handleLeaderboardsCommand(msgOrCbMsg, args, correctUserIdFromCb =
         // Callback data format: leaderboard_nav:TYPE:PAGE
         type = args[0] || 'overall_wagered';
         page = parseInt(args[1] || '0', 10);
+        if (isNaN(page) || page < 0) page = 0; // Sanitize page number
     } else {
         // Command format: /leaderboards [TYPE] [PAGE]
         type = args.length > 1 ? args[1] : 'overall_wagered';
@@ -6203,11 +6205,11 @@ async function handleLeaderboardsCommand(msgOrCbMsg, args, correctUserIdFromCb =
 /**
  * Displays leaderboards. Fetches data and formats the message.
  * @param {string} chatId
- * @param {number} messageId Message ID to edit (if from callback).
+ * @param {number | null} messageId Message ID to edit (if from callback). Can be null.
  * @param {string} userId User requesting (for context).
  * @param {string} type Leaderboard type (e.g., 'overall_wagered', 'overall_profit').
  * @param {number} page Current page number (0-indexed).
- * @param {boolean} [isFromCallback=false] If true, edit message.
+ * @param {boolean} [isFromCallback=false] If true, try to edit message.
  */
 async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wagered', page = 0, isFromCallback = false) {
     const logPrefix = `[DisplayLeaderboard Type:${type} Page:${page} User:${userId}]`;
@@ -6269,6 +6271,7 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
                 const displayName = `User\\.\\.\\.${escapeMarkdownV2(String(row.user_id).slice(-5))}`; // Escape last 5 digits of ID and ellipsis
                 let valueDisplay = 'N/A';
                 if (row.score !== undefined && row.score !== null) {
+                    // Format score as SOL amount
                     valueDisplay = `${escapeMarkdownV2(formatSol(row.score))} SOL`; // formatSol from Part 3
                 }
                 leaderboardText += `${escapeMarkdownV2(rank)}\\. ${displayName}: ${valueDisplay}\n`; // Escape rank and dot
@@ -6309,19 +6312,18 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
     }
 }
 
-
 /**
  * Handles generic menu actions that don't have dedicated command handlers. Routes based on menuType.
  * @param {string} userId
  * @param {string} chatId
  * @param {number | null} messageId ID of the message to edit (can be null if not editing).
- * @param {string} menuType Type of menu requested (e.g., 'link_wallet_prompt', 'wallet', 'history', 'withdraw').
+ * @param {string} menuType Type of menu requested (e.g., 'link_wallet_prompt', 'wallet', 'leaderboards').
  * @param {Array<string>} params Additional parameters from callback data.
  * @param {boolean} [isFromCallback=true] Assume true if called here.
  */
 async function handleMenuAction(userId, chatId, messageId, menuType, params = [], isFromCallback = true) {
     // *** Applying Fix #5: Escape periods in link_wallet_prompt text (Verified Already Present) ***
-    // *** Applying Fix #8: Improve Error Recovery ***
+    // *** Applying Fix #8: Improve Error Recovery (Verified Already Present) ***
     const logPrefix = `[MenuAction User ${userId} Menu ${menuType}]`;
     console.log(`${logPrefix} Handling menu action.`);
     let text = `Menu: ${escapeMarkdownV2(menuType)}`; // Default text, usually overridden
@@ -6330,7 +6332,7 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
     const fallbackKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] };
 
     // Clear existing state unless we are prompting for input immediately after
-    if (menuType !== 'link_wallet_prompt') { // Keep state if prompting for wallet
+    if (menuType !== 'link_wallet_prompt') { // Keep state only if prompting for wallet right after this menu action
         clearUserState(userId); // clearUserState from Part 6
     }
 
@@ -6451,9 +6453,15 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
         // Edit or send the final message for the menu action
         const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard };
         if (isFromCallback && messageId) {
-            await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options });
+            // Try editing the message
+            await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options })
+                .catch(e => { if (!e.message.includes("message is not modified")) {
+                        // If edit fails, send as new message
+                        console.warn(`${logPrefix} Failed edit for menu ${menuType}, sending new. Error: ${e.message}`);
+                        safeSendMessage(chatId, text, options);
+                    }});
         } else {
-            // Send new message if not from callback or messageId was missing
+            // Send new message if not from callback or messageId was missing initially
             await safeSendMessage(chatId, text, options);
         }
 
@@ -6471,11 +6479,10 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
              // Send error as a new message if not from callback
              safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
          }
-         // Clear state if an error occurred during menu action processing
+         // Clear state if an error occurred during menu action processing that might have set it
          if (setState) clearUserState(userId);
     }
 }
-
 
 // --- End of Part 5b (Section 2c) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2d of 4)
