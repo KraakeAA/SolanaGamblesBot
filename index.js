@@ -3213,7 +3213,7 @@ function determineBlackjackWinner(playerHand, dealerHand) {
 
 // --- End of Part 4 ---
 // index.js - Part 5a: Telegram Message/Callback Handlers & Game Result Processing
-// --- VERSION: 3.2.1s --- (Applying Fixes: CORRECTED ReferenceError in proceedToGameStep, Routing Roulette intermediate buttons, Win Payout Accounting(CF,Race,Slots), Play Again Cooldown)
+// --- VERSION: 3.2.1t --- (Applying Fixes: CORRECTED '>' escape in proceedToGameStep category message, CORRECTED ReferenceError in proceedToGameStep, Routing Roulette intermediate buttons, Win Payout Accounting(CF,Race,Slots), Play Again Cooldown)
 
 // --- Assuming functions from Part 1, 2, 3, 4 are available ---
 // (bot, pool, caches, GAME_CONFIG, DB ops, utils like safeSendMessage, escapeMarkdownV2, formatSol, sleep, getUserBalance, etc.),
@@ -3665,7 +3665,7 @@ async function handleCallbackQuery(callbackQuery) {
  * @param {string} callbackData The full callback data string triggering this step.
  */
 async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackData) {
-    // *** CORRECTED ReferenceError by redefining params here ***
+    // *** CORRECTED ReferenceError fix & '>' escape fix ***
     const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
     const logPrefix = `[ProceedToStep User ${userId} Game ${gameKey} CB ${callbackData}]`;
     console.log(`${logPrefix} Proceeding intermediate step.`);
@@ -3706,7 +3706,7 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
             for(let i = 0; i < horseButtons.length; i += 2) { inlineKeyboard.push(horseButtons.slice(i, i + 2)); }
             inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
         }
-        // --- FIX #3: Roulette Step Logic (with corrected params access) ---
+        // --- FIX #3: Roulette Step Logic (with corrected params access & '>' escape) ---
         else if (gameKey === 'roulette') {
             if (actionPrefix === 'roulette_select_bet_type') {
                 // This is the first step after amount selection (or re-selection)
@@ -3733,7 +3733,8 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
               // params[0] is the category (e.g., 'color'), params[1] is the amount string
                 const category = params[0]; // Get category from the correctly defined params array
                 if (!category) { throw new Error("Invalid callback data: Missing category for roulette_bet_type_category"); }
-                messageText = `*${escapeMarkdownV2(gameConfig.name)}* \\- Bet: ${escapeMarkdownV2(amountSOLFormatted)} SOL > ${escapeMarkdownV2(category)}\nSelect your specific bet:`;
+              // *** CORRECTED '>' escaping in message text ***
+                messageText = `*${escapeMarkdownV2(gameConfig.name)}* \\- Bet: ${escapeMarkdownV2(amountSOLFormatted)} SOL \\> ${escapeMarkdownV2(category)}\nSelect your specific bet:`; // Escape '>'
                 switch(category) {
                     case 'color': inlineKeyboard.push([{ text: '🔴 Red', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:red` }, { text: '⚫️ Black', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:black` }]); break;
                     case 'parity': inlineKeyboard.push([{ text: '🔢 Even', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:even` }, { text: '🔢 Odd', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:odd` }]); break;
@@ -3764,7 +3765,10 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
                 .catch(e => {
                     if (!e.message.includes("message is not modified")) {
                         console.error(`${logPrefix} Error editing message in proceedToGameStep (${messageId}):`, e.message);
-                        if (e.message.toLowerCase().includes("can't parse entities")) { console.error(`Failed Text: ${messageText}`); }
+                        // Log specific parse errors
+                        if (e.message.toLowerCase().includes("can't parse entities")) {
+                            console.error(`Failed Text (${logPrefix}): ${messageText}`);
+                        }
                         // If edit fails, send as a new message
                         safeSendMessage(chatId, messageText, options);
                     }
