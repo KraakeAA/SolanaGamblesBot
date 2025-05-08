@@ -3213,7 +3213,7 @@ function determineBlackjackWinner(playerHand, dealerHand) {
 
 // --- End of Part 4 ---
 // index.js - Part 5a: Telegram Message/Callback Handlers & Game Result Processing
-// --- VERSION: 3.2.1m --- (Applying Fixes: Double Deduction(Pt1), Blackjack Parens. Includes previous fixes.)
+// --- VERSION: 3.2.1o --- (Applying Fixes: Double Deduction (All Games), BJ/Crash Play Again, BJ Parens, Deposit Hint Format, Link Wallet Escaping. Includes previous fixes.)
 
 // --- Assuming functions from Part 1, 2, 3, 4 are available ---
 // (bot, pool, caches, GAME_CONFIG, DB ops, utils like safeSendMessage, escapeMarkdownV2, formatSol, sleep, getUserBalance, etc.),
@@ -3516,29 +3516,27 @@ async function handleCallbackQuery(callbackQuery) {
             console.log(`${logPrefix} Play Again for ${gameKey}, last bet: ${lastBetAmountLamportsStr}`);
 
             if (GAME_CONFIG[gameKey] && lastBetAmountLamportsStr) {
-                const betAmountLamports = BigInt(lastBetAmountLamportsStr);
-                // *** FIX: Coinflip "Play Again" Skips Choice ***
+                 // *** FIX: Play Again for BJ/Crash should show bet amounts, not confirm ***
                 if (gameKey === 'coinflip' || gameKey === 'race' || gameKey === 'roulette') {
-                    // For these games, "play again" should re-trigger the intermediate selection prompt
-                    // Use proceedToGameStep for this.
-                    // Determine the correct initial callback data prefix for the game
+                    // These games need intermediate selection
                     let initialStepCallbackPrefix = '';
                     if (gameKey === 'coinflip') initialStepCallbackPrefix = 'coinflip_select_side';
                     else if (gameKey === 'race') initialStepCallbackPrefix = 'race_select_horse';
                     else if (gameKey === 'roulette') initialStepCallbackPrefix = 'roulette_select_bet_type';
-                    // proceedToGameStep defined later in this Part (5a)
-                    await proceedToGameStep(userId, chatId, messageId, gameKey, `${initialStepCallbackPrefix}:${lastBetAmountLamportsStr}`); // Pass full callback data for intermediate step
+                    await proceedToGameStep(userId, chatId, messageId, gameKey, `${initialStepCallbackPrefix}:${lastBetAmountLamportsStr}`);
+                } else if (gameKey === 'blackjack' || gameKey === 'crash') {
+                     // These games should show bet selection again
+                     console.log(`${logPrefix} Play Again for ${gameKey} routing to showBetAmountButtons.`);
+                     await showBetAmountButtons(originalMessage, gameKey, lastBetAmountLamportsStr, userId); // Show bet amounts again
                 } else {
-                    // For other games, directly confirm the bet again
-                    // Simulate a confirm_bet callback
+                    // Games like Slots, War can directly confirm
                     const fakeCallbackData = `confirm_bet:${gameKey}:${lastBetAmountLamportsStr}`;
                     const fakeCallbackQuery = {
                         id: 'fakecb-pa-' + Date.now(), from: callbackQuery.from,
-                        message: { chat: callbackQuery.message.chat, message_id: messageId, text: callbackQuery.message.text || "" }, // Use existing message context
+                        message: { chat: callbackQuery.message.chat, message_id: messageId, text: callbackQuery.message.text || "" },
                         data: fakeCallbackData, chat_instance: String(chatId)
                     };
-                    // Add to queue to ensure it's processed sequentially after current callback finishes
-                    callbackQueue.add(() => handleCallbackQuery(fakeCallbackQuery)); // callbackQueue from Part 1
+                    callbackQueue.add(() => handleCallbackQuery(fakeCallbackQuery));
                 }
             } else {
                 // MarkdownV2 Safety: Escape static text
@@ -3713,7 +3711,7 @@ async function handleCallbackQuery(callbackQuery) {
  * @param {string} callbackData The full callback data string triggering this step.
  */
 async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackData) {
-    // *** APPLYING FIX #3: Escape Hyphen in Message *** (Already Applied in previous version)
+    // *** Hyphen Escaping Already Applied in v3.2.1j ***
     const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
     const logPrefix = `[ProceedToStep User ${userId} Game ${gameKey} CB ${callbackData}]`;
     console.log(`${logPrefix} Proceeding intermediate step.`);
@@ -4216,7 +4214,7 @@ async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
                 if (finalPayoutToUserDB > 0n && typeof notifyAdmin === "function") {
                     await notifyAdmin(`🎉 User ${escapeMarkdownV2(userId)} HIT THE SLOTS JACKPOT for ${escapeMarkdownV2(formatSol(finalPayoutToUserDB))} SOL\\! Bet ID: ${betId}`); // Escaped !
                 }
-                // Update balance if won
+                // Update balance if won jackpot
                 const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, 'slots_jackpot', { betId });
                 if (!balanceUpdateResult.success) {
                     throw new Error(`Failed to update balance/ledger for slots jackpot win: ${balanceUpdateResult.error}`);
@@ -4231,7 +4229,7 @@ async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
                 finalPayoutToUserDB = betAmountLamports + netProfit; // Stake + Net Profit
                 winMessage = `🎉 You matched\\! Won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL \\(Multiplier: ${escapeMarkdownV2(baseMultiplier)}x base\\)\\!`; // Escaped ! () and content
 
-                // Update balance if won
+                // Update balance if regular win
                 const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, profitLamportsOutcome, 'slots_win', { betId });
                 if (!balanceUpdateResult.success) {
                     throw new Error(`Failed to update balance/ledger for slots win: ${balanceUpdateResult.error}`);
@@ -4284,10 +4282,9 @@ async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
         if (client && !client.isReleased) client.release(); // Final safety release
     }
 }
-
 // --- End of Part 5a Section 1 ---
 // index.js - Part 5a: Telegram Message/Callback Handlers & Game Result Processing
-// --- VERSION: 3.2.1m --- (Applying Fixes: Double Deduction(Pt2), Blackjack Parens. Includes previous fixes.)
+// --- VERSION: 3.2.1o --- (Applying Fixes: Double Deduction (All Games), BJ/Crash Play Again, BJ Parens, Deposit Hint Format, Link Wallet Escaping. Includes previous fixes.)
 // (Continued from Part 5a, Section 1)
 
 // Section 2b: Roulette, War, Crash, Blackjack Game Handlers (Modified for Double Deduction & Blackjack Parens Fix)
@@ -4693,8 +4690,7 @@ async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
 
 // Handles Blackjack state and interactions
 async function handleBlackjackGame(userId, chatId, messageId, betAmountLamports, playerAction, existingGameState = null) {
-    // *** APPLYING FIX #5: Replace initializeBlackjackGame call (Already Applied in v3.2.1j) ***
-    // *** APPLYING FIX #7: Escape Parentheses for player score display ***
+    // *** Applying Fix #7: Escape Parentheses for player score display ***
     const gameKey = 'blackjack';
     const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
     const houseEdgeBJ = gameConfig.houseEdge;
@@ -4969,7 +4965,7 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
         let fullResultText = `♠️ *Blackjack Result* ♥️\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`;
         fullResultText += `*Your Hand \\(${escapeMarkdownV2(playerValue)}\\):* ${escapeMarkdownV2(playerHand.map(c => formatCard(c)).join(', '))}\n`; // formatCard from Part 4
         fullResultText += `*Dealer's Hand \\(${escapeMarkdownV2(dealerValue)}\\):* ${escapeMarkdownV2(dealerHand.map(c => formatCard(c)).join(', '))}\n\n`; // formatCard from Part 4
-        fullResultText += `${resultDisplayString}\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Use correct final balance
+        fullResultText += `${resultDisplayString}\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
 
         const keyboard = { // Add Emojis
             inline_keyboard: [
@@ -5356,7 +5352,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 
 // --- End of Part 5b (Section 1) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2 of 2)
-// --- VERSION: 3.2.1n --- (Applying Fix: String concatenation '+' in handleDepositCommand hint. Includes previous fixes.)
+// --- VERSION: 3.2.1o --- (Applying Fixes: Double Deduction (All Games), BJ/Crash Play Again, BJ Parens, Deposit Hint Format, Link Wallet Escaping. Includes previous fixes.)
 
 // (Continuing directly from Part 5b, Section 1)
 // ... (Assume functions like routeStatefulInput, handleCustomAmountInput, etc. are defined above in Section 1) ...
@@ -5536,7 +5532,7 @@ async function handleWithdrawalConfirmation(userId, chatId, messageId, recipient
  * @param {string | null} [correctUserIdFromCb=null] User ID if called from callback.
  */
 async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** THIS FUNCTION INCORPORATES CHANGES #1 and #7 (Start Menu / GIF Removal - Already Applied) ***
+    // *** Start Menu / GIF Removal Fix Already Applied ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const logPrefix = `[StartCmd User ${userId}]`;
@@ -5588,13 +5584,13 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
 
     const displayName = await getUserDisplayName(chatId, userId); // from Part 3
     const botName = escapeMarkdownV2(process.env.BOT_USERNAME || "SolanaGamblesBot"); // BOT_USERNAME from Part 1 env
-    const botVersion = escapeMarkdownV2(BOT_VERSION || "3.2.1n"); // BOT_VERSION from Part 1
+    const botVersion = escapeMarkdownV2(BOT_VERSION || "3.2.1o"); // BOT_VERSION from Part 1
 
     let welcomeMsg = `👋 Welcome, ${displayName}\\!\n\nI am ${botName} \\(v${botVersion}\\), your home for exciting on\\-chain games on Solana\\.\n\n`;
     if (isNewUser) { welcomeMsg += "Looks like you're new here\\!\\! Here's how to get started:\n1\\. Use \`/deposit\` to get your unique address\\.\n2\\. Send SOL to that address\\.\n3\\. Use the menu below to play games\\!\n\n"; }
     welcomeMsg += "Use the menu below or type /help for a list of commands\\.";
 
-    // --- Updated Keyboard (Change #1 - Already Applied) ---
+    // --- Updated Keyboard (Already Applied) ---
     const mainMenuKeyboard = {
         inline_keyboard: [
             [{ text: '🎮 Play Games', callback_data: 'menu:game_selection' }, { text: '👤 My Wallet', callback_data: 'menu:wallet' }],
@@ -5602,12 +5598,8 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
             [{ text: 'ℹ️ Help & Info', callback_data: 'menu:help' }]
         ]
     };
-    // --- End Updated Keyboard ---
 
-    // --- Removed GIF Sending Block (Change #7 - Already Applied) ---
     try {
-        // Always send the welcome message as plain text with the keyboard.
-        // The original message (if from callback) was potentially deleted earlier.
         await safeSendMessage(chatId, welcomeMsg, { // welcomeMsg is already escaped where needed
             parse_mode: 'MarkdownV2',
             reply_markup: mainMenuKeyboard
@@ -5616,7 +5608,6 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
     } catch (error) {
         console.error(`${logPrefix} Failed to send welcome message: ${error.message}.`);
     }
-    // --- End Removed GIF Sending Block ---
 }
 
 /**
@@ -5689,7 +5680,7 @@ async function handleGameSelectionCommand(msgOrCbMsg, args, correctUserIdFromCb 
  * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
  */
 async function handleHelpCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** THIS FUNCTION INCORPORATES FIX #3 (Help Hyphen Escaping - Already Applied) ***
+    // *** Hyphen Escaping Already Applied ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const messageId = msgOrCbMsg.message_id;
@@ -6009,7 +6000,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
 
 async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** Applying Fix: Add '+' for string concatenation before hint lines ***
+    // *** Applying Fix: Correct Tap-to-copy formatting and concatenation ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const logPrefix = `[DepositCmd User ${userId}]`;
@@ -6057,9 +6048,9 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
             const escapedExistingAddress = escapeMarkdownV2(existingAddress); // Escape here
 
             // MarkdownV2 Safety: Escape address, time
-            // ** Added '+' before "(Tap address to copy)" line **
-            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapedExistingAddress}\`\n` + // Added '+'
-                       `\`(Tap address to copy)\`\n\n` + // Tap to copy hint in code block
+            // ** Corrected tap-to-copy format: single backticks for hint, correct '+' **
+            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapedExistingAddress}\`\n` + // '+' is correct
+                       `(Tap address to copy)\n\n` + // Hint text WITHOUT backticks
                        `It expires in approximately ${escapeMarkdownV2(expiresInMinutes)} minutes\\.`; // Escaped . ()
             text += `\n\nOnce you send SOL, it will be credited after confirmations\\. New deposits to this address will be credited until it expires\\.`; // Escaped .
             const keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }], [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${existingAddress}` }]]; // Add Emojis
@@ -6084,11 +6075,11 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const confirmationLevel = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL); // DEPOSIT_CONFIRMATION_LEVEL from Part 1
         const escapedAddress = escapeMarkdownV2(depositAddress);
 
-        // --- Message structure with "(Tap address to copy)" RE-ADDED in code block and '+' added ---
+        // --- Message structure with corrected tap-to-copy format ---
         const message = `💰 *Your Unique Deposit Address*\n\n` +
                         `Send SOL to this unique address:\n\n` +
-                        `\`${escapedAddress}\`\n` + // Added '+'
-                        `\`(Tap address to copy)\`\n\n` + // Added Tap to copy hint in code block
+                        `\`${escapedAddress}\`\n` + // Address in backticks
+                        `(Tap address to copy)\n\n` + // Hint text WITHOUT backticks
                         `⚠️ *Important:*\n` +
                         `1\\. This address is unique to you and for this deposit session\\. It will expire in *${expiryMinutes} minutes*\\.\n` + // Escaped .
                         `2\\. For new deposits, use \`/deposit\` again or the menu option\\.\n` + // Escaped .
@@ -6102,10 +6093,9 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const options = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: depositKeyboard} };
 
         await bot.editMessageText(message, {chat_id: chatId, message_id: workingMessageId, ...options}).catch(e => {
-             // Check if the specific parse error occurs
              if (e.message && e.message.includes("can't parse entities")) {
-                 console.error(`❌ [DepositCmd User ${userId}] PARSE ERROR with tap-to-copy hint added! Message: ${message}`);
-                 // Fallback to a plain text message
+                 console.error(`❌ [DepositCmd User ${userId}] PARSE ERROR with corrected tap-to-copy hint! Message: ${message}`);
+                 // Fallback to plain text message
                  const plainMessage = `Your Deposit Address:\n${depositAddress}\n(Tap address to copy)\n\nExpires in ${expiryMinutes} minutes. Confirmation: ${confirmationLevel}.`;
                  safeSendMessage(chatId, plainMessage, {reply_markup: {inline_keyboard: depositKeyboard}}); // Send plain text
              } else if (!e.message.includes("message is not modified")) { // Handle other edit errors
@@ -6328,7 +6318,7 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
  * @param {boolean} [isFromCallback=true] Assume true if called here.
  */
 async function handleMenuAction(userId, chatId, messageId, menuType, params = [], isFromCallback = true) {
-    // *** THIS FUNCTION INCORPORATES CHANGE #8 (Link Wallet Flow - Already Applied) ***
+    // *** Applying Fix: Escape periods in link_wallet_prompt text ***
     const logPrefix = `[MenuAction User ${userId} Menu ${menuType}]`;
     console.log(`${logPrefix} Handling menu action.`);
     let text = `Menu: ${escapeMarkdownV2(menuType)}`;
@@ -6342,11 +6332,12 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
 
     switch (menuType) {
         case 'link_wallet_prompt':
-            // ** MODIFIED BEHAVIOR (Change #8 - Already Applied) **
+            // ** Link Wallet State Fix Already Applied **
+            // ** Applying Fix: Escape periods in prompt text **
             clearUserState(userId); // Clear any *previous* state first
             const breadcrumbWallet = "Link Wallet";
-            // MarkdownV2 Safety: Escape example address, command for cancel
-            text = `🔗 *Link/Update External Wallet*\n\nPlease send your Solana wallet address in the chat.\n\nExample: \`SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\`\n\nOr type /cancel to go back.`;
+            // MarkdownV2 Safety: Escape example address, command for cancel, and periods
+            text = `🔗 *Link/Update External Wallet*\n\nPlease send your Solana wallet address in the chat\\.\n\nExample: \`SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\`\n\nOr type /cancel to go back\\.`; // Escaped '.'
             keyboard.inline_keyboard = [
                 // Provide cancel option, going back to wallet menu seems logical
                 [{ text: '❌ Cancel', callback_data: 'menu:wallet' }] // Changed Cancel to go back to wallet menu
@@ -6360,8 +6351,6 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
                 data: { breadcrumb: breadcrumbWallet, originalMessageId: messageId }, // Pass context
                 timestamp: Date.now()
             };
-            // Note: We are breaking the switch convention slightly by setting state here,
-            // but it's necessary for this specific menu action. The message editing happens below.
             break; // Break here, the editMessageText below handles sending the prompt.
 
         case 'wallet': // Display wallet info (called from menu or /wallet with no args)
@@ -6436,6 +6425,10 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
         }).catch(e => {
             if (!e.message.includes("message is not modified")) {
                 console.warn(`${logPrefix} Failed to edit message for menu ${menuType}: ${e.message}. Sending new.`);
+                 // Log parse errors specifically if they happen here
+                 if (e.message.toLowerCase().includes("can't parse entities")) {
+                    console.error(`[MenuAction] Markdown Parse Error sending menu '${menuType}': ${e.message}. Text: ${text}`);
+                 }
                 safeSendMessage(chatId, text, { reply_markup: keyboard, parse_mode: 'MarkdownV2' });
             }
         });
