@@ -4037,10 +4037,11 @@ async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
 }
 
 // --- End of Part 5a Section 1 ---
-// Note: Part 5a Section 2 starts below with Roulette handler
-// index.js - Part 5a: Telegram Message/Callback Handlers & Game Result Processing
-// --- VERSION: 3.2.1r --- (Applying Fixes: Correct Payout Accounting (Roulette,War,BJ), BJ Parens, Crash Speed, War Emojis + previous)
-// (Continued from Part 5a, Section 1)
+// index.js - Part 5a: Telegram Message/Callback Handlers & Game Result Processing - Section 2 CORRECTED
+// --- VERSION: 3.2.1v --- (Applying Fixes: FINAL ROULETTE FIXES - Escaping '()!.' in handleRouletteGame results message)
+
+// (Continuing from Part 5a, Section 1)
+// ... (Assume functions like placeBet, simulateRouletteSpin, getRoulettePayoutMultiplier, updateUserBalanceAndLedger, updateBetStatus etc. are available) ...
 
 // Section 2b: Roulette, War, Crash, Blackjack Game Handlers (Modified)
 
@@ -4057,7 +4058,13 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
         client = await pool.connect(); // pool from Part 1
         await client.query('BEGIN');
 
-        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, { type: betType, value: betValue }, betAmountLamports); // placeBet from Part 5a-1
+        // Define bet details based on type
+        let betDetails = { type: betType };
+        if (betType === 'straight') {
+            betDetails.value = betValue; // betValue here is the chosen number string
+        } // Other types don't need a specific value stored beyond the type itself
+
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, betDetails, betAmountLamports); // placeBet from Part 5a-1
         if (!betPlacementResult.success) {
             await client.query('ROLLBACK');
             const errorMsg = betPlacementResult.error === 'Insufficient balance'
@@ -4070,7 +4077,8 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
         finalUserBalance = balanceAfterBet; // Initialize final balance with balance after bet
 
         const { winningNumber } = simulateRouletteSpin(); // from Part 4
-        const basePayoutMultiplier = getRoulettePayoutMultiplier(betType, betValue, winningNumber); // from Part 4
+        // Use the bet details saved during placement for consistency
+        const basePayoutMultiplier = getRoulettePayoutMultiplier(betDetails.type, betDetails.value, winningNumber); // from Part 4
         const win = basePayoutMultiplier > 0;
 
         // Payout Logic
@@ -4106,26 +4114,56 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
         await client.query('COMMIT');
 
         // Animation: Show "spinning" message
-        let betDescription = escapeMarkdownV2(betType);
-        if (betType === 'straight' && betValue !== null) {
-            betDescription += ` on ${escapeMarkdownV2(betValue)}`;
-        }
+      // Construct bet description string, ensure escaping
+        let betDescription = escapeMarkdownV2(betDetails.type);
+        if (betDetails.type === 'straight' && betDetails.value !== undefined && betDetails.value !== null) {
+            betDescription += ` on ${escapeMarkdownV2(betDetails.value)}`;
+        } else if (betDetails.type === 'red') { betDescription = '🔴 Red'; }
+        else if (betDetails.type === 'black') { betDescription = '⚫️ Black'; }
+        else if (betDetails.type === 'even') { betDescription = '🔢 Even'; }
+        else if (betDetails.type === 'odd') { betDescription = '🔢 Odd'; }
+        else if (betDetails.type === 'low') { betDescription = '📉 Low \\(1\\-18\\)'; } // Escaped () -
+        else if (betDetails.type === 'high') { betDescription = '📈 High \\(19\\-36\\)'; } // Escaped () -
+
         const spinningText = `⚪️ *Roulette Spinning\\!* ⚪️\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL on ${betDescription}\n\nSpinning the wheel\\.\\.\\.`; // Escaped ! ... Add Emoji
-        await bot.editMessageText(spinningText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {});
+        await bot.editMessageText(spinningText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {
+           if (!e.message.includes("message is not modified") && e.message.toLowerCase().includes("can't parse")) {
+               console.error(`[RouletteGame] PARSE ERROR ON SPINNING TEXT: ${spinningText}`, e.message);
+           } else if (!e.message.includes("message is not modified")) {
+               console.warn(`[RouletteGame] Failed edit for spinning text: ${e.message}`);
+           }
+       });
         await sleep(2000); // sleep from Part 1
 
-        // Final Message
+        // Final Message Construction with careful escaping
         const numberColor = winningNumber === 0 ? '🟢' : (getRoulettePayoutMultiplier('red', null, winningNumber) ? '🔴' : '⚫️');
-        // MarkdownV2 Safety: Escape number, amounts, balance, punctuation, parentheses
         let resultMsg = `⚪️ *Roulette Result* ⚪️\n\nWinning Number: *${escapeMarkdownV2(numberColor + String(winningNumber))}*\\!\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL on ${betDescription}\n\n`; // Escaped !
-        resultMsg += win
-            ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! (Multiplier: ${escapeMarkdownV2(basePayoutMultiplier)}x base)` // Display profit in message
-            : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped .
+
+      // *** CORRECTED escaping for result lines ***
+        if (win) {
+            // Escape parentheses and exclamation mark
+            resultMsg += `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! \\(Multiplier: ${escapeMarkdownV2(basePayoutMultiplier)}x base\\)`; // Display profit in message, escaped ()!
+        } else {
+            // Escape period
+            resultMsg += `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped .
+        }
         resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Display correct final balance (B+P on win)
+
         const keyboard = { // Add Emojis
             inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]]
         };
-        await bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
+        await bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard }).catch(e => {
+            if (!e.message.includes("message is not modified") && e.message.toLowerCase().includes("can't parse")) {
+               console.error(`[RouletteGame] PARSE ERROR ON FINAL RESULT TEXT: ${resultMsg}`, e.message);
+               // Fallback to plain text if parse fails
+               const plainResult = `Roulette Result\nWinning Number: ${numberColor + String(winningNumber)}\nBet: ${formatSol(betAmountLamports)} SOL on ${betDetails.type}${betDetails.value ? ' on '+betDetails.value : ''}\nOutcome: ${win ? 'Win '+formatSol(profitLamportsOutcome)+' SOL' : 'Loss '+formatSol(betAmountLamports)+' SOL'}\nNew Balance: ${formatSol(finalUserBalance)} SOL`;
+               safeSendMessage(chatId, plainResult, { reply_markup: keyboard });
+            } else if (!e.message.includes("message is not modified")) {
+               console.warn(`[RouletteGame] Failed edit for final result text: ${e.message}`);
+               // Attempt to send as new message if edit fails non-parsing reason
+               safeSendMessage(chatId, resultMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+            }
+       });
 
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr));
@@ -4426,7 +4464,7 @@ async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
         clearUserState(userId); // Ensure state is cleared on major error
          bot.editMessageText(`⚠️ An unexpected error occurred setting up Crash: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }).catch(e => {});
     } finally {
-        // Ensure client is released if error occurred after initial commit
+        // Ensure client is released if error occurred after initial commit but before further actions
         if (client && !client.isReleased) client.release();
     }
 }
@@ -4553,6 +4591,7 @@ async function handleBlackjackGame(userId, chatId, messageId, betAmountLamports,
             }
         }
 
+        // If player stands (or was forced to stand due to empty deck)
         if (playerAction === 'stand') {
             console.log(`${logPrefix} Player stands with score ${gameState.playerScore}. Dealer's turn.`);
             // Simulate dealer's play
@@ -4566,6 +4605,7 @@ async function handleBlackjackGame(userId, chatId, messageId, betAmountLamports,
         }
 
         // --- Update UI for next player action (Hit/Stand) ---
+        // This part is only reached if player hit and did NOT bust
         const formattedPlayerHand = gameState.playerCards.map(c => formatCard(c)).join(' '); // Card utils from Part 4
         const formattedDealerShowCard = gameState.dealerCards.length > 0 ? formatCard(gameState.dealerCards[0]) : '??';
 
@@ -4641,7 +4681,8 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
                 const netBjWinnings = BigInt(Math.floor(Number(bjWinnings) * (1 - houseEdge)));
                 profitLamportsOutcome = netBjWinnings; // For message
                 payoutAmountForDB = betAmountLamports + netBjWinnings; // Total returned = stake + net winnings
-                resultDisplayString = `♠️♥️♦️♣️ BLACKJACK\\! You win ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL (3:2 payout)\\!`; // Escaped !
+              // Escape !, ()
+                resultDisplayString = `♠️♥️♦️♣️ BLACKJACK\\! You win ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL \\(3:2 payout\\)\\!`; // Escaped ! ()
                 // Update balance by adding stake + net winnings
                 const balanceUpdateResultBJ = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId });
                 if (!balanceUpdateResultBJ.success) { throw new Error(`Failed balance update (BJ Win): ${escapeMarkdownV2(balanceUpdateResultBJ.error)}`); }
@@ -4656,6 +4697,7 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
                 const netRegularWinnings = BigInt(Math.floor(Number(regWinnings) * (1 - houseEdge)));
                 profitLamportsOutcome = netRegularWinnings; // For message
                 payoutAmountForDB = betAmountLamports + netRegularWinnings; // Total returned = stake + net winnings
+              // Escape ! .
                 if (outcomeKey === 'dealer_busts_player_wins') { resultDisplayString = `🎉 Dealer Busted\\! You win ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\!`; } // Escaped !
                 else { resultDisplayString = `🎉 You Win\\! ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL earned\\.`; } // Escaped ! .
                 // Update balance by adding stake + net winnings
@@ -4668,6 +4710,7 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
                 dbBetStatus = 'completed_push'; ledgerTransactionType = 'blackjack_push';
                 profitLamportsOutcome = 0n;
                 payoutAmountForDB = betAmountLamports; // Return stake for balance + status
+              // Escape ! .
                 resultDisplayString = `🤝 Push\\! Your bet is returned\\.`; // Escaped ! .
                 // Update balance (adds stake back effectively, reversing the initial deduction)
                 const balanceUpdateResultPush = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId });
@@ -4679,6 +4722,7 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
                 dbBetStatus = 'completed_loss'; ledgerTransactionType = 'blackjack_dealer_wins';
                 profitLamportsOutcome = -betAmountLamports; // For message display
                 payoutAmountForDB = 0n; // Payout for DB status update
+              // Escape () .
                 resultDisplayString = `😢 Dealer Wins \\(${escapeMarkdownV2(dealerValue)}\\ vs ${escapeMarkdownV2(playerValue)}\\)\\. You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped () .
                 // *** LOSS: No balance update needed here. finalUserBalance remains balanceAfterBet ***
                 console.log(`${logPrefix} Blackjack loss (Dealer Wins) for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
@@ -4688,6 +4732,7 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
                 dbBetStatus = 'completed_loss'; ledgerTransactionType = 'blackjack_player_busts';
                 profitLamportsOutcome = -betAmountLamports; // For message display
                 payoutAmountForDB = 0n; // Payout for DB status update
+              // Escape ! .
                 resultDisplayString = `💥 You Busted at ${escapeMarkdownV2(playerValue)}\\! Lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped ! .
                  // *** LOSS: No balance update needed here. finalUserBalance remains balanceAfterBet ***
                  console.log(`${logPrefix} Blackjack loss (Player Busts) for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
@@ -4695,6 +4740,7 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
 
             default: // Includes 'error_game_logic' potential state
                 console.error(`${logPrefix} Unknown outcomeKey received in processBlackjackResult: ${outcomeKey}`);
+              // Escape ()
                 resultDisplayString = `Internal error determining winner \\(${escapeMarkdownV2(outcomeKey)}\\)\\.`; // Escaped ()
                 profitLamportsOutcome = -betAmountLamports;
                 payoutAmountForDB = 0n;
@@ -4708,11 +4754,12 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
         await updateBetStatus(client, betId, dbBetStatus, payoutAmountForDB); // from Part 2
         await client.query('COMMIT'); // Commit transaction (includes balance update if applicable)
 
-        // Construct final result message
+        // Construct final message
         let fullResultText = `♠️ *Blackjack Result* ♥️\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`;
+      // Escape () in hand displays
         fullResultText += `*Your Hand \\(${escapeMarkdownV2(playerValue)}\\):* ${escapeMarkdownV2(playerHand.map(c => formatCard(c)).join(', '))}\n`; // formatCard from Part 4
         fullResultText += `*Dealer's Hand \\(${escapeMarkdownV2(dealerValue)}\\):* ${escapeMarkdownV2(dealerHand.map(c => formatCard(c)).join(', '))}\n\n`; // formatCard from Part 4
-        fullResultText += `${resultDisplayString}\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Display correct final balance
+        fullResultText += `${resultDisplayString}\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Displays B+P on win/push now
 
         const keyboard = { // Add Emojis
             inline_keyboard: [
