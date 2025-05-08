@@ -3313,6 +3313,13 @@ async function handleMessage(msg) {
 
         // commandHandlers is a Map defined in Part 5b, declared in Part 1
         if (commandHandlers && commandHandlers.has(commandName)) {
+            console.log(`[DEBUG handleMessage] Command received:`, commandName); // DEBUG LOG ADDED PREVIOUSLY
+            console.log(`[DEBUG handleMessage] commandHandlers object exists?`, !!commandHandlers); // DEBUG LOG ADDED PREVIOUSLY
+            if (commandHandlers) { // DEBUG LOG ADDED PREVIOUSLY
+                 console.log('[DEBUG handleMessage] commandHandlers size:', commandHandlers.size); // DEBUG LOG ADDED PREVIOUSLY
+                 console.log('[DEBUG handleMessage] Has /start?', commandHandlers.has('/start')); // DEBUG LOG ADDED PREVIOUSLY
+                 console.log('[DEBUG handleMessage] Has received command?', commandHandlers.has(commandName)); // DEBUG LOG ADDED PREVIOUSLY
+            }
             console.log(`${logPrefix} Executing command: ${commandName}`);
             const handler = commandHandlers.get(commandName);
             // Ensure user exists before executing most commands (except /start which handles it)
@@ -3340,7 +3347,15 @@ async function handleMessage(msg) {
             // Pass only msg and args, as admin commands check msg.from.id directly
             return handleAdminCommand(msg, args); // handleAdminCommand from Part 1
         } else {
-            // MarkdownV2 Safety: Escape static error message
+            // *** ADD DEBUG LOGS BEFORE THIS BLOCK *** (Added previously)
+            console.log('[DEBUG handleMessage] Command received:', commandName);
+            console.log('[DEBUG handleMessage] commandHandlers object exists?', !!commandHandlers);
+            if (commandHandlers) {
+                 console.log('[DEBUG handleMessage] commandHandlers size:', commandHandlers.size);
+                 console.log('[DEBUG handleMessage] Has /start?', commandHandlers.has('/start'));
+                 console.log('[DEBUG handleMessage] Has received command?', commandHandlers.has(commandName));
+            }
+            // Original "Unknown command" message send:
             return safeSendMessage(chatId, "😕 Unknown command\\. Type /help to see available commands\\.", { parse_mode: 'MarkdownV2' }); // Escaped .
         }
     }
@@ -3498,10 +3513,9 @@ async function handleCallbackQuery(callbackQuery) {
                      console.log(`${logPrefix} Play Again for ${gameKey} routing to showBetAmountButtons.`);
                      await showBetAmountButtons(originalMessage, gameKey, lastBetAmountLamportsStr, userId);
                 } else {
-                    // Games like Slots, War can directly confirm (simulate confirm_bet callback)
+                    // Games like Slots, War can directly confirm
                     const fakeCallbackData = `confirm_bet:${gameKey}:${lastBetAmountLamportsStr}`;
                     const fakeCallbackQuery = { id: 'fakecb-pa-' + Date.now(), from: callbackQuery.from, message: { chat: callbackQuery.message.chat, message_id: messageId, text: callbackQuery.message.text || "" }, data: fakeCallbackData, chat_instance: String(chatId) };
-                    // Add to queue, cooldown removed so should process promptly.
                     callbackQueue.add(() => handleCallbackQuery(fakeCallbackQuery));
                 }
             } else {
@@ -3536,10 +3550,7 @@ async function handleCallbackQuery(callbackQuery) {
                 let clientCashout = null;
                 try {
                     clientCashout = await pool.connect(); await clientCashout.query('BEGIN');
-                    const grossWinnings = BigInt(Math.floor(Number(betAmountN) * cashedOutAtMultiplier));
-                    const profitBeforeEdge = grossWinnings - betAmountN;
-                    const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - GAME_CONFIG.crash.houseEdge))) : 0n;
-                    const payoutAmountToCredit = betAmountN + netProfit;
+                    const grossWinnings = BigInt(Math.floor(Number(betAmountN) * cashedOutAtMultiplier)); const profitBeforeEdge = grossWinnings - betAmountN; const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - GAME_CONFIG.crash.houseEdge))) : 0n; const payoutAmountToCredit = betAmountN + netProfit;
                     // *** FIX #0: Update balance using TOTAL PAYOUT for crash win ***
                     const balanceUpdateResult = await updateUserBalanceAndLedger(clientCashout, userId, payoutAmountToCredit, 'crash_cashout', { betId: originalBetId });
                     if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Cashout): ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}`); }
@@ -3548,8 +3559,7 @@ async function handleCallbackQuery(callbackQuery) {
                     const cashoutSuccessMsg = `💸 *Cashed Out at ${escapeMarkdownV2(cashedOutAtMultiplier.toFixed(2))}x\\!* 💸\nOriginal Bet: ${escapeMarkdownV2(formatSol(betAmountN))} SOL\nYou won: ${escapeMarkdownV2(formatSol(netProfit))} SOL\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
                     bot.editMessageText(cashoutSuccessMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:crash:${betAmountN}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } }).catch(e => {});
                 } catch (dbError) {
-                    if (clientCashout) await clientCashout.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Cashout DB Rollback failed:`, rbErr));
-                    console.error(`${logPrefix} DB Error processing cashout for Bet ID ${originalBetId}:`, dbError);
+                    if (clientCashout) await clientCashout.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Cashout DB Rollback failed:`, rbErr)); console.error(`${logPrefix} DB Error processing cashout for Bet ID ${originalBetId}:`, dbError);
                     bot.editMessageText(`⚠️ Database error processing cashout for Bet ID ${originalBetId}: ${escapeMarkdownV2(dbError.message)}\\. Please contact support if balance is incorrect\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:crash:${gameState.betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } }).catch(e => {});
                 } finally { if (clientCashout) clientCashout.release(); }
             } else { console.warn(`${logPrefix} Crash state mismatch or not found for cash_out_crash, Bet ID ${originalBetId}. Game might have already ended. State:`, gameState); bot.editMessageText("⚠️ Too late to cash out or game already ended\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:crash:${gameState?.betAmountLamports || GAME_CONFIG.crash.minBetLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } }); }
@@ -3589,16 +3599,12 @@ async function handleCallbackQuery(callbackQuery) {
  * @param {string} callbackData The full callback data string triggering this step.
  */
 async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackData) {
-    // *** Hyphen Escaping Already Applied ***
+    // Hyphen Escaping Already Applied
     const gameConfig = GAME_CONFIG[gameKey];
     const logPrefix = `[ProceedToStep User ${userId} Game ${gameKey} CB ${callbackData}]`;
     console.log(`${logPrefix} Proceeding intermediate step.`);
 
-    if (!gameConfig || !callbackData) {
-        console.error(`${logPrefix} Invalid gameKey or missing callbackData.`);
-        safeSendMessage(chatId, "An internal error occurred with game selection\\. Please start again\\.", { parse_mode: 'MarkdownV2'});
-        return;
-    }
+    if (!gameConfig || !callbackData) { console.error(`${logPrefix} Invalid gameKey or missing callbackData.`); safeSendMessage(chatId, "An internal error occurred with game selection\\. Please start again\\.", { parse_mode: 'MarkdownV2'}); return; }
 
     const parts = callbackData.split(':');
     const actionPrefix = parts[0];
@@ -3612,24 +3618,12 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
     let inlineKeyboard = [];
 
     try {
-        if (gameKey === 'coinflip' && actionPrefix === 'coinflip_select_side') {
-            messageText += "\nChoose your side:";
-            inlineKeyboard = [ [{ text: '🪙 Heads', callback_data: `confirm_bet:coinflip:${betAmountLamportsStr}:heads` }, { text: '🪙 Tails', callback_data: `confirm_bet:coinflip:${betAmountLamportsStr}:tails` }], [{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }] ];
-        }
-        else if (gameKey === 'race' && actionPrefix === 'race_select_horse') {
-            messageText += "\nChoose your horse:"; const horseButtons = [];
-            RACE_HORSES.forEach((horse, index) => { horseButtons.push({ text: `${horse.emoji} ${escapeMarkdownV2(horse.name)} (${escapeMarkdownV2(horse.payoutMultiplier)}x)`, callback_data: `confirm_bet:race:${betAmountLamportsStr}:${index + 1}` }); });
-            for(let i = 0; i < horseButtons.length; i += 2) { inlineKeyboard.push(horseButtons.slice(i, i + 2)); }
-            inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
-        }
+        if (gameKey === 'coinflip' && actionPrefix === 'coinflip_select_side') { messageText += "\nChoose your side:"; inlineKeyboard = [ [{ text: '🪙 Heads', callback_data: `confirm_bet:coinflip:${betAmountLamportsStr}:heads` }, { text: '🪙 Tails', callback_data: `confirm_bet:coinflip:${betAmountLamportsStr}:tails` }], [{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }] ]; }
+        else if (gameKey === 'race' && actionPrefix === 'race_select_horse') { messageText += "\nChoose your horse:"; const horseButtons = []; RACE_HORSES.forEach((horse, index) => { horseButtons.push({ text: `${horse.emoji} ${escapeMarkdownV2(horse.name)} (${escapeMarkdownV2(horse.payoutMultiplier)}x)`, callback_data: `confirm_bet:race:${betAmountLamportsStr}:${index + 1}` }); }); for(let i = 0; i < horseButtons.length; i += 2) { inlineKeyboard.push(horseButtons.slice(i, i + 2)); } inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]); }
         else if (gameKey === 'roulette' && actionPrefix === 'roulette_select_bet_type') {
              const betTypeParam = parts.length > 1 ? parts[1] : null;
             if (betTypeParam === 'straight') { await handleRouletteStraightBetSetup(userId, chatId, messageId, gameKey, betAmountLamportsStr); return; }
-             else {
-                 messageText += "\nSelect your bet type category or Straight Up:";
-                inlineKeyboard = [ [{ text: "🔴⚫️ Color", callback_data: `roulette_bet_type_category:color:${betAmountLamportsStr}` }], [{ text: "🔢 Even / Odd", callback_data: `roulette_bet_type_category:parity:${betAmountLamportsStr}` }], [{ text: "📉📈 Range (1\\-18 / 19\\-36)", callback_data: `roulette_bet_type_category:range:${betAmountLamportsStr}` }], [{ text: "🎯 Straight Up (#)", callback_data: `roulette_bet_type:straight:${betAmountLamportsStr}` }] ];
-                inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
-            }
+             else { messageText += "\nSelect your bet type category or Straight Up:"; inlineKeyboard = [ [{ text: "🔴⚫️ Color", callback_data: `roulette_bet_type_category:color:${betAmountLamportsStr}` }], [{ text: "🔢 Even / Odd", callback_data: `roulette_bet_type_category:parity:${betAmountLamportsStr}` }], [{ text: "📉📈 Range (1\\-18 / 19\\-36)", callback_data: `roulette_bet_type_category:range:${betAmountLamportsStr}` }], [{ text: "🎯 Straight Up (#)", callback_data: `roulette_bet_type:straight:${betAmountLamportsStr}` }] ]; inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]); }
         }
         else if (gameKey === 'roulette' && actionPrefix === 'roulette_bet_type_category') {
             const category = params[0]; messageText = `*${escapeMarkdownV2(gameConfig.name)}* \\- Bet: ${escapeMarkdownV2(amountSOLFormatted)} SOL > ${escapeMarkdownV2(category)}\nSelect your specific bet:`;
@@ -3652,7 +3646,7 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
 // --- End Universal Game Step Processor ---
 
 
-// --- Core Bet Placement Logic --- (Unchanged in this section)
+// --- Core Bet Placement Logic ---
 /**
  * Handles the core logic of placing a bet. Acquires DB client and manages transaction.
  * IMPORTANT: Must be called within a transaction managed by the game handler.
@@ -3664,15 +3658,136 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
  * @param {bigint} betAmountLamports
  * @returns {Promise<{success: boolean, betId?: number, error?: string, insufficientBalance?: boolean, newBalance?: bigint, currentBalance?: bigint}>} Includes currentBalance if insufficient.
  */
-async function placeBet(client, userId, chatId, gameKey, betDetails, betAmountLamports) { /* ... unchanged ... */ }
+async function placeBet(client, userId, chatId, gameKey, betDetails, betAmountLamports) {
+    const stringUserId = String(userId);
+    const logPrefix = `[PlaceBet User ${stringUserId} Game ${gameKey}]`;
+
+    try {
+        const balanceCheck = await queryDatabase('SELECT balance_lamports FROM user_balances WHERE user_id = $1 FOR UPDATE', [stringUserId], client);
+        if (balanceCheck.rowCount === 0) { throw new Error(`User balance record not found for user ${stringUserId} during bet placement.`); }
+        const currentBalance = BigInt(balanceCheck.rows[0].balance_lamports);
+
+        if (currentBalance < betAmountLamports) { console.warn(`${logPrefix} Insufficient balance during placeBet. Current: ${currentBalance}, Needed: ${betAmountLamports}`); return { success: false, error: 'Insufficient balance', insufficientBalance: true, currentBalance: currentBalance }; }
+
+        const balanceUpdateResult = await updateUserBalanceAndLedger( client, stringUserId, -betAmountLamports, `bet_placed:${gameKey}`, {}, `Placed bet on ${GAME_CONFIG[gameKey]?.name || gameKey}` );
+        if (!balanceUpdateResult.success) { return { success: false, error: balanceUpdateResult.error || 'Failed to update balance.', insufficientBalance: balanceUpdateResult.error === 'Insufficient balance', currentBalance: currentBalance }; }
+        const newBalanceAfterBet = balanceUpdateResult.newBalance;
+
+        const betRecordResult = await createBetRecord(client, stringUserId, String(chatId), gameKey, betDetails, betAmountLamports);
+        if (!betRecordResult.success || !betRecordResult.betId) { return { success: false, error: betRecordResult.error || 'Failed to create bet record.' }; }
+        const betId = betRecordResult.betId;
+
+        await updateUserWagerStats(stringUserId, betAmountLamports, client);
+        await _handleReferralChecks(stringUserId, betId, betAmountLamports, client);
+        await updateUserLastBetAmount(stringUserId, gameKey, betAmountLamports, client);
+
+        const userBetsMemoryCache = userLastBetAmounts.get(stringUserId) || new Map(); userBetsMemoryCache.set(gameKey, betAmountLamports); userLastBetAmounts.set(stringUserId, userBetsMemoryCache);
+
+        console.log(`${logPrefix} Bet ID ${betId} successfully recorded for ${formatSol(betAmountLamports)} SOL. New balance (within Tx): ${formatSol(newBalanceAfterBet)} SOL.`);
+        return { success: true, betId, newBalance: newBalanceAfterBet };
+
+    } catch (error) {
+        console.error(`${logPrefix} Error during placeBet logic (caller should rollback):`, error);
+        let returnError = `Error placing bet: ${escapeMarkdownV2(error.message)}`;
+        if (error.message.toLowerCase().includes('insufficient balance') || error.constraint === 'user_balances_balance_lamports_check') { returnError = 'Insufficient balance.'; return { success: false, error: returnError, insufficientBalance: true}; }
+        throw error;
+    }
+}
 // --- End Core Bet Placement Logic ---
 
 // Section 2a: Coinflip, Race, Slots Game Handlers (Win Payout Accounting Fix Applied)
 
-async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, chosenSide) { /* ... Updated in response #20 ... */ }
-async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chosenHorseNumber) { /* ... Updated in response #20 ... */ }
-async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) { /* ... Updated in response #20 ... */ }
+async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, chosenSide) {
+    const gameKey = 'coinflip'; const gameConfig = GAME_CONFIG[gameKey]; const logPrefix = `[CoinflipGame User ${userId} Bet ${betAmountLamports}]`; console.log(`${logPrefix} Handling for side: ${chosenSide}`);
+    let client = null; let finalUserBalance;
+    try {
+        client = await pool.connect(); await client.query('BEGIN');
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, { side: chosenSide }, betAmountLamports);
+        if (!betPlacementResult.success) { await client.query('ROLLBACK'); const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`; if(client) client.release(); return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
+        const { betId, newBalance: balanceAfterBet } = betPlacementResult; finalUserBalance = balanceAfterBet;
+        const { outcome } = playCoinflip(chosenSide); const win = outcome === chosenSide;
+        let profitLamportsOutcome = -betAmountLamports; let payoutAmountForDB = 0n;
+        if (win) {
+            const profitOnWin = BigInt(Math.floor(Number(betAmountLamports) * (1 - gameConfig.houseEdge))); profitLamportsOutcome = profitOnWin; payoutAmountForDB = betAmountLamports + profitOnWin;
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, 'coinflip_win', { betId }); // FIX #0: Use payoutAmountForDB
+            if (!balanceUpdateResult.success) { await client.query('ROLLBACK'); console.error(`${logPrefix} Failed balance update.`); const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`; if(client) client.release(); return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
+            finalUserBalance = balanceUpdateResult.newBalance;
+        } else { profitLamportsOutcome = -betAmountLamports; payoutAmountForDB = 0n; console.log(`${logPrefix} Coinflip loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL.`); }
+        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutAmountForDB); await client.query('COMMIT');
+        let resultMsg = `🪙 *Coinflip Result*\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nYour Choice: ${escapeMarkdownV2(chosenSide.toUpperCase())}\nOutcome: ${escapeMarkdownV2(outcome.toUpperCase())}\n\n`; resultMsg += win ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\!` : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
+        const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] }; bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
+    } catch (error) { if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr)); console.error(`${logPrefix} Error in coinflip game:`, error); bot.editMessageText(`⚠️ An unexpected error occurred during Coinflip: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
+    } finally { if (client) client.release(); }
+}
 
+
+async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chosenHorseNumber) {
+    const gameKey = 'race'; const gameConfig = GAME_CONFIG[gameKey]; const logPrefix = `[RaceGame User ${userId} Bet ${betAmountLamports} Horse ${chosenHorseNumber}]`; const chosenHorseConfig = RACE_HORSES[chosenHorseNumber - 1];
+    if (!chosenHorseConfig) { console.error(`${logPrefix} Invalid horse number: ${chosenHorseNumber}`); return bot.editMessageText(`⚠️ Invalid horse selected: ${escapeMarkdownV2(chosenHorseNumber)}\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
+    console.log(`${logPrefix} Handling for horse: ${chosenHorseConfig.name}`);
+    let client = null; let finalUserBalance;
+    try {
+        client = await pool.connect(); await client.query('BEGIN');
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, { horse: chosenHorseConfig.name, horseNum: chosenHorseNumber }, betAmountLamports);
+        if (!betPlacementResult.success) { await client.query('ROLLBACK'); const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`; if(client) client.release(); return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
+        const { betId, newBalance: balanceAfterBet } = betPlacementResult; finalUserBalance = balanceAfterBet;
+        const { winningLane } = simulateRace(RACE_HORSES.length); const win = winningLane === chosenHorseNumber; const winningHorseConfig = RACE_HORSES[winningLane - 1];
+        let profitLamportsOutcome = -betAmountLamports; let payoutAmountForDB = 0n;
+        if (win) {
+            const basePayoutMultiplierForHorse = chosenHorseConfig.payoutMultiplier; const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (basePayoutMultiplierForHorse - 1))); const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge))) : 0n; profitLamportsOutcome = netProfit; payoutAmountForDB = betAmountLamports + netProfit;
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, 'race_win', { betId }); // FIX #0: Use payoutAmountForDB
+            if (!balanceUpdateResult.success) { await client.query('ROLLBACK'); const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`; if(client) client.release(); return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
+            finalUserBalance = balanceUpdateResult.newBalance;
+        } else { profitLamportsOutcome = -betAmountLamports; payoutAmountForDB = 0n; console.log(`${logPrefix} Race loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL.`); }
+        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutAmountForDB); await client.query('COMMIT');
+        // Animation... (omitted for brevity but is unchanged)
+        let animationText = `🏁 *Horse Race Starting\\!* 🏇\n\nYour Pick: ${chosenHorseConfig.emoji} ${escapeMarkdownV2(chosenHorseConfig.name)}\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\nHorses at the gate:\n`; RACE_HORSES.forEach(h => animationText += `${h.emoji} ${escapeMarkdownV2(h.name)}\n`); await bot.editMessageText(animationText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {}); await sleep(1500); animationText = `🏁 *And they're off\\!* 💨\n\n`; let progress = RACE_HORSES.map(h => ({ ...h, p: '' })); let lastAnimationText = ""; for (let i = 0; i < 5; i++) { progress.forEach(h => { h.p += '─'; }); progress[winningLane - 1].p += '─'; let frameText = animationText; progress.forEach(h => frameText += `${h.emoji} ${h.p}\n`); if (frameText !== lastAnimationText) { await bot.editMessageText(frameText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {}); lastAnimationText = frameText; } await sleep(800); } await sleep(1000);
+        // Final Result
+        let resultMsg = `🏆 *Race Result* 🏆\n\nWinning Horse: ${winningHorseConfig.emoji} *${escapeMarkdownV2(winningHorseConfig.name)}*\\!\nYour Pick: ${chosenHorseConfig.emoji} ${escapeMarkdownV2(chosenHorseConfig.name)}\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`; resultMsg += win ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! (Multiplier: ${escapeMarkdownV2(chosenHorseConfig.payoutMultiplier)}x base)` : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
+        const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] }; bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
+    } catch (error) { if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr)); console.error(`${logPrefix} Error in race game:`, error); bot.editMessageText(`⚠️ An unexpected error occurred during Horse Race: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
+    } finally { if (client) client.release(); }
+}
+
+async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
+    const gameKey = 'slots'; const gameConfig = GAME_CONFIG[gameKey]; const logPrefix = `[SlotsGame User ${userId} Bet ${betAmountLamports}]`; console.log(`${logPrefix} Handling slots spin.`);
+    let client = null; let betId; let balanceAfterBet; let finalUserBalance; let lastMessageText = "";
+    try {
+        client = await pool.connect(); await client.query('BEGIN');
+        const { symbols: finalSymbols, payoutMultiplier: baseMultiplier, isJackpotWin } = simulateSlots();
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, {result: finalSymbols.join('')}, betAmountLamports);
+        if (!betPlacementResult.success) { await client.query('ROLLBACK'); const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`; if(client) client.release(); return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
+        betId = betPlacementResult.betId; balanceAfterBet = betPlacementResult.newBalance; finalUserBalance = balanceAfterBet;
+        await ensureJackpotExists(gameKey, gameConfig.jackpotSeedLamports || 0n, client); let jackpotContribution = 0n;
+        if (gameConfig.jackpotContributionPercent && gameConfig.jackpotContributionPercent > 0 && betAmountLamports > 0n) { jackpotContribution = BigInt(Math.floor(Number(betAmountLamports) * gameConfig.jackpotContributionPercent)); if (jackpotContribution > 0n) { const incremented = await incrementJackpotAmount(client, gameKey, jackpotContribution); if (!incremented) console.warn(`${logPrefix} Failed jackpot increment.`); else console.log(`${logPrefix} Contributed ${formatSol(jackpotContribution)} SOL.`); } }
+        await client.query('COMMIT'); if(client) client.release(); client = null;
+        // Animation... (omitted for brevity but is unchanged)
+        const slotEmojis = { 'C': '🍒', 'L': '🍋', 'O': '🍊', 'B': '🔔', '7': '❼', 'J': '💎' }; const animationFrames = 10; let currentFrameText = ""; const initialSpinText = `🎰 *Slots Spinning\\!* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n\\| 🎰 \\| 🎰 \\| 🎰 \\|\n\nSpinning\\.\\.\\.`; await bot.editMessageText(initialSpinText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {}); lastMessageText = initialSpinText; await sleep(500); for (let i = 0; i < animationFrames + finalSymbols.length; i++) { let currentDisplay = ['🎰', '🎰', '🎰']; let revealIndex = Math.max(-1, i - animationFrames); for(let k=0; k < finalSymbols.length; k++){ if(k <= revealIndex) { currentDisplay[k] = slotEmojis[finalSymbols[k]] || '❓'; } else { currentDisplay[k] = slotEmojis[Object.keys(slotEmojis)[Math.floor(Math.random() * Object.keys(slotEmojis).length)]]; } } currentFrameText = `🎰 *Slots Spinning\\!* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n\\| ${currentDisplay[0]} \\| ${currentDisplay[1]} \\| ${currentDisplay[2]} \\|\n\nSpinning\\.\\.\\.`; if (currentFrameText !== lastMessageText) { await bot.editMessageText(currentFrameText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => { if (!e.message.includes("message is not modified")) console.warn(`${logPrefix} Slots animation edit error: ${e.message}.`); }); lastMessageText = currentFrameText; } await sleep(i < animationFrames ? 200 : 600); }
+        // Process Result
+        const displaySymbols = finalSymbols.map(s => slotEmojis[s] || '❓'); let profitLamportsOutcome = -betAmountLamports; let finalPayoutForDB = 0n; let winMessage = ''; let dbBetStatus = 'completed_loss';
+        client = await pool.connect(); await client.query('BEGIN');
+        try {
+            if (isJackpotWin) {
+                dbBetStatus = 'completed_win'; const currentJackpot = await getJackpotAmount(gameKey, client); let jackpotPayoutAmount = currentJackpot;
+                if (currentJackpot <= 0n) { const fixedMultiplier = 200; const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (fixedMultiplier - 1))); const netProfit = BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge))); profitLamportsOutcome = netProfit; finalPayoutForDB = betAmountLamports + netProfit; winMessage = `💥 Triple Diamonds\\! You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! \\(Jackpot was empty\\)`; }
+                else { jackpotPayoutAmount = currentJackpot; profitLamportsOutcome = jackpotPayoutAmount - betAmountLamports; finalPayoutForDB = jackpotPayoutAmount; winMessage = `💎💎💎 JACKPOT\\! 🎉 You won ${escapeMarkdownV2(formatSol(jackpotPayoutAmount))} SOL\\!`; await updateJackpotAmount(client, gameKey, gameConfig.jackpotSeedLamports); }
+                if (jackpotPayoutAmount > 0n && typeof notifyAdmin === "function") { await notifyAdmin(`🎉 User ${escapeMarkdownV2(userId)} HIT THE SLOTS JACKPOT for ${escapeMarkdownV2(formatSol(jackpotPayoutAmount))} SOL\\! Bet ID: ${betId}`); }
+                const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, finalPayoutForDB, 'slots_jackpot', { betId }); // FIX #0: Use finalPayoutForDB
+                if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Jackpot): ${balanceUpdateResult.error}`); } finalUserBalance = balanceUpdateResult.newBalance;
+            } else if (baseMultiplier > 0) {
+                dbBetStatus = 'completed_win'; const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (baseMultiplier - 1))); const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge))) : 0n; profitLamportsOutcome = netProfit; finalPayoutForDB = betAmountLamports + netProfit; winMessage = `🎉 You matched\\! Won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL \\(Multiplier: ${escapeMarkdownV2(baseMultiplier)}x base\\)\\!`;
+                const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, finalPayoutForDB, 'slots_win', { betId }); // FIX #0: Use finalPayoutForDB
+                if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Slots Win): ${balanceUpdateResult.error}`); } finalUserBalance = balanceUpdateResult.newBalance;
+            } else { dbBetStatus = 'completed_loss'; profitLamportsOutcome = -betAmountLamports; finalPayoutForDB = 0n; winMessage = `😢 No win this time\\. Lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; console.log(`${logPrefix} Slots loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL.`); }
+            await updateBetStatus(client, betId, dbBetStatus, finalPayoutForDB); await client.query('COMMIT');
+            const jackpotAfterSpin = await getJackpotAmount(gameKey);
+            let resultMsg = `🎰 *Slots Result* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nResult: \\| ${displaySymbols[0]} \\| ${displaySymbols[1]} \\| ${displaySymbols[2]} \\|\n\n${winMessage}`; resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; resultMsg += `\n💎 Next Jackpot: ${escapeMarkdownV2(formatSol(jackpotAfterSpin))} SOL`;
+            const keyboard = { inline_keyboard: [ [{ text: '🔄 Spin Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] }; bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
+        } catch (dbError) { if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Result DB Rollback failed:`, rbErr)); console.error(`${logPrefix} DB Error during game end processing: ${dbError.message}`); throw dbError; }
+        finally { if (client) client.release(); client = null; }
+    } catch (error) { if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Outer Catch Rollback failed:`, rbErr)); console.error(`${logPrefix} Error in slots game:`, error); bot.editMessageText(`⚠️ An unexpected error occurred during Slots: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
+    finally { if (client && !client.isReleased) client.release(); }
+}
 
 // --- End of Part 5a Section 1 ---
 // index.js - Part 5a: Telegram Message/Callback Handlers & Game Result Processing
@@ -3724,6 +3839,7 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
             const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, 'roulette_win', { betId }); // from Part 2
             if (!balanceUpdateResult.success) {
                 await client.query('ROLLBACK');
+                // MarkdownV2 Safety: Escape error message, bet ID
                 const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`; // Escaped .
                 if(client) client.release();
                 return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
@@ -3752,6 +3868,7 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
 
         // Final Message
         const numberColor = winningNumber === 0 ? '🟢' : (getRoulettePayoutMultiplier('red', null, winningNumber) ? '🔴' : '⚫️');
+        // MarkdownV2 Safety: Escape number, amounts, balance, punctuation, parentheses
         let resultMsg = `⚪️ *Roulette Result* ⚪️\n\nWinning Number: *${escapeMarkdownV2(numberColor + String(winningNumber))}*\\!\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL on ${betDescription}\n\n`; // Escaped !
         resultMsg += win
             ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! (Multiplier: ${escapeMarkdownV2(basePayoutMultiplier)}x base)` // Display profit in message
@@ -3765,6 +3882,7 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr));
         console.error(`${logPrefix} Error in roulette game:`, error);
+        // MarkdownV2 Safety: Escape error message
         bot.editMessageText(`⚠️ An unexpected error occurred during Roulette: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { // Escaped .
             chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
             reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] }
@@ -3801,6 +3919,7 @@ async function handleWarGame(userId, chatId, messageId, betAmountLamports) {
         const { betId, newBalance: balanceAfterBet } = betPlacementResult;
         finalUserBalance = balanceAfterBet; // Initialize final balance
 
+        // simulateWar returns { result, playerCard: obj, dealerCard: obj } - card objects include .display
         const { result, playerCard, dealerCard } = simulateWar(); // simulateWar from Part 4
 
         let profitLamportsOutcome = -betAmountLamports; // Default loss, used for message display
@@ -3817,7 +3936,7 @@ async function handleWarGame(userId, chatId, messageId, betAmountLamports) {
             payoutAmountForDB = betAmountLamports + netProfit; // For balance update & DB status
 
              // *** FIX #0: Update balance using TOTAL PAYOUT (Stake + Profit) ***
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId });
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId }); // from Part 2
             if (!balanceUpdateResult.success) {
                 await client.query('ROLLBACK');
                 const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`;
@@ -3833,7 +3952,7 @@ async function handleWarGame(userId, chatId, messageId, betAmountLamports) {
             payoutAmountForDB = betAmountLamports; // Return stake for balance update & DB status
 
             // *** FIX #0: Update balance using TOTAL PAYOUT (Stake) to reverse deduction ***
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId });
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, ledgerTransactionType, { betId }); // from Part 2
             if (!balanceUpdateResult.success) {
                 await client.query('ROLLBACK');
                 const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`;
@@ -3851,6 +3970,7 @@ async function handleWarGame(userId, chatId, messageId, betAmountLamports) {
              console.log(`${logPrefix} War loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
         }
 
+        // Update bet status using payoutAmountForDB
         await updateBetStatus(client, betId, dbBetStatus, payoutAmountForDB);
         await client.query('COMMIT');
 
@@ -3972,7 +4092,7 @@ async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
 
             // *** FIX #7: Adjusted Crash Speed ***
             const delay = Math.max(100, 550 - Math.floor(oldMultiplier * 20)); // Faster start/acceleration
-            await sleep(delay);
+            await sleep(delay); // sleep from Part 1
         } // End while loop
 
         const finalStateCheck = userStateCache.get(userId);
@@ -3983,9 +4103,10 @@ async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
             try {
                 clientCrash = await pool.connect(); await clientCrash.query('BEGIN');
                 const finalUserBalanceCrash = BigInt(finalStateCheck.balanceAfterBet || '0');
-                await updateBetStatus(clientCrash, betId, 'completed_loss', 0n);
+                await updateBetStatus(clientCrash, betId, 'completed_loss', 0n); // Loss means 0 payout
+                // No balance update needed for loss.
                 await clientCrash.query('COMMIT');
-                const crashResultText = `💥 *CRASHED at ${escapeMarkdownV2(actualCrashPoint.toFixed(2))}x\\!* 💥\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nYou didn't cash out in time and lost your bet\\. Tough luck\\!\n\nFinal Balance: ${escapeMarkdownV2(formatSol(finalUserBalanceCrash))} SOL`;
+                const crashResultText = `💥 *CRASHED at ${escapeMarkdownV2(actualCrashPoint.toFixed(2))}x\\!* 💥\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nYou didn't cash out in time and lost your bet\\. Tough luck\\!\n\nFinal Balance: ${escapeMarkdownV2(formatSol(finalUserBalanceCrash))} SOL`; // Show balance after initial bet
                 await bot.editMessageText(crashResultText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } }).catch(e => {});
             } catch (dbError) {
                 if (clientCrash) await clientCrash.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Crash Loss Rollback failed:`, rbErr));
@@ -4006,7 +4127,7 @@ async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
 
 // Handles Blackjack state and interactions
 async function handleBlackjackGame(userId, chatId, messageId, betAmountLamports, playerAction, existingGameState = null) {
-    // *** Applying Fix #7: Escape Parentheses for player score display ***
+    // *** Applying Fix: Escape Parentheses for player score display ***
     const gameKey = 'blackjack';
     const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
     const houseEdgeBJ = gameConfig.houseEdge;
@@ -4028,9 +4149,7 @@ async function handleBlackjackGame(userId, chatId, messageId, betAmountLamports,
             const betPlacementResult = await placeBet(client, userId, chatId, gameKey, {}, betAmountLamports);
             if (!betPlacementResult.success) {
                 await client.query('ROLLBACK');
-                const errorMsg = betPlacementResult.error === 'Insufficient balance'
-                    ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.`
-                    : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
+                const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
                     if(client) client.release();
                 return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
             }
@@ -4094,7 +4213,7 @@ async function handleBlackjackGame(userId, chatId, messageId, betAmountLamports,
         const formattedPlayerHand = gameState.playerCards.map(c => formatCard(c)).join(' ');
         const formattedDealerShowCard = gameState.dealerCards.length > 0 ? formatCard(gameState.dealerCards[0]) : '??';
 
-        // *** Fix #2: Escape Parentheses around player score *** (Applied)
+        // *** FIX: Escape Parentheses around player score *** (Applied)
         let currentHandsText = `♠️ *Blackjack Table* ♥️\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`;
         currentHandsText += `*Your Hand \\(${escapeMarkdownV2(gameState.playerScore)}\\):* ${escapeMarkdownV2(formattedPlayerHand)}\n`; // Escaped () around score
         currentHandsText += `*Dealer Shows:* ${escapeMarkdownV2(formattedDealerShowCard)} \\(?\\)\n\n`; // Escaped () ?
@@ -4224,7 +4343,7 @@ async function processBlackjackResult(userId, chatId, messageId, gameState, outc
         let fullResultText = `♠️ *Blackjack Result* ♥️\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`;
         fullResultText += `*Your Hand \\(${escapeMarkdownV2(playerValue)}\\):* ${escapeMarkdownV2(playerHand.map(c => formatCard(c)).join(', '))}\n`; // formatCard from Part 4
         fullResultText += `*Dealer's Hand \\(${escapeMarkdownV2(dealerValue)}\\):* ${escapeMarkdownV2(dealerHand.map(c => formatCard(c)).join(', '))}\n\n`; // formatCard from Part 4
-        fullResultText += `${resultDisplayString}\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Displays B+P on win/push
+        fullResultText += `${resultDisplayString}\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Displays B+P on win/push now
 
         const keyboard = { // Add Emojis
             inline_keyboard: [
