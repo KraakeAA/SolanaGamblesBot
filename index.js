@@ -3213,7 +3213,7 @@ function determineBlackjackWinner(playerHand, dealerHand) {
 
 // --- End of Part 4 ---
 // index.js - Part 5a: Telegram Message/Callback Handlers & Game Result Processing
-// --- VERSION: 3.2.1t --- (Applying Fixes: CORRECTED '>' escape in proceedToGameStep category message, CORRECTED ReferenceError in proceedToGameStep, Routing Roulette intermediate buttons, Win Payout Accounting(CF,Race,Slots), Play Again Cooldown)
+// --- VERSION: 3.2.1v --- (Applying Fixes: FINAL ROULETTE FIXES - Escaping in proceedToGameStep (#, >), ReferenceError fix)
 
 // --- Assuming functions from Part 1, 2, 3, 4 are available ---
 // (bot, pool, caches, GAME_CONFIG, DB ops, utils like safeSendMessage, escapeMarkdownV2, formatSol, sleep, getUserBalance, etc.),
@@ -3665,7 +3665,7 @@ async function handleCallbackQuery(callbackQuery) {
  * @param {string} callbackData The full callback data string triggering this step.
  */
 async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackData) {
-    // *** CORRECTED ReferenceError fix & '>' escape fix ***
+    // *** CORRECTED ReferenceError fix & '>' escape fix & '#' escape fix ***
     const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
     const logPrefix = `[ProceedToStep User ${userId} Game ${gameKey} CB ${callbackData}]`;
     console.log(`${logPrefix} Proceeding intermediate step.`);
@@ -3706,7 +3706,7 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
             for(let i = 0; i < horseButtons.length; i += 2) { inlineKeyboard.push(horseButtons.slice(i, i + 2)); }
             inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
         }
-        // --- FIX #3: Roulette Step Logic (with corrected params access & '>' escape) ---
+        // --- FIX #3: Roulette Step Logic (with corrected params access & '>' and '#' escape) ---
         else if (gameKey === 'roulette') {
             if (actionPrefix === 'roulette_select_bet_type') {
                 // This is the first step after amount selection (or re-selection)
@@ -3722,8 +3722,8 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
                     inlineKeyboard = [
                         [{ text: "🔴⚫️ Color", callback_data: `roulette_bet_type_category:color:${betAmountLamportsStr}` }],
                         [{ text: "🔢 Even / Odd", callback_data: `roulette_bet_type_category:parity:${betAmountLamportsStr}` }],
-                        [{ text: "📉📈 Range (1\\-18 / 19\\-36)", callback_data: `roulette_bet_type_category:range:${betAmountLamportsStr}` }],
-                        [{ text: "🎯 Straight Up (#)", callback_data: `roulette_select_bet_type:straight:${betAmountLamportsStr}` }] // This triggers the number input
+                        [{ text: "📉📈 Range (1\\-18 / 19\\-36)", callback_data: `roulette_bet_type_category:range:${betAmountLamportsStr}` }], // Escaped -
+                        [{ text: "🎯 Straight Up (\\#)", callback_data: `roulette_select_bet_type:straight:${betAmountLamportsStr}` }] // Escaped # and () - This triggers the number input
                     ];
                     inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
                 }
@@ -3738,7 +3738,7 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
                 switch(category) {
                     case 'color': inlineKeyboard.push([{ text: '🔴 Red', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:red` }, { text: '⚫️ Black', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:black` }]); break;
                     case 'parity': inlineKeyboard.push([{ text: '🔢 Even', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:even` }, { text: '🔢 Odd', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:odd` }]); break;
-                    case 'range': inlineKeyboard.push([{ text: '📉 Low (1\\-18)', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:low` }, { text: '📈 High (19\\-36)', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:high` }]); break;
+                    case 'range': inlineKeyboard.push([{ text: '📉 Low (1\\-18)', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:low` }, { text: '📈 High (19\\-36)', callback_data: `confirm_bet:roulette:${betAmountLamportsStr}:high` }]); break; // Escaped -
                     default: throw new Error(`Invalid Roulette category received: ${category}`);
                 }
                 // Add navigation buttons
