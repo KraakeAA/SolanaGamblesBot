@@ -1,6 +1,6 @@
 {
   "name": "solana-casino-bot",
-  "version": "3.1.5",
+  "version": "3.2.1p",
   "type": "module",
   "main": "index.js",
   "scripts": {
