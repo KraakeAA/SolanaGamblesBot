@@ -6059,7 +6059,7 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
             // MarkdownV2 Safety: Escape address, time
             // ** Added '+' before "(Tap address to copy)" line **
             let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapedExistingAddress}\`\n` + // Added '+'
-                       ``(Tap address to copy)`\n\n` + // Tap to copy hint in code block
+                       `\`(Tap address to copy)\`\n\n` + // Tap to copy hint in code block
                        `It expires in approximately ${escapeMarkdownV2(expiresInMinutes)} minutes\\.`; // Escaped . ()
             text += `\n\nOnce you send SOL, it will be credited after confirmations\\. New deposits to this address will be credited until it expires\\.`; // Escaped .
             const keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }], [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${existingAddress}` }]]; // Add Emojis
@@ -6088,7 +6088,7 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const message = `💰 *Your Unique Deposit Address*\n\n` +
                         `Send SOL to this unique address:\n\n` +
                         `\`${escapedAddress}\`\n` + // Added '+'
-                        ``(Tap address to copy)`\n\n` + // Added Tap to copy hint in code block
+                        `\`(Tap address to copy)\`\n\n` + // Added Tap to copy hint in code block
                         `⚠️ *Important:*\n` +
                         `1\\. This address is unique to you and for this deposit session\\. It will expire in *${expiryMinutes} minutes*\\.\n` + // Escaped .
                         `2\\. For new deposits, use \`/deposit\` again or the menu option\\.\n` + // Escaped .
