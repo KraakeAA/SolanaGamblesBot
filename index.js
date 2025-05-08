@@ -6266,9 +6266,48 @@ async function handleRouletteCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 async function handleCrashCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... unchanged ... */ }
 async function handleBlackjackCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... unchanged ... */ }
 
-// --- Handler Map Definitions --- (Unchanged)
-commandHandlers = new Map([ /* ... unchanged ... */ ]);
-menuCommandHandlers = new Map([ /* ... unchanged ... */ ]);
+// --- Handler Map Definitions ---
+// (Declared in Part 1, populated here)
+
+commandHandlers = new Map([
+    ['/start', handleStartCommand],     // Uses the actual function handleStartCommand
+    ['/help', handleHelpCommand],       // Uses the actual function handleHelpCommand
+    ['/wallet', handleWalletCommand],
+    ['/referral', handleReferralCommand],
+    ['/deposit', handleDepositCommand],
+    ['/withdraw', handleWithdrawCommand],
+    ['/history', handleHistoryCommand],
+    ['/leaderboards', handleLeaderboardsCommand],
+    ['/games', handleGameSelectionCommand],
+    ['/coinflip', handleCoinflipCommand], ['/cf', handleCoinflipCommand],
+    ['/race', handleRaceCommand],
+    ['/slots', handleSlotsCommand],
+    ['/roulette', handleRouletteCommand],
+    ['/war', handleWarCommand],
+    ['/crash', handleCrashCommand],
+    ['/blackjack', handleBlackjackCommand], ['/bj', handleBlackjackCommand],
+    // '/admin' is handled separately in handleMessage (Part 5a) using handleAdminCommand (Part 1)
+]);
+
+menuCommandHandlers = new Map([
+    ['main', handleStartCommand],       // Uses the actual function handleStartCommand
+    ['game_selection', handleGameSelectionCommand],
+    ['wallet', handleWalletCommand],
+    ['referral', handleReferralCommand],
+    ['withdraw', handleWithdrawCommand],
+    ['help', handleHelpCommand],
+    ['leaderboards', handleLeaderboardsCommand],
+    ['history', handleHistoryCommand],
+    ['link_wallet_prompt', handleMenuAction],
+    ['my_stats', handleMenuAction],
+    ['coinflip', handleCoinflipCommand],
+    ['race', handleRaceCommand],
+    ['slots', handleSlotsCommand],
+    ['roulette', handleRouletteCommand],
+    ['war', handleWarCommand],
+    ['crash', handleCrashCommand],
+    ['blackjack', handleBlackjackCommand],
+]);
 
 // --- End of Part 5b (Section 2) ---
 // index.js - Part 6: Background Tasks, Payouts, Startup & Shutdown
