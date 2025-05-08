@@ -320,7 +320,7 @@ async function showBetAmountButtons(msgOrCbMsg, gameKey, existingBetAmountStr = 
 
 
 // --- Version and Startup Logging ---
-const BOT_VERSION = process.env.npm_package_version || '3.2.1a'; // Updated version
+const BOT_VERSION = process.env.npm_package_version || '3.2.1p'; // Updated version
 console.log(`--- INDEX.JS - DEPLOYMENT CHECK --- ${new Date().toISOString()} --- v${BOT_VERSION} ---`);
 console.log(`⏳ Starting Solana Gambles Bot (Custodial, Buttons, v${BOT_VERSION})... Checking environment variables...`);
 
