@@ -5243,6 +5243,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 // --- End of Part 5b (Section 1) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2 of 2)
 // --- VERSION: 3.2.1e --- (Corrected: No stateful handlers here. Applied GIF, /wallet args, Emojis, Game Selection Menu, specific menu/action helpers, Tap to copy fix, Link Wallet flow fix)
+// --- TEMP DEBUG: Simplified deposit message in handleDepositCommand ---
 
 // (Continuing directly from Part 5b, Section 1)
 // ... (Assume functions like routeStatefulInput, handleCustomAmountInput, etc. are defined above in Section 1) ...
@@ -5971,8 +5972,8 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const confirmationLevel = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL); // DEPOSIT_CONFIRMATION_LEVEL from Part 1
         const escapedAddress = escapeMarkdownV2(depositAddress);
 
-         // MarkdownV2 Safety: Escape address, time, level
-         // ** Apply Fix #2 to Tap to copy line **
+        // --- TEMP DEBUGGING MESSAGE (Change #2 applied + Simplified) ---
+        /* COMMENT OUT THE ORIGINAL MESSAGE CONSTRUCTION:
         const message = `💰 *Your Unique Deposit Address*\n\n` +
                         `Send SOL to this unique address:\n\n` +
                         `\`${escapedAddress}\`\n\\\\_\\\\(Tap address to copy\\\\)\\\\_ \n\n` + // Escaped () _ Corrected escape
@@ -5980,6 +5981,11 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
                         `1\\. This address is unique to you and for this deposit session\\. It will expire in *${expiryMinutes} minutes*\\.\n` + // Escaped .
                         `2\\. For new deposits, use \`/deposit\` again or the menu option\\.\n` + // Escaped .
                         `3\\. Confirmation: *${confirmationLevel}* network confirmations required\\.`; // Escaped .
+        */
+        // REPLACE WITH THIS SIMPLIFIED TEST MESSAGE:
+        const message = `Test Deposit Address \\(V2\\):\n\`${escapedAddress}\``;
+        // --- END TEMP DEBUGGING MESSAGE ---
+
 
         const depositKeyboard = [ // Add Emojis
             [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${depositAddress}` }],
