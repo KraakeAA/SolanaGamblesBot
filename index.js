@@ -5143,8 +5143,8 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 // --- End Stateful Input Handlers ---
 
 // --- End of Part 5b (Section 1) ---
-// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2a of 4)
-// --- VERSION: 3.2.1r --- (Applying Fixes: Verifying Start Cmd Escaping, Referral/Help Parse Errors, Deposit Hint Format, Link Wallet Escaping, Ref Link Display, Error Recovery, Balance on Start, Start Animation + previous)
+// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2a of 4) - CORRECTED
+// --- VERSION: 3.2.1s --- (Applying Fixes: CORRECTED '>' escape in Roulette setup, Verifying Start Cmd Escaping, Referral/Help Parse Errors, Deposit Hint Format, Link Wallet Escaping, Ref Link Display, Error Recovery, Balance on Start, Start Animation + previous)
 
 // (Continuing directly from Part 5b, Section 1)
 // ... (Assume functions like routeStatefulInput, handleCustomAmountInput, etc. are defined above in Section 1) ...
@@ -5171,7 +5171,7 @@ async function handleCustomAmountSelection(userId, chatId, messageId, gameKey) {
         return;
     }
 
-    const breadcrumb = `${escapeMarkdownV2(gameConfig.name)} > Custom Amount`; // Escape here for safety
+    const breadcrumb = `${escapeMarkdownV2(gameConfig.name)} \\> Custom Amount`; // Escape > as \\> here
     // MarkdownV2 Safety: Escape breadcrumb, game name, min/max, punctuation
     const promptText = `${breadcrumb}\nPlease enter your desired bet amount for ${escapeMarkdownV2(gameConfig.name)} \\(e\\.g\\., 0\\.1, 2\\.5\\)\\.\nMin: ${escapeMarkdownV2(formatSol(gameConfig.minBetLamports))} SOL, Max: ${escapeMarkdownV2(formatSol(gameConfig.maxBetLamports))} SOL\\. Or /cancel\\.`; // Escaped . () formatSol from Part 3
     const keyboard = { // Add Emojis
@@ -5224,7 +5224,8 @@ async function handleCustomAmountSelection(userId, chatId, messageId, gameKey) {
  */
 async function handleRouletteStraightBetSetup(userId, chatId, messageId, gameKey, betAmountLamportsStr) {
     const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
-    const breadcrumb = `${escapeMarkdownV2(gameConfig.name)} > Straight Up Bet`; // Escape here
+    // *** CORRECTED '>' escaping in breadcrumb ***
+    const breadcrumb = `${escapeMarkdownV2(gameConfig.name)} \\> Straight Up Bet`; // Escape > as \\> here
     // MarkdownV2 Safety: Escape breadcrumb, amount
     const promptText = `${breadcrumb}\nBetting ${escapeMarkdownV2(formatSol(BigInt(betAmountLamportsStr)))} SOL on a Straight Up number\\.\nPlease type the number you want to bet on \\(0-36\\), or /cancel:`; // Escaped . () formatSol from Part 3
     const keyboard = { // Add Emoji
@@ -5244,7 +5245,11 @@ async function handleRouletteStraightBetSetup(userId, chatId, messageId, gameKey
         }).catch(async (e) => { // Make catch async
             if (!e.message.includes("message is not modified")) {
                 console.warn(`[RouletteStraightSetup] Failed to edit msg ${messageId}, sending new. Err: ${e.message}`);
-                const sentMsg = await safeSendMessage(chatId, promptText, { reply_markup: keyboard, parse_mode: 'MarkdownV2' });
+                // Log the specific error if it's a parse error
+                if (e.message?.toLowerCase().includes("can't parse entities")) {
+                    console.error(`[RouletteStraightSetup] PARSE ERROR ON EDIT/SEND: Text: ${promptText}`);
+                }
+                const sentMsg = await safeSendMessage(chatId, promptText, { reply_markup: keyboard, parse_mode: 'MarkdownV2' });
                 effectiveMessageId = sentMsg?.message_id || null; // Update effectiveMessageId if new message sent
             }
         });
@@ -5264,7 +5269,7 @@ async function handleRouletteStraightBetSetup(userId, chatId, messageId, gameKey
                 gameKey,
                 action: 'awaiting_roulette_number', // Keep action in data for reference
                 betAmountLamportsStr,
-                breadcrumb,
+                breadcrumb, // Store the escaped breadcrumb used in the prompt
                 originalMessageId: effectiveMessageId // Store the ID of the prompt message
             },
             timestamp: Date.now()
@@ -5275,7 +5280,6 @@ async function handleRouletteStraightBetSetup(userId, chatId, messageId, gameKey
         safeSendMessage(chatId, "Error setting up number input. Please try again.", {});
     }
 }
-
 
 /**
  * Handles the confirmation (or cancellation) of a withdrawal request.
