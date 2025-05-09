@@ -5877,7 +5877,7 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
 // --- End of Part 5b (Section 2b) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - METICULOUSLY VERIFIED
-// --- VERSION: Includes fixes for animation editing (referral) and robust MarkdownV2 escaping for referral & deposit messages ---
+// --- VERSION: Enhanced Leaderboards with Rank Emojis and Top Single Wins per Game ---
 
 // (Continuing directly from Part 5b, Section 2b)
 // ... (Assume functions, dependencies etc. from other parts are available)
@@ -5925,7 +5925,7 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
             else if (bet.status === 'completed_push') outcomeText = `Push \\(Returned ${escapeMarkdownV2(formatSol(payout))}\\)`; // Escaped ()
             else if (bet.status === 'completed_loss') outcomeText = `Lost ${escapeMarkdownV2(wager)} SOL`;
         } else if (bet.status === 'processing_game') {
-            outcomeText = `Processing...`; // Add Emojis
+            outcomeText = `Processing...`;
         } else if (bet.status === 'active') {
             outcomeText = `Active`;
         }
@@ -5956,7 +5956,7 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
 async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
-    let messageToEditId = msgOrCbMsg.message_id; // This is the ID of the message with the button, if from callback
+    let messageToEditId = msgOrCbMsg.message_id;
     let isFromCallback = !!correctUserIdFromCb;
     clearUserState(userId);
 
@@ -5970,7 +5970,8 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             const noWalletMsg = `❌ You need to link your wallet first using \`/wallet <YourSolAddress>\` before using the referral system\\. This ensures rewards can be paid out\\.`;
             const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]};
             if (isFromCallback && messageToEditId) {
-                await bot.deleteMessage(chatId, messageToEditId).catch(delErr => console.warn(`${logPrefix} Non-critical error deleting original message ${messageToEditId} for noWalletMsg: ${delErr.message}`));
+                // If coming from a callback, delete the previous message before sending the new one
+                await bot.deleteMessage(chatId, messageToEditId).catch(delErr => console.warn(`${logPrefix} Non-critical error deleting original message ${messageToEditId} for noWalletMsg: ${delErr.message}`));
                 return await safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard });
             }
             return await safeSendMessage(chatId, noWalletMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
@@ -6028,24 +6029,20 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
                             `*Invite Friends & Earn SOL\\!*\n\n` +
                             `🔗 *Your Unique Referral Link:*\n` +
                             `\`${escapedReferralLinkForCodeBlock}\`\n` +
-                            `_\\(Tap the button below to share\\!\\)_\\n\n` + // Escaped _ ( ) ! \
+                            `_\\(Tap the button below to share\\!\\)_\\n\n` + 
                             `📊 *Your Stats:*\n` +
                             `  ▫️ *Referrals:* ${referralCount}\n` +
                             `  ▫️ *Total Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
                             `🎁 *How You Earn:*\n\n` +
                             `  1️⃣ *Initial Bet Bonus:*\n` +
-                            `     When your friend places their first qualifying bet \\(min\\. ${minBetAmount} SOL\\), you earn a percentage of *their bet amount\\!* The more friends you refer, the higher your percentage:\n` + // Escaped ( ) . !
+                            `     When your friend places their first qualifying bet \\(min\\. ${minBetAmount} SOL\\), you earn a percentage of *their bet amount\\!* The more friends you refer, the higher your percentage:\n` + 
                             `${tiersDisplay}\n\n` +
                             `  2️⃣ *Wager Milestone Bonus:*\n` +
-                            `     As your referred friends play and reach wagering milestones \\(e\\.g\\., they've wagered a total of 1 SOL, 5 SOL, 25 SOL, etc\\.\\), you'll receive *${milestonePercent}\%* of that milestone amount\\.\n\n` + // Escaped ( ) . %
+                            `     As your referred friends play and reach wagering milestones \\(e\\.g\\., they've wagered a total of 1 SOL, 5 SOL, 25 SOL, etc\\.\\), you'll receive *${milestonePercent}\%* of that milestone amount\\.\n\n` + 
                             `💸 *Payouts:*\n` +
                             `   All referral rewards are automatically paid out in SOL to your linked wallet:\n` +
                             `   \`${withdrawalAddress}\`\n\n` +
-                            `*Keep sharing and earning\\!* ✨`; // Escaped !
-
-        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - New Format) ---`);
-        console.log(messageToSend); 
-        console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
+                            `*Keep sharing and earning\\!* ✨`;
 
         const keyboard = [
             [{ text: '🔗 Share My Referral Link!', switch_inline_query: rawReferralLink }],
@@ -6154,7 +6151,7 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
             let text = `💰 *Your Active Deposit Address*\n\n` +
                        `You have an active deposit address available:\n\n` +
                        `\`${escapedExistingAddress}\`\n` +
-                       `_\\(Tap the address above to copy\\)_\\n\n` + // Using italicized hint with escaped parens
+                       `_\\(Tap the address above to copy\\)_\\n\n` + // Italicized hint with escaped parens
                        `This address will expire in approximately *${expiresInMinutesEscaped} minutes*\\.\n\n` +
                        `Please send SOL to this address\\. Funds will be credited to your account after network confirmations \\(${confirmationLevelEscaped}\\)\\. You can continue to use this address for new deposits until it expires\\.`;
 
@@ -6185,7 +6182,7 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const message = `💰 *Your New Deposit Address*\n\n` +
                         `Please send SOL to your unique deposit address below:\n\n` +
                         `\`${escapedAddress}\`\n` +
-                        `_\\(Tap the address above to copy\\)_\\n\n` + // Using italicized hint with escaped parens
+                        `_\\(Tap the address above to copy\\)_\\n\n` + // Italicized hint with escaped parens
                         `⚠️ *Important Information:*\n` +
                         `* This address is unique to you and is valid for this deposit session only\\.\n` +
                         `* It will expire in approximately *${expiryMinutesEscaped} minutes*\\. __Do not use after expiry\\.__\n` +
@@ -6267,7 +6264,7 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; 
             await bot.editMessageText(noWalletMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
                     .catch(async e => await safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard})); 
-                    return; // Return after sending/editing
+                    return; 
         }
 
         const currentBalance = await getUserBalance(userId); 
@@ -6279,7 +6276,7 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; 
             await bot.editMessageText(lowBalMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
                     .catch(async e => await safeSendMessage(chatId, lowBalMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard})); 
-                    return; // Return after sending/editing
+                    return; 
         }
 
         userStateCache.set(userId, { 
@@ -6318,9 +6315,6 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
     }
 }
 
-
-// In Part 5b, Section 2c
-
 /**
  * Handles the /leaderboards command and related callbacks.
  * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg Message or callback message.
@@ -6330,7 +6324,7 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 async function handleLeaderboardsCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
-    const originalMessageId = msgOrCbMsg.message_id; // ID of the message that triggered this
+    const originalMessageId = msgOrCbMsg.message_id;
     const isFromCallback = !!correctUserIdFromCb;
     clearUserState(userId);
     const logPrefix = `[LeaderboardCmd User ${userId}]`;
@@ -6338,91 +6332,115 @@ async function handleLeaderboardsCommand(msgOrCbMsg, args, correctUserIdFromCb =
     let type = 'overall_wagered';
     let page = 0;
 
-    // Determine type and page from args
-    if (isFromCallback && args[0]?.startsWith('leaderboard_nav')) { // If it's a navigation callback like 'leaderboard_nav:type:page'
-        const navParts = args[0].split(':'); // args[0] would be the full callback_data for leaderboard_nav
+    // Check if the callback is specifically for page navigation or a general menu call
+    let isPageNavigation = false;
+    if (isFromCallback && args[0] && args[0].startsWith('leaderboard_nav:')) {
+        const navParts = args[0].split(':'); // e.g., leaderboard_nav:overall_wagered:0
         type = navParts[1] || 'overall_wagered';
         page = parseInt(navParts[2] || '0', 10);
-    } else if (isFromCallback) { // If it's a generic menu callback like 'menu:leaderboards' or specific type from another menu
-        type = args[0] || 'overall_wagered'; // args[0] is the type from menu:leaderboards:TYPE
+        isPageNavigation = true;
+    } else if (isFromCallback) { // General menu callback, e.g., menu:leaderboards or menu:leaderboards_top_wins_select_game:slots
+        type = args[0] || 'overall_wagered'; // This might be 'leaderboards' or a game key for top_wins
         page = parseInt(args[1] || '0', 10);
-    }
-    else { // From /leaderboards command
+    } else { // From /leaderboards command
         type = args.length > 1 ? args[1] : 'overall_wagered';
-        page = args.length > 2 ? parseInt(args[2], 10) - 1 : 0; // User inputs 1-indexed page
+        page = args.length > 2 ? parseInt(args[2], 10) - 1 : 0;
     }
     if (isNaN(page) || page < 0) page = 0;
 
-    // If this command/menu was triggered from a callback (likely on the animated main menu for the first view)
-    // delete the original message and prepare to send the leaderboard as a new message.
-    if (isFromCallback && originalMessageId && args[0] !== 'leaderboard_nav') { // Only delete if it's the *first* call from a menu, not for page navigation
-        console.log(`${logPrefix} Initial leaderboard view from callback. Deleting original message ID ${originalMessageId}.`);
+    // If this is the initial call to show leaderboards from another menu (not pagination)
+    // and it's from a callback, delete the previous menu message.
+    if (isFromCallback && originalMessageId && !isPageNavigation) {
+        console.log(`${logPrefix} Initial leaderboard view from callback. Deleting original message ID ${originalMessageId}. Type: ${type}`);
         try {
             await bot.deleteMessage(chatId, originalMessageId);
         } catch (delErr) {
             console.warn(`${logPrefix} Non-critical error deleting original message ${originalMessageId}: ${delErr.message}`);
         }
-        // Set messageId to null so displayLeaderboard sends a new message for the first page.
-        await displayLeaderboard(chatId, null, userId, type, page, false); // Force sending new
+        // Set messageId to null to force displayLeaderboard to send a new message
+        await displayLeaderboard(chatId, null, userId, type, page, false);
     } else {
         // For direct command, or subsequent page navigation (where originalMessageId is the leaderboard itself)
         await displayLeaderboard(chatId, originalMessageId, userId, type, page, isFromCallback);
     }
 }
 
+
 /**
  * Displays leaderboards. Fetches data and formats the message.
  * @param {string} chatId
  * @param {number | null} messageId Message ID to edit. If null, a new message will be sent.
  * @param {string} userId User requesting (for context).
- * @param {string} type Leaderboard type (e.g., 'overall_wagered', 'overall_profit').
+ * @param {string} type Leaderboard type (e.g., 'overall_wagered', 'overall_profit', 'top_win_slots').
  * @param {number} page Current page number (0-indexed).
- * @param {boolean} [isFromCallbackOrEdit=false] If true, attempt to edit. Otherwise, send new.
+ * @param {boolean} [tryEdit=false] If true, attempt to edit messageId if provided. Otherwise, send new.
  */
-async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wagered', page = 0, isFromCallbackOrEdit = false) {
+async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wagered', page = 0, tryEdit = false) {
     const logPrefix = `[DisplayLeaderboard Type:${type} Page:${page} User:${userId}]`;
-    console.log(`${logPrefix} Attempting to display. MessageId to edit: ${messageId}`);
+    console.log(`${logPrefix} Attempting to display. MessageId to edit: ${messageId}, tryEdit: ${tryEdit}`);
     const itemsPerPage = 10;
     const offset = page * itemsPerPage;
 
     let querySQL = '';
     let paramsSQL = [itemsPerPage, offset];
-    let title = '🏆 Overall Top Wagerers';
+    let title = '';
+    let scoreUnit = 'SOL'; // Default unit
 
-    switch (type) {
-        case 'overall_wagered':
-            querySQL = `SELECT user_id, total_wagered as score FROM wallets WHERE total_wagered > 0 ORDER BY total_wagered DESC LIMIT $1 OFFSET $2;`;
-            title = '🏆 Overall Top Wagerers (Total SOL)';
-            break;
-        case 'overall_profit':
-            querySQL = `
-                SELECT
-                    b.user_id,
-                    SUM(COALESCE(b.payout_amount_lamports, 0) - b.wager_amount_lamports) as score
-                FROM bets b
-                WHERE b.status LIKE 'completed_%' OR b.status = 'error_game_logic' 
-                GROUP BY b.user_id
-                HAVING SUM(COALESCE(b.payout_amount_lamports, 0) - b.wager_amount_lamports) != 0 
-                ORDER BY score DESC
-                LIMIT $1 OFFSET $2;
-            `;
-            title = '📈 Overall Top Profit (Total SOL)';
-            break;
-        default:
-            const errorTextDefault = `⚠️ Leaderboard type \`${escapeMarkdownV2(type)}\` is not available yet\\.`;
-            const backKeyboardDefault = { inline_keyboard: [[{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] };
-            if (isFromCallbackOrEdit && messageId) { // Check messageId for editing
-                await bot.editMessageText(errorTextDefault, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboardDefault })
-                         .catch(async e => { console.warn(`${logPrefix} Failed to edit for unknown type, sending new: ${e.message}`); await safeSendMessage(chatId, errorTextDefault, { parse_mode: 'MarkdownV2', reply_markup: backKeyboardDefault }); });
-            } else {
-                await safeSendMessage(chatId, errorTextDefault, { parse_mode: 'MarkdownV2', reply_markup: backKeyboardDefault });
-            }
-            return;
-    }
+    const rankEmojis = ["🥇", "🥈", "🥉"];
+
+    if (type.startsWith('top_win_')) {
+        const gameKey = type.substring('top_win_'.length);
+        const gameName = GAME_CONFIG[gameKey]?.name || gameKey.charAt(0).toUpperCase() + gameKey.slice(1);
+        title = `🏅 Top Single Wins - ${escapeMarkdownV2(gameName)}`;
+        querySQL = `
+            SELECT
+                b.user_id,
+                MAX(b.payout_amount_lamports - b.wager_amount_lamports) as score
+            FROM bets b
+            WHERE b.game_type = $3 AND b.status = 'completed_win' AND b.payout_amount_lamports > b.wager_amount_lamports
+            GROUP BY b.user_id
+            HAVING MAX(b.payout_amount_lamports - b.wager_amount_lamports) > 0
+            ORDER BY score DESC
+            LIMIT $1 OFFSET $2;
+        `;
+        paramsSQL = [itemsPerPage, offset, gameKey]; // Add gameKey to params
+    } else {
+        switch (type) {
+            case 'overall_wagered':
+                querySQL = `SELECT user_id, total_wagered as score FROM wallets WHERE total_wagered > 0 ORDER BY total_wagered DESC LIMIT $1 OFFSET $2;`;
+                title = '🏆 Overall Top Wagerers (Total SOL)';
+                break;
+            case 'overall_profit':
+                querySQL = `
+                    SELECT
+                        b.user_id,
+                        SUM(COALESCE(b.payout_amount_lamports, 0) - b.wager_amount_lamports) as score
+                    FROM bets b
+                    WHERE b.status LIKE 'completed_%' OR b.status = 'error_game_logic' 
+                    GROUP BY b.user_id
+                    HAVING SUM(COALESCE(b.payout_amount_lamports, 0) - b.wager_amount_lamports) != 0 
+                    ORDER BY score DESC
+                    LIMIT $1 OFFSET $2;
+                `;
+                title = '📈 Overall Top Profit (Total SOL)';
+                break;
+            default:
+                const errorTextDefault = `⚠️ Leaderboard type \`${escapeMarkdownV2(type)}\` is not available yet\\.`;
+                const backKeyboardDefault = { inline_keyboard: [[{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] };
+                if (tryEdit && messageId) {
+                    await bot.editMessageText(errorTextDefault, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboardDefault })
+                             .catch(async e => { console.warn(`${logPrefix} Failed to edit for unknown type, sending new: ${e.message}`); await safeSendMessage(chatId, errorTextDefault, { parse_mode: 'MarkdownV2', reply_markup: backKeyboardDefault }); });
+                } else {
+                    await safeSendMessage(chatId, errorTextDefault, { parse_mode: 'MarkdownV2', reply_markup: backKeyboardDefault });
+                }
+                return;
+        }
+    }
+
 
     try {
         const results = await queryDatabase(querySQL, paramsSQL);
-        let leaderboardText = `👑 *${escapeMarkdownV2(title)}* \\- Page ${escapeMarkdownV2(String(page + 1))}\n\n`;
+        let leaderboardText = `*${escapeMarkdownV2(title)}* \\- Page ${escapeMarkdownV2(String(page + 1))}\n\n`;
 
         if (results.rows.length === 0) {
             leaderboardText += (page === 0) ? "No data available for this leaderboard yet\\." : "No more entries on this page\\.";
@@ -6430,12 +6448,22 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
             for (let i = 0; i < results.rows.length; i++) {
                 const row = results.rows[i];
                 const rank = offset + i + 1;
+                let rankDisplay;
+                if (page === 0 && rank <= 3) { // Only apply medal emojis on the first page for top 3
+                    rankDisplay = rankEmojis[rank - 1];
+                } else {
+                    rankDisplay = `${escapeMarkdownV2(String(rank))}\\.`;
+                }
                 const displayName = `User\\.\\.\\.${escapeMarkdownV2(String(row.user_id).slice(-5))}`;
                 let valueDisplay = 'N/A';
                 if (row.score !== undefined && row.score !== null) {
-                    valueDisplay = `${escapeMarkdownV2(formatSol(row.score))} SOL`;
+                    valueDisplay = `${escapeMarkdownV2(formatSol(row.score))} ${scoreUnit}`;
                 }
-                leaderboardText += `${escapeMarkdownV2(String(rank))}\\. ${displayName}: ${valueDisplay}\n`;
+                // Highlight the requesting user
+                const isCurrentUser = String(row.user_id) === userId;
+                const userHighlight = isCurrentUser ? "*\\(You\\)* " : ""; // Escaped ()
+
+                leaderboardText += `${rankDisplay} ${userHighlight}${displayName}: ${valueDisplay}\n`;
             }
         }
 
@@ -6453,21 +6481,17 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
         const replyMarkup = { inline_keyboard: keyboardButtons };
         const options = { parse_mode: 'MarkdownV2', reply_markup: replyMarkup };
 
-        // If messageId is provided (from callback or previous edit), try to edit. Otherwise, send new.
-        // isFromCallbackOrEdit flag helps decide.
-        if (isFromCallbackOrEdit && messageId) {
+        if (tryEdit && messageId) {
             console.log(`${logPrefix} Attempting to edit message ID ${messageId}`);
             await bot.editMessageText(leaderboardText, { chat_id: chatId, message_id: messageId, ...options })
-                .catch(async e => { // Make catch async for safeSendMessage
+                .catch(async e => { 
                             if (!e.message.includes("message is not modified")) {
                                 console.warn(`${logPrefix} Edit failed for leaderboard (ID: ${messageId}), sending new. Error: ${e.message}`);
-                                // If edit fails for any reason (e.g., original message was an animation that got here somehow, or other API error)
-                                // send the leaderboard as a new message.
                                 await safeSendMessage(chatId, leaderboardText, options);
                             }
                         });
         } else {
-            console.log(`${logPrefix} No messageId to edit or not from callback/edit context, sending new leaderboard message.`);
+            console.log(`${logPrefix} No messageId to edit or not trying to edit, sending new leaderboard message.`);
             await safeSendMessage(chatId, leaderboardText, options);
         }
 
@@ -6475,8 +6499,7 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
         console.error(`${logPrefix} Error fetching or displaying leaderboard data: ${err.message}`);
         const errorTextLoad = `⚠️ Error loading leaderboard: ${escapeMarkdownV2(err.message)}\\. Please try again later\\.`;
         const backKeyboardLoad = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] };
-        // Try to edit the working messageId if available, otherwise send a new error message.
-        if (isFromCallbackOrEdit && messageId) { // Check messageId for editing
+        if (tryEdit && messageId) { 
             await bot.editMessageText(errorTextLoad, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboardLoad })
                      .catch(async e => { console.warn(`${logPrefix} Failed to edit for load error, sending new: ${e.message}`); await safeSendMessage(chatId, errorTextLoad, { parse_mode: 'MarkdownV2', reply_markup: backKeyboardLoad }); });
         } else {
@@ -6496,13 +6519,13 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
  */
 async function handleMenuAction(userId, chatId, messageId, menuType, params = [], isFromCallback = true) {
     const logPrefix = `[MenuAction User ${userId} Menu ${menuType}]`;
-    console.log(`${logPrefix} Handling menu action.`);
+    console.log(`${logPrefix} Handling menu action with params: ${params.join(',')}`);
     let text = `Menu: ${escapeMarkdownV2(menuType)}`; 
     let keyboard = { inline_keyboard: [] }; 
     let setState = null; 
     const fallbackKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; 
 
-    if (menuType !== 'link_wallet_prompt') { 
+    if (menuType !== 'link_wallet_prompt' && menuType !== 'leaderboards_top_wins_select_game') { 
         clearUserState(userId); 
     }
 
@@ -6567,14 +6590,33 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
                 keyboard.inline_keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]];
                 break;
 
-            case 'leaderboards':
+            case 'leaderboards': // Main leaderboards category menu
                 text = "🏆 *Leaderboards*\n\nSelect a category:";
                 keyboard.inline_keyboard = [
                     [{ text: '💰 Overall Wagered', callback_data: 'leaderboard_nav:overall_wagered:0' }], 
                     [{ text: '📈 Overall Profit', callback_data: 'leaderboard_nav:overall_profit:0' }], 
+                    [{ text: '🏅 Top Single Wins by Game', callback_data: 'menu:leaderboards_top_wins_select_game' }], // New Sub-menu
                     [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
                 ];
                 break;
+
+            case 'leaderboards_top_wins_select_game': // New sub-menu to select game for top wins
+                text = "🏅 *Top Single Wins by Game*\n\nSelect a game to see its top single win leaderboard:";
+                const gameButtons = [];
+                for (const gameKey in GAME_CONFIG) {
+                    if (Object.hasOwnProperty.call(GAME_CONFIG, gameKey)) {
+                        const game = GAME_CONFIG[gameKey];
+                        // Make sure gameKey is simple and doesn't contain ':' itself
+                        const cleanGameKey = gameKey.replace(/:/g, '');
+                        gameButtons.push({ text: escapeMarkdownV2(game.name), callback_data: `leaderboard_nav:top_win_${cleanGameKey}:0` });
+                    }
+                }
+                keyboard.inline_keyboard = [];
+                for (let i = 0; i < gameButtons.length; i += 2) { // Arrange in 2 columns
+                    keyboard.inline_keyboard.push(gameButtons.slice(i, i + 2));
+                }
+                keyboard.inline_keyboard.push([{ text: '↩️ Back to Leaderboards', callback_data: 'menu:leaderboards' }]);
+                break;
 
             case 'history':
                 await handleHistoryCommand(msgOrCbMsg, ['/history'], userId); return; 
@@ -6592,9 +6634,8 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
         }
 
         if (setState) {
-            if (!messageId && isFromCallback) { // Only an issue if from callback and messageId is somehow lost
+            if (!messageId && isFromCallback) { 
                 console.error(`${logPrefix} Critical: Cannot set state for menu '${menuType}' from callback because messageId is missing.`);
-                  // Send the prompt as a new message if original context is lost but state needs to be set
                   const promptMsg = await safeSendMessage(chatId, text, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
                   if (promptMsg?.message_id) {
                       setState.messageId = promptMsg.message_id;
@@ -6603,15 +6644,30 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
                       console.log(`${logPrefix} Set user state to: ${setState.state} based on new prompt message.`);
                   } else {
                       console.error(`${logPrefix} Failed to send new prompt message for state setting.`);
-                      // User might be left without a prompt, consider a generic error message to chat
-                      await safeSendMessage(chatId, "An error occurred setting up the next step. Please try again.", { reply_markup: fallbackKeyboard });
+                      await safeSendMessage(chatId, "An error occurred setting up the next step\\. Please try again\\.", { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
                   }
-                  return; // Exit after attempting to handle missing messageId for state setting
-            } else if (messageId) { // If messageId exists (common case)
+                  return; 
+            } else if (messageId) { 
                 setState.messageId = messageId; 
                 setState.data.originalMessageId = messageId; 
                 userStateCache.set(userId, setState); 
                 console.log(`${logPrefix} Set user state to: ${setState.state}`);
+            } else if (!messageId && !isFromCallback) { // Setting state after a command that sends a new message
+                 // This case should mean 'text' and 'keyboard' are for a new message that will be sent *after* this.
+                 // The messageId for state needs to be from that *newly sent* message.
+                 // This specific handleMenuAction structure assumes messageId is the target for edit or prompt context.
+                 // If setState is true, and we are not in a callback (hence can't edit), we must send the prompt message first.
+                const promptMsg = await safeSendMessage(chatId, text, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+                if (promptMsg?.message_id) {
+                    setState.messageId = promptMsg.message_id;
+                    setState.data.originalMessageId = promptMsg.message_id;
+                    userStateCache.set(userId, setState);
+                    console.log(`${logPrefix} Set user state to: ${setState.state} based on new prompt message (command flow).`);
+                } else {
+                     console.error(`${logPrefix} Failed to send new prompt message for state setting (command flow).`);
+                     await safeSendMessage(chatId, "An error occurred setting up the next step\\. Please try again\\.", { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
+                }
+                return; // Message sent, state set.
             }
         }
 
@@ -6621,11 +6677,18 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
                 .catch(async e => { 
                             if (!e.message.includes("message is not modified")) {
                                 console.warn(`${logPrefix} Failed edit for menu ${menuType}, sending new. Error: ${e.message}`);
-                                // If edit fails (e.g. "no text to edit" from animation), send as new.
                                 await safeSendMessage(chatId, text, options);
                             }
                         });
-        } else {
+        } else if (!isFromCallback && messageId && setState) {
+            // This condition is tricky: from command, but messageId (of the command) exists, and we want to set state.
+            // The prompt for state (text, keyboard) needs to be sent as a NEW message.
+            // The state's messageId should refer to this new prompt message.
+            // This case is now handled by the `else if (!messageId && !isFromCallback)` inside `if(setState)` block.
+            // So, if we reach here, it means it's likely a direct command that doesn't set state, so just send.
+            await safeSendMessage(chatId, text, options);
+        }
+         else { // General case: not from callback, or no messageId to edit.
             await safeSendMessage(chatId, text, options);
         }
 
@@ -6643,7 +6706,7 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
     }
 }
 
-// --- End of Part 5b (Section 2c) -----
+// --- End of Part 5b (Section 2c) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2d of 4)
 // --- VERSION: 3.2.1r --- (Applying Fixes: Ensure game commands handle amounts/routing, Verify handler maps + previous)
 
