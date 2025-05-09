@@ -5874,17 +5874,11 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
 
 // --- End of Part 5b (Section 2b) ---
-// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4)
+// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - FULLY CORRECTED (Production Message)
 // --- VERSION: Based on 3.2.1v - Incorporating all referral message fixes and debug logs ---
 
 // (Continuing directly from Part 5b, Section 2b)
-// ... (Assume functions, dependencies etc. from other parts are available:
-//      bot, pool, GAME_CONFIG, userLastBetAmounts, escapeMarkdownV2, formatSol, 
-//      getBetHistory, getUserWalletDetails, getTotalReferralEarnings, clearUserState,
-//      REFERRAL_INITIAL_BET_MIN_LAMPORTS, REFERRAL_MILESTONE_REWARD_PERCENT, REFERRAL_INITIAL_BONUS_TIERS,
-//      generateReferralCode, updateWalletCache, queryDatabase, ensureUserExists, getLinkedWallet,
-//      getUserBalance, MIN_WITHDRAWAL_LAMPORTS, DEPOSIT_ADDRESS_EXPIRY_MS, DEPOSIT_CONFIRMATION_LEVEL,
-//      safeSendMessage, process.env variables, etc.)
+// ... (Assume functions, dependencies etc. from other parts are available)
 
 /**
  * Handles the /history command and corresponding menu action. Displays recent bets.
@@ -5898,15 +5892,15 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
     const logPrefix = `[HistoryCmd User ${userId}]`;
     let messageToEditId = msgOrCbMsg.message_id;
     let isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); // Clear any pending state
+    clearUserState(userId); 
 
     console.log(`${logPrefix} Fetching bet history.`);
 
-    const limit = 5; // Show last 5 bets
-    const history = await getBetHistory(userId, limit, 0, null); // getBetHistory from Part 2
+    const limit = 5; 
+    const history = await getBetHistory(userId, limit, 0, null); 
 
     if (!history || history.length === 0) {
-        const noHistoryMsg = "You have no betting history yet\\. Time to play some games\\!"; // Escaped . !
+        const noHistoryMsg = "You have no betting history yet\\. Time to play some games\\!"; 
         const keyboard = {inline_keyboard: [[{text: "🎮 Games Menu", callback_data: "menu:game_selection"}]]};
         const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard };
         if (isFromCallback && messageToEditId) {
@@ -6049,42 +6043,29 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         }).join('\\, ');
         console.log(`[Debug Tier Build User ${userId}] Final tiersDesc string generated: '${tiersDesc}'`);
 
-        // --- COMMENT OUT THE testMessageString ---
-/*
-let testMessageString = `🤝 *Your Referral Dashboard*\n\n` +
-    `Share your unique link to earn SOL when your friends play\\!\n\n` +
-    `*Your Code:* \`${escapedRefCode}\`\n` +
-    `Your link to copy: \`${escapedReferralLinkForCodeBlock}\`\n\n` + 
-    `*Successful Referrals:* ${referralCount}\n` +
-    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-    `*How Rewards Work:*\n` +
-    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\- min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n` + 
-    `   *Tiers:* ${tiersDesc}\n` +
-    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones e\\.g\\. 1 SOL, 5 SOL wagered, etc\\.\\.\\.\n\n` + 
-    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
-*/
+        // --- Using FULL INTENDED PRODUCTION referralMsg ---
+        let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
+            `Share your unique link to earn SOL when your friends play\\!\n\n` +
+            `*Your Code:* \`${escapedRefCode}\`\n` +
+            // Use the RAW 'rawReferralLink' for the clickable URL part of [text](URL)
+            `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` +
+            // Use the 'escapedReferralLinkForCodeBlock' for the part inside backticks, with escaped parentheses
+            `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
+            `*Successful Referrals:* ${referralCount}\n` +
+            `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+            `*How Rewards Work:*\n` +
+            // Parentheses around "min wager" are now correctly escaped
+            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
+            `   *Tiers:* ${tiersDesc}\n` +
+            // Parentheses around "e.g." are now correctly escaped
+            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
+            `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
+        
+        const messageToSend = referralMsg; 
 
-// --- UNCOMMENT AND USE THE FULL PRODUCTION referralMsg ---
-let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
-    `Share your unique link to earn SOL when your friends play\\!\n\n` +
-    `*Your Code:* \`${escapedRefCode}\`\n` +
-    `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` + // Uses raw link
-    `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` + // Correctly escaped ( ) and _
-    `*Successful Referrals:* ${referralCount}\n` +
-    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-    `*How Rewards Work:*\n` +
-    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Correctly escaped ( ) and .
-    `   *Tiers:* ${tiersDesc}\n` +
-    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Correctly escaped ( ) and .
-    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
-
-const messageToSend = referralMsg; // USE THE FULL referralMsg NOW
-
-// Keep these console logs active for one more test run:
-console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId}) ---`);
-console.log(messageToSend); 
-console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
-
+        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId}) ---`);
+        console.log(messageToSend); 
+        console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
 
         const keyboard = [
             [{ text: '🔗 Share My Referral Link!', switch_inline_query: rawReferralLink }],
@@ -6101,11 +6082,11 @@ console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
                     }
                     const errorMsgLowerCase = e.message?.toLowerCase() || "";
                     if (errorMsgLowerCase.includes("message is not modified") || errorMsgLowerCase.includes("there is no text in the message to edit")) {
-                        console.log(`${logPrefix} Message not modified, edit call skipped/ignored by Telegram. This is usually fine.`);
+                        console.log(`${logPrefix} Message not modified or no text to edit, edit call skipped/ignored by Telegram. This is usually fine.`);
                     } else if (errorMsgLowerCase.includes("can't parse entities")) {
                         safeSendMessage(chatId, "⚠️ An error occurred displaying referral information due to a formatting problem\\. Please try again later or contact support\\.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
                     } else {
-                         safeSendMessage(chatId, messageToSend, options).catch(e_send => {
+                         safeSendMessage(chatId, messageToSend, options).catch(e_send => { 
                             console.error(`${logPrefix} Fallback safeSendMessage ALSO FAILED. Error: ${e_send.message}`);
                             if (e_send.response && e_send.response.body) {
                                 console.error(`${logPrefix} Telegram API Error Body on Fallback SEND:`, JSON.stringify(e_send.response.body));
@@ -6575,7 +6556,7 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
                 await handleHistoryCommand(msgOrCbMsg, ['/history'], userId); return; 
             case 'withdraw':
                 await handleWithdrawCommand(msgOrCbMsg, ['/withdraw'], userId); return; 
-            case 'referral': // This case will call the handleReferralCommand above
+            case 'referral': 
                 await handleReferralCommand(msgOrCbMsg, ['/referral'], userId); return; 
             case 'help':
                 await handleHelpCommand(msgOrCbMsg, ['/help'], userId); return; 
