@@ -6049,45 +6049,42 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         }).join('\\, ');
         console.log(`[Debug Tier Build User ${userId}] Final tiersDesc string generated: '${tiersDesc}'`);
 
-        // --- Current Test Message String (No explicit static parentheses) ---
-        // If this version *still* fails with a `(` error, it means a variable contains an unescaped `(`
-        let testMessageString = `🤝 *Your Referral Dashboard*\n\n` +
-            `Share your unique link to earn SOL when your friends play\\!\n\n` + // Present in user's last failing log (IMG_1888 implies it was simplified out, but re-adding from IMG_1875)
-            `*Your Code:* \`${escapedRefCode}\`\n` + // Present in user's last failing log
-            // `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` + // TEMPORARILY REMOVED for testing parenthesis error
-            `Your link to copy: \`${escapedReferralLinkForCodeBlock}\`\n\n` + // Simplified from "\_\(Tap button...\)\_" for testing
-            `*Successful Referrals:* ${referralCount}\n` + // Present
-            `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` + // Present
-            `*How Rewards Work:*\n` + // Present
-            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\- min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n` + // No parens, hyphen escaped
-            `   *Tiers:* ${tiersDesc}\n` + // Corrected Tiers line from user log
-            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones e\\.g\\. 1 SOL, 5 SOL wagered, etc\\.\\.\\.\n\n` + // No parens around e.g.
-            `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
+        // --- COMMENT OUT THE testMessageString ---
+/*
+let testMessageString = `🤝 *Your Referral Dashboard*\n\n` +
+    `Share your unique link to earn SOL when your friends play\\!\n\n` +
+    `*Your Code:* \`${escapedRefCode}\`\n` +
+    `Your link to copy: \`${escapedReferralLinkForCodeBlock}\`\n\n` + 
+    `*Successful Referrals:* ${referralCount}\n` +
+    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+    `*How Rewards Work:*\n` +
+    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\- min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n` + 
+    `   *Tiers:* ${tiersDesc}\n` +
+    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones e\\.g\\. 1 SOL, 5 SOL wagered, etc\\.\\.\\.\n\n` + 
+    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
+*/
 
+// --- UNCOMMENT AND USE THE FULL PRODUCTION referralMsg ---
+let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
+    `Share your unique link to earn SOL when your friends play\\!\n\n` +
+    `*Your Code:* \`${escapedRefCode}\`\n` +
+    `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` + // Uses raw link
+    `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` + // Correctly escaped ( ) and _
+    `*Successful Referrals:* ${referralCount}\n` +
+    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+    `*How Rewards Work:*\n` +
+    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Correctly escaped ( ) and .
+    `   *Tiers:* ${tiersDesc}\n` +
+    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Correctly escaped ( ) and .
+    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
 
-        // --- FULL INTENDED PRODUCTION referralMsg (Comment out testMessageString above and uncomment this block to use) ---
-        /*
-        let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
-            `Share your unique link to earn SOL when your friends play\\!\n\n` +
-            `*Your Code:* \`${escapedRefCode}\`\n` +
-            `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` +
-            `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
-            `*Successful Referrals:* ${referralCount}\n` +
-            `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-            `*How Rewards Work:*\n` +
-            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
-            `   *Tiers:* ${tiersDesc}\n` +
-            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
-            `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
-        */
+const messageToSend = referralMsg; // USE THE FULL referralMsg NOW
 
-        // Ensure the message variable used below (testMessageString or referralMsg) is the one you intend to test.
-        // For now, we are sending testMessageString.
-        const messageToSend = testMessageString; 
+// Keep these console logs active for one more test run:
+console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId}) ---`);
+console.log(messageToSend); 
+console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
 
-        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId}) ---`);
-        console.log(messageToSend); // Log the exact string being sent
-        console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
 
         const keyboard = [
             [{ text: '🔗 Share My Referral Link!', switch_inline_query: rawReferralLink }],
