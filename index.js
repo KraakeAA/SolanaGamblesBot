@@ -6318,54 +6318,76 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
     }
 }
 
+
+// In Part 5b, Section 2c
+
 /**
  * Handles the /leaderboards command and related callbacks.
  * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg Message or callback message.
- * @param {Array<string>} args Command arguments or callback parameters. args[0]=command/menu, args[1]=type, args[2]=page (if command) OR args[0]=type, args[1]=page (if callback 'leaderboard_nav')
+ * @param {Array<string>} args Command arguments or callback parameters.
  * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
  */
 async function handleLeaderboardsCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
-    const messageId = msgOrCbMsg.message_id; 
+    const originalMessageId = msgOrCbMsg.message_id; // ID of the message that triggered this
     const isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); 
+    clearUserState(userId);
+    const logPrefix = `[LeaderboardCmd User ${userId}]`;
 
-    let type = 'overall_wagered'; 
-    let page = 0; 
+    let type = 'overall_wagered';
+    let page = 0;
 
-    if (isFromCallback) {
-        type = args[0] || 'overall_wagered';
-        page = parseInt(args[1] || '0', 10);
-        if (isNaN(page) || page < 0) page = 0; 
-    } else {
+    // Determine type and page from args
+    if (isFromCallback && args[0]?.startsWith('leaderboard_nav')) { // If it's a navigation callback like 'leaderboard_nav:type:page'
+        const navParts = args[0].split(':'); // args[0] would be the full callback_data for leaderboard_nav
+        type = navParts[1] || 'overall_wagered';
+        page = parseInt(navParts[2] || '0', 10);
+    } else if (isFromCallback) { // If it's a generic menu callback like 'menu:leaderboards' or specific type from another menu
+        type = args[0] || 'overall_wagered'; // args[0] is the type from menu:leaderboards:TYPE
+        page = parseInt(args[1] || '0', 10);
+    }
+    else { // From /leaderboards command
         type = args.length > 1 ? args[1] : 'overall_wagered';
-        page = args.length > 2 ? parseInt(args[2], 10) - 1 : 0; 
-        if (isNaN(page) || page < 0) page = 0; 
+        page = args.length > 2 ? parseInt(args[2], 10) - 1 : 0; // User inputs 1-indexed page
     }
+    if (isNaN(page) || page < 0) page = 0;
 
-    await displayLeaderboard(chatId, messageId, userId, type, page, isFromCallback);
+    // If this command/menu was triggered from a callback (likely on the animated main menu for the first view)
+    // delete the original message and prepare to send the leaderboard as a new message.
+    if (isFromCallback && originalMessageId && args[0] !== 'leaderboard_nav') { // Only delete if it's the *first* call from a menu, not for page navigation
+        console.log(`${logPrefix} Initial leaderboard view from callback. Deleting original message ID ${originalMessageId}.`);
+        try {
+            await bot.deleteMessage(chatId, originalMessageId);
+        } catch (delErr) {
+            console.warn(`${logPrefix} Non-critical error deleting original message ${originalMessageId}: ${delErr.message}`);
+        }
+        // Set messageId to null so displayLeaderboard sends a new message for the first page.
+        await displayLeaderboard(chatId, null, userId, type, page, false); // Force sending new
+    } else {
+        // For direct command, or subsequent page navigation (where originalMessageId is the leaderboard itself)
+        await displayLeaderboard(chatId, originalMessageId, userId, type, page, isFromCallback);
+    }
 }
-
 
 /**
  * Displays leaderboards. Fetches data and formats the message.
  * @param {string} chatId
- * @param {number | null} messageId Message ID to edit (if from callback). Can be null.
+ * @param {number | null} messageId Message ID to edit. If null, a new message will be sent.
  * @param {string} userId User requesting (for context).
  * @param {string} type Leaderboard type (e.g., 'overall_wagered', 'overall_profit').
  * @param {number} page Current page number (0-indexed).
- * @param {boolean} [isFromCallback=false] If true, try to edit message.
+ * @param {boolean} [isFromCallbackOrEdit=false] If true, attempt to edit. Otherwise, send new.
  */
-async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wagered', page = 0, isFromCallback = false) {
+async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wagered', page = 0, isFromCallbackOrEdit = false) {
     const logPrefix = `[DisplayLeaderboard Type:${type} Page:${page} User:${userId}]`;
-    console.log(`${logPrefix}`);
+    console.log(`${logPrefix} Attempting to display. MessageId to edit: ${messageId}`);
     const itemsPerPage = 10;
     const offset = page * itemsPerPage;
 
     let querySQL = '';
     let paramsSQL = [itemsPerPage, offset];
-    let title = '🏆 Overall Top Wagerers'; 
+    let title = '🏆 Overall Top Wagerers';
 
     switch (type) {
         case 'overall_wagered':
@@ -6387,29 +6409,33 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
             title = '📈 Overall Top Profit (Total SOL)';
             break;
         default:
-            const errorText = `⚠️ Leaderboard type \`${escapeMarkdownV2(type)}\` is not available yet\\.`; 
-            const backKeyboard = { inline_keyboard: [[{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; 
-            if (isFromCallback && messageId) { await bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
-            else { await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
+            const errorTextDefault = `⚠️ Leaderboard type \`${escapeMarkdownV2(type)}\` is not available yet\\.`;
+            const backKeyboardDefault = { inline_keyboard: [[{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] };
+            if (isFromCallbackOrEdit && messageId) { // Check messageId for editing
+                await bot.editMessageText(errorTextDefault, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboardDefault })
+                         .catch(async e => { console.warn(`${logPrefix} Failed to edit for unknown type, sending new: ${e.message}`); await safeSendMessage(chatId, errorTextDefault, { parse_mode: 'MarkdownV2', reply_markup: backKeyboardDefault }); });
+            } else {
+                await safeSendMessage(chatId, errorTextDefault, { parse_mode: 'MarkdownV2', reply_markup: backKeyboardDefault });
+            }
             return;
     }
 
     try {
-        const results = await queryDatabase(querySQL, paramsSQL); 
-        let leaderboardText = `👑 *${escapeMarkdownV2(title)}* \\- Page ${escapeMarkdownV2(String(page + 1))}\n\n`; 
+        const results = await queryDatabase(querySQL, paramsSQL);
+        let leaderboardText = `👑 *${escapeMarkdownV2(title)}* \\- Page ${escapeMarkdownV2(String(page + 1))}\n\n`;
 
         if (results.rows.length === 0) {
-            leaderboardText += (page === 0) ? "No data available for this leaderboard yet\\." : "No more entries on this page\\."; 
+            leaderboardText += (page === 0) ? "No data available for this leaderboard yet\\." : "No more entries on this page\\.";
         } else {
             for (let i = 0; i < results.rows.length; i++) {
                 const row = results.rows[i];
                 const rank = offset + i + 1;
-                const displayName = `User\\.\\.\\.${escapeMarkdownV2(String(row.user_id).slice(-5))}`; 
+                const displayName = `User\\.\\.\\.${escapeMarkdownV2(String(row.user_id).slice(-5))}`;
                 let valueDisplay = 'N/A';
                 if (row.score !== undefined && row.score !== null) {
-                    valueDisplay = `${escapeMarkdownV2(formatSol(row.score))} SOL`; 
+                    valueDisplay = `${escapeMarkdownV2(formatSol(row.score))} SOL`;
                 }
-                leaderboardText += `${escapeMarkdownV2(String(rank))}\\. ${displayName}: ${valueDisplay}\n`; 
+                leaderboardText += `${escapeMarkdownV2(String(rank))}\\. ${displayName}: ${valueDisplay}\n`;
             }
         }
 
@@ -6418,28 +6444,44 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
         if (page > 0) {
             rowNav.push({ text: '⬅️ Previous', callback_data: `leaderboard_nav:${type}:${page - 1}` });
         }
-        if (results.rows.length === itemsPerPage) { 
+        if (results.rows.length === itemsPerPage) {
             rowNav.push({ text: 'Next ➡️', callback_data: `leaderboard_nav:${type}:${page + 1}` });
         }
         if (rowNav.length > 0) keyboardButtons.push(rowNav);
-        keyboardButtons.push([{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Main Menu', callback_data: 'menu:main' }]); 
+        keyboardButtons.push([{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Main Menu', callback_data: 'menu:main' }]);
 
         const replyMarkup = { inline_keyboard: keyboardButtons };
         const options = { parse_mode: 'MarkdownV2', reply_markup: replyMarkup };
 
-        if (isFromCallback && messageId) {
+        // If messageId is provided (from callback or previous edit), try to edit. Otherwise, send new.
+        // isFromCallbackOrEdit flag helps decide.
+        if (isFromCallbackOrEdit && messageId) {
+            console.log(`${logPrefix} Attempting to edit message ID ${messageId}`);
             await bot.editMessageText(leaderboardText, { chat_id: chatId, message_id: messageId, ...options })
-                .catch(e => { if (!e.message.includes("message is not modified")) console.warn(`[DisplayLeaderboard] Edit error: ${e.message}`); });
+                .catch(async e => { // Make catch async for safeSendMessage
+                            if (!e.message.includes("message is not modified")) {
+                                console.warn(`${logPrefix} Edit failed for leaderboard (ID: ${messageId}), sending new. Error: ${e.message}`);
+                                // If edit fails for any reason (e.g., original message was an animation that got here somehow, or other API error)
+                                // send the leaderboard as a new message.
+                                await safeSendMessage(chatId, leaderboardText, options);
+                            }
+                        });
         } else {
-            await safeSendMessage(chatId, leaderboardText, options); 
+            console.log(`${logPrefix} No messageId to edit or not from callback/edit context, sending new leaderboard message.`);
+            await safeSendMessage(chatId, leaderboardText, options);
         }
 
     } catch (err) {
-        console.error(`${logPrefix} Error fetching leaderboard data: ${err.message}`);
-        const errorText = `⚠️ Error loading leaderboard: ${escapeMarkdownV2(err.message)}\\. Please try again later\\.`; 
-        const backKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; 
-        if (isFromCallback && messageId) { await bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
-        else { await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
+        console.error(`${logPrefix} Error fetching or displaying leaderboard data: ${err.message}`);
+        const errorTextLoad = `⚠️ Error loading leaderboard: ${escapeMarkdownV2(err.message)}\\. Please try again later\\.`;
+        const backKeyboardLoad = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] };
+        // Try to edit the working messageId if available, otherwise send a new error message.
+        if (isFromCallbackOrEdit && messageId) { // Check messageId for editing
+            await bot.editMessageText(errorTextLoad, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboardLoad })
+                     .catch(async e => { console.warn(`${logPrefix} Failed to edit for load error, sending new: ${e.message}`); await safeSendMessage(chatId, errorTextLoad, { parse_mode: 'MarkdownV2', reply_markup: backKeyboardLoad }); });
+        } else {
+            await safeSendMessage(chatId, errorTextLoad, { parse_mode: 'MarkdownV2', reply_markup: backKeyboardLoad });
+        }
     }
 }
 
