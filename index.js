@@ -6027,12 +6027,12 @@ const milestonePercent = escapeMarkdownV2(String((REFERRAL_MILESTONE_REWARD_PERC
 
 const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => {
     const count = t.maxCount === Infinity ? '100+' : `<=${t.maxCount}`;
-    const percent = escapeMarkdownV2(String((t.percent * 100).toFixed(1)));
-    return `${count} refs = ${percent}%`;
+    const percent = escapeMarkdownV2(String((t.percent * 100).toFixed(1))); // Escapes the dot in "5.0"
+    return `${count} refs = ${percent}\\%`; // Escape % for safety (though not strictly required)
 }).join(', ');
 
       // *** CORRECTED VERSION: Removed unnecessary escaping for '%' ***
-        let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
+        const referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
                   `Share your unique link to earn SOL when your friends play\\!\n\n` +
                   `*Your Code:* \`${escapedRefCode}\`\n` +
                   `*Your Clickable Link:*\n${referralLink}\n` +
@@ -6042,7 +6042,7 @@ const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => {
                   `*How Rewards Work:*\n` +
                   `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
                   `   *Tiers:* ${tiersDesc}\n` +
-                  `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\)\\.\\.\\.\n\n` +
+                  `2\\. *Milestone Bonus:* Earn ${escapeMarkdownV2(milestonePercent)}\\% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\)\\.\\.\\.\n\n` +
                   `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
         // Button uses the raw link for the switch_inline_query parameter
         const keyboard = [
