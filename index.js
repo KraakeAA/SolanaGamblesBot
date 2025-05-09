@@ -6028,24 +6028,23 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
         // Construct the new message
         let messageToSend = `🤝 *Your Referral Dashboard* 🤝\n\n` +
-                            `*Invite Friends & Earn SOL\\!*\n\n` + // Escaped !
+                            `*Invite Friends & Earn SOL\\!*\n\n` +
                             `🔗 *Your Unique Referral Link:*\n` +
                             `\`${escapedReferralLinkForCodeBlock}\`\n` +
-                            `\\_\(Tap the button below to share\\!\\)\\_\\n\n` + // Escaped _ ( ) ! \
+                            `_\\(Tap the button below to share\\!\\)_\\n\n` +
                             `📊 *Your Stats:*\n` +
                             `  ▫️ *Referrals:* ${referralCount}\n` +
                             `  ▫️ *Total Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
                             `🎁 *How You Earn:*\n\n` +
                             `  1️⃣ *Initial Bet Bonus:*\n` +
-                            `     When your friend places their first qualifying bet \\(min\\. ${minBetAmount} SOL\\), you earn a percentage of *their bet amount\\!* The more friends you refer, the higher your percentage:\n` + // Escaped () ! .
-                            `${tiersDisplay}\n\n` +
+                            `     When your friend places their first qualifying bet \\(min\\. ${minBetAmount} SOL\\), you earn a percentage of *their bet amount\\!* The more friends you refer, the higher your percentage:\n` +
+                            `${tiersDisplay}\n\n` + // tiersDisplay includes escaped %
                             `  2️⃣ *Wager Milestone Bonus:*\n` +
-                            `     As your referred friends play and reach wagering milestones \\(e\\.g\\., they've wagered a total of 1 SOL, 5 SOL, 25 SOL, etc\\.\\), you'll receive *${milestonePercent}%* of that milestone amount\\.\n\n` + // Escaped () . %
+                            `     As your referred friends play and reach wagering milestones \\(e\\.g\\., they've wagered a total of 1 SOL, 5 SOL, 25 SOL, etc\\.\\), you'll receive *${milestonePercent}\%* of that milestone amount\\.\n\n` + // Note: \% to escape the percent sign
                             `💸 *Payouts:*\n` +
                             `   All referral rewards are automatically paid out in SOL to your linked wallet:\n` +
                             `   \`${withdrawalAddress}\`\n\n` +
-                            `*Keep sharing and earning\\!* ✨`; // Escaped !
-
+                            `*Keep sharing and earning\\!* ✨`;
 
         console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - New Format) ---`);
         console.log(messageToSend); 
