@@ -6076,19 +6076,20 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
         // --- Using FULL INTENDED PRODUCTION referralMsg ---
         let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
-            `Share your unique link to earn SOL when your friends play\\!\n\n` +
-            `*Your Code:* \`${escapedRefCode}\`\n` +
-            `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` + // Use RAW link
-            `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` + // Escaped () and _
-            `*Successful Referrals:* ${referralCount}\n` +
-            `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-            `*How Rewards Work:*\n` +
-            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Escaped () and .
-            `   *Tiers:* ${tiersDesc}\n` +
-            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Escaped () and .
-            `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``; // Uses the 'withdrawalAddress' variable
+    `Share your unique link to earn SOL when your friends play\\!\n\n` +
+    `*Your Code:* \`${escapedRefCode}\`\n` +
+    // MODIFIED LINE: Just output the raw link directly.
+    `*Your Clickable Link:*\n${rawReferralLink}\n` + 
+    `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
+    `*Successful Referrals:* ${referralCount}\n` +
+    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+    `*How Rewards Work:*\n` +
+    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
+    `   *Tiers:* ${tiersDesc}\n` +
+    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
+    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
         
-        const messageToSend = referralMsg; 
+const messageToSend = referralMsg;
 
         console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId}) ---`);
         console.log(messageToSend); 
