@@ -5874,17 +5874,11 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
 
 // --- End of Part 5b (Section 2b) ---
-// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - FULL PRODUCTION MESSAGE WITH ALL DEBUG LOGS
-// --- VERSION: Based on 3.2.1v - Final attempt for referral command with full message and extensive logging ---
+// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - REVISED
+// --- VERSION: Targeting stable referral message by simplifying link, keeping other escapes and debug logs ---
 
 // (Continuing directly from Part 5b, Section 2b)
-// ... (Assume functions, dependencies etc. from other parts are available:
-//      bot, pool, GAME_CONFIG, userLastBetAmounts, escapeMarkdownV2, formatSol, 
-//      getBetHistory, getUserWalletDetails, getTotalReferralEarnings, clearUserState,
-//      REFERRAL_INITIAL_BET_MIN_LAMPORTS, REFERRAL_MILESTONE_REWARD_PERCENT, REFERRAL_INITIAL_BONUS_TIERS,
-//      generateReferralCode, updateWalletCache, queryDatabase, ensureUserExists, getLinkedWallet,
-//      getUserBalance, MIN_WITHDRAWAL_LAMPORTS, DEPOSIT_ADDRESS_EXPIRY_MS, DEPOSIT_CONFIRMATION_LEVEL,
-//      safeSendMessage, process.env variables, etc.)
+// ... (Assume functions, dependencies etc. from other parts are available)
 
 /**
  * Handles the /history command and corresponding menu action. Displays recent bets.
@@ -5981,7 +5975,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
         let currentRefCode = userDetails.referral_code;
         if (!currentRefCode) {
-            console.warn(`${logPrefix} Referral code was missing after wallet link check. Attempting to generate.`);
+            console.warn(`${logPrefix} Referral code was missing. Attempting to generate.`);
             let clientGen = null;
             try {
                 clientGen = await pool.connect(); await clientGen.query('BEGIN');
@@ -5998,21 +5992,17 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
                     console.log(`${logPrefix} Used existing referral code: ${currentRefCode}`);
                 } else { 
                     await clientGen.query('ROLLBACK');
-                    throw new Error("User not found during referral code generation sanity check.");
+                    throw new Error("User not found for ref code gen.");
                 }
             } catch (genError) {
-                if(clientGen) await clientGen.query('ROLLBACK').catch(()=>{});
-                console.error(`${logPrefix} Error in on-demand referral code generation: ${genError.message}`);
+                if(clientGen) await clientGen.query('ROLLBACK').catch(()=>{}); 
+                console.error(`${logPrefix} Error in on-demand ref code generation: ${genError.message}`);
                 throw genError; 
             } finally { if(clientGen) clientGen.release(); }
-            
-            if (!currentRefCode) { 
-                 console.error(`${logPrefix} CRITICAL: Referral code is still missing after generation attempt.`);
-                 throw new Error("Could not retrieve or generate referral code for referral message construction.");
-            }
+            if (!currentRefCode) { throw new Error("Could not get/gen ref code for referral msg.");}
         }
         
-        // --- START OF DETAILED VARIABLE LOGGING ---
+        // --- Variable Definitions & Debug Logging ---
         console.log(`[VarDebug User ${userId}] Raw currentRefCode: '${currentRefCode}'`);
         const escapedRefCode = escapeMarkdownV2(currentRefCode);
         console.log(`[VarDebug User ${userId}] Escaped escapedRefCode: '${escapedRefCode}'`);
@@ -6034,16 +6024,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         console.log(`[VarDebug User ${userId}] Escaped withdrawalAddress: '${withdrawalAddress}'`);
 
         let botUsername = process.env.BOT_USERNAME || 'YOUR_BOT_USERNAME';
-        if (botUsername === 'YOUR_BOT_USERNAME') {
-            try {
-                const me = await bot.getMe();
-                if (me.username) {
-                    botUsername = me.username;
-                }
-            } catch (e) {
-                console.warn(`${logPrefix} Could not fetch bot username for referral link, link might be incorrect: ${e.message}`);
-            }
-        }
+        if (botUsername === 'YOUR_BOT_USERNAME') { try { const me = await bot.getMe(); if (me.username) { botUsername = me.username; } } catch (e) { console.warn(`${logPrefix} Could not fetch bot username: ${e.message}`);} }
         console.log(`[VarDebug User ${userId}] botUsername: '${botUsername}'`);
         const rawReferralLink = `https://t.me/${botUsername}?start=${currentRefCode}`; 
         console.log(`[VarDebug User ${userId}] Raw rawReferralLink: '${rawReferralLink}'`);
@@ -6072,26 +6053,27 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             return `${count} refs \\= ${tierPercent}%`;
         }).join('\\, ');
         console.log(`[Debug Tier Build User ${userId}] Final tiersDesc string generated: '${tiersDesc}'`);
-        // --- END OF DETAILED VARIABLE LOGGING ---
-
-        // --- Using FULL INTENDED PRODUCTION referralMsg ---
-        let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
-    `Share your unique link to earn SOL when your friends play\\!\n\n` +
-    `*Your Code:* \`${escapedRefCode}\`\n` +
-    // MODIFIED LINE: Just output the raw link directly.
-    `*Your Clickable Link:*\n${rawReferralLink}\n` +
-    `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
-    `*Successful Referrals:* ${referralCount}\n` +
-    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-    `*How Rewards Work:*\n` +
-    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
-    `   *Tiers:* ${tiersDesc}\n` +
-    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
-    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
         
-const messageToSend = referralMsg;
+        // --- MODIFIED Full Production referralMsg: Link simplified, parentheses restored and escaped ---
+        let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
+            `Share your unique link to earn SOL when your friends play\\!\n\n` +
+            `*Your Code:* \`${escapedRefCode}\`\n` +
+            // MODIFIED LINE: Just output the raw link directly. Telegram should auto-link it.
+            `*Your Clickable Link:*\n${rawReferralLink}\n` + 
+            `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` + // Parentheses here are literal and escaped
+            `*Successful Referrals:* ${referralCount}\n` +
+            `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+            `*How Rewards Work:*\n` +
+            // Parentheses around "min wager" are literal and escaped
+            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
+            `   *Tiers:* ${tiersDesc}\n` +
+            // Parentheses around "e.g." are literal and escaped
+            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
+            `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
+        
+        const messageToSend = referralMsg; 
 
-        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId}) ---`);
+        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - Simplified Link Test) ---`);
         console.log(messageToSend); 
         console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
 
@@ -6576,7 +6558,7 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
                 keyboard.inline_keyboard = [
                     [{ text: '💰 Overall Wagered', callback_data: 'leaderboard_nav:overall_wagered:0' }], 
                     [{ text: '📈 Overall Profit', callback_data: 'leaderboard_nav:overall_profit:0' }], 
-                    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }] // Corrected: Added missing back button here
+                    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
                 ];
                 break;
 
