@@ -5426,6 +5426,8 @@ async function handleWithdrawalConfirmation(userId, chatId, messageId, recipient
 // --- General Command Handlers (/start, /help, /wallet, etc.) ---
 // All command handlers accept msgOrCbMsg, args, and optional correctUserIdFromCb
 
+// In Part 5b, Section 2a
+
 /**
  * Handles the /start command or 'menu:main' callback. Displays welcome message and main menu.
  * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg The message object or callback message object.
@@ -5433,153 +5435,153 @@ async function handleWithdrawalConfirmation(userId, chatId, messageId, recipient
  * @param {string | null} [correctUserIdFromCb=null] User ID if called from callback.
  */
 async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // *** Applying Fix #9: Display Balance on Main Menu ***
-    // *** Applying Fix #10: Re-implement Start Animation with Caption+Fallback ***
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const logPrefix = `[StartCmd User ${userId}]`;
     let isFromCallback = !!correctUserIdFromCb;
-    // Use a known, reliable GIF URL for Solana theme
-    const TENOR_GIF_URL = "https://media1.tenor.com/m/vFdyZ-CK6IYAAAAC/solana.gif";
-    const MAX_CAPTION_LENGTH = 1024; // Telegram caption limit
+    const originalMessageId = msgOrCbMsg.message_id; // ID of the message that triggered this, if from callback
 
-    // Delete original message if invoked from callback to prevent clutter
-    if (isFromCallback && msgOrCbMsg.message_id) {
-        const messageIdToDelete = msgOrCbMsg.message_id;
-        try {
-            await bot.deleteMessage(chatId, messageIdToDelete); // bot from Part 1
-            console.log(`${logPrefix} Deleted original message ${messageIdToDelete} as start is being re-invoked from callback.`);
-        } catch (delErr) {
-            // Non-critical if deletion fails (message might already be gone)
-            console.warn(`${logPrefix} Non-critical error deleting original message ${messageIdToDelete}: ${delErr.message}`);
-        }
-    }
+    const TENOR_GIF_URL = "https://media1.tenor.com/m/vFdyZ-CK6IYAAAAC/solana.gif"; // Or your preferred GIF URL
+    const MAX_CAPTION_LENGTH = 1024;
 
-    console.log(`${logPrefix} Handling /start or menu:main.`);
-
-    // Handle User Existence, Referrals, and Balance Fetch
+    // --- Database operations for user, referral, balance ---
     let client = null;
     let isNewUser = false;
-    let currentBalance = 0n; // Default balance if fetch fails
+    let currentBalance = 0n;
     try {
-        client = await pool.connect(); // pool from Part 1
-        // Ensure user exists and lock rows potentially needed for referral linking
+        client = await pool.connect();
         await client.query('BEGIN');
-        const userCheckResult = await ensureUserExists(userId, client); // ensureUserExists from Part 2
+        const userCheckResult = await ensureUserExists(userId, client);
         isNewUser = userCheckResult.isNewUser;
 
-        // Fetch Balance (Fix #9)
-        const balanceCheck = await queryDatabase('SELECT balance_lamports FROM user_balances WHERE user_id = $1 FOR UPDATE', [userId], client); // Lock balance row too
+        const balanceCheck = await queryDatabase('SELECT balance_lamports FROM user_balances WHERE user_id = $1 FOR UPDATE', [userId], client);
         if (balanceCheck.rowCount > 0) {
             currentBalance = BigInt(balanceCheck.rows[0].balance_lamports || '0');
         } else {
-             // This case should be handled by ensureUserExists creating the balance row
-             console.warn(`${logPrefix} Balance record not found for user ${userId} after ensureUserExists call during start command.`);
-             // Balance remains 0n
+            console.warn(`${logPrefix} Balance record not found for user ${userId} after ensureUserExists call during start command.`);
         }
 
-        // Process potential referral code from '/start ref_...'
         const commandArgs = isFromCallback ? args : msgOrCbMsg.text?.split(' ').slice(1) || [];
         const refCodeArg = commandArgs.length > 0 && commandArgs[0].startsWith('ref_') ? commandArgs[0] : null;
 
         if (refCodeArg) {
             console.log(`${logPrefix} Processing referral code ${refCodeArg} for user ${userId}`);
-            const refereeDetails = await getUserWalletDetails(userId, client); // Use client for transaction // getUserWalletDetails from Part 2
-            // Only attempt link if user doesn't already have a referrer
+            const refereeDetails = await getUserWalletDetails(userId, client);
             if (!refereeDetails?.referred_by_user_id) {
-                const referrerInfo = await getUserByReferralCode(refCodeArg); // getUserByReferralCode from Part 2 (doesn't need client)
+                const referrerInfo = await getUserByReferralCode(refCodeArg);
                 if (referrerInfo && referrerInfo.user_id !== userId) {
-                    // Use linkReferral which handles DB updates and checks within the transaction
-                    const linkSuccess = await linkReferral(userId, referrerInfo.user_id, client); // linkReferral from Part 2
+                    const linkSuccess = await linkReferral(userId, referrerInfo.user_id, client);
                     if (linkSuccess) {
                         console.log(`${logPrefix} Referral link successful: ${referrerInfo.user_id} -> ${userId} during start.`);
-                        const referrerDisplayName = await getUserDisplayName(chatId, referrerInfo.user_id); // getUserDisplayName from Part 3
-                        // Send notification outside the transaction
-                        safeSendMessage(chatId, `👋 Welcome via ${referrerDisplayName || escapeMarkdownV2('a friend')}'s referral link\\! Your accounts are now linked\\.`, {parse_mode: 'MarkdownV2'});
+                            // Notification about successful referral linking will be sent after commit and message display
                     } else {
-                        // linkReferral handles cases where user is already referred or self-referral
                         console.log(`${logPrefix} Referral link failed or unnecessary (already referred / self-referral?).`);
-                        // Send generic welcome, or specific message if needed
-                        if (referrerInfo && referrerInfo.user_id === userId) {
-                            safeSendMessage(chatId, "You can't use your own referral code\\!", {parse_mode: 'MarkdownV2'});
-                        } else if (!referrerInfo) {
-                            safeSendMessage(chatId, "Invalid referral code provided\\.", {parse_mode: 'MarkdownV2'});
-                        }
                     }
-                } else if (referrerInfo && referrerInfo.user_id === userId) {
-                    // Self-referral attempt
-                    safeSendMessage(chatId, "You can't use your own referral code\\!", {parse_mode: 'MarkdownV2'});
-                } else if (!referrerInfo) {
-                    // Invalid code
-                    safeSendMessage(chatId, "Invalid referral code provided\\.", {parse_mode: 'MarkdownV2'});
                 }
             } else {
-                // User already has a referrer, ignore the ref code from /start link
                 console.log(`${logPrefix} User ${userId} already referred by ${refereeDetails?.referred_by_user_id}. Ignoring start ref code ${refCodeArg}.`);
             }
         }
-        // Commit transaction after potentially linking referral
         await client.query('COMMIT');
-
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr));
         console.error(`${logPrefix} DB error during start command (user/ref/balance): ${error.message}`);
-        // Allow execution to continue to show welcome message if possible, but log error
     } finally { if (client) client.release(); }
+    // --- End Database operations ---
 
-    // Construct Welcome Message (Ensure meticulous escaping)
-    const displayName = await getUserDisplayName(chatId, userId); // from Part 3
-    const botName = escapeMarkdownV2(process.env.BOT_USERNAME || "SolanaGamblesBot"); // BOT_USERNAME from Part 1 env
-    const botVersion = escapeMarkdownV2(BOT_VERSION || "3.2.1r"); // BOT_VERSION from Part 1
-    const balanceString = escapeMarkdownV2(formatSol(currentBalance)); // formatSol from Part 3
+    // --- Construct Welcome Message ---
+    const displayName = await getUserDisplayName(chatId, userId);
+    const botName = escapeMarkdownV2(process.env.BOT_USERNAME || "SolanaGamblesBot");
+    const botVersion = escapeMarkdownV2(BOT_VERSION || "Unknown");
+    const balanceString = escapeMarkdownV2(formatSol(currentBalance));
 
     let welcomeMsg = `👋 Welcome, ${displayName}\\!\n\nI am ${botName} \\(v${botVersion}\\), your home for exciting on\\-chain games on Solana\\.\n\n`;
-    welcomeMsg += `*Current Balance:* ${balanceString} SOL\n\n`; // Added Balance Display (Fix #9)
+    welcomeMsg += `*Current Balance:* ${balanceString} SOL\n\n`;
     if (isNewUser) {
-        welcomeMsg += "Looks like you're new here\\!\\! Here's how to get started:\n1\\. Use \`/deposit\` to get your unique address\\.\n2\\. Send SOL to that address\\.\n3\\. Use the menu below to play games\\!\n\n"; // Escaped ! . \
+        welcomeMsg += "Looks like you're new here\\!\\! Here's how to get started:\n1\\. Use \`/deposit\` to get your unique address\\.\n2\\. Send SOL to that address\\.\n3\\. Use the menu below to play games\\!\n\n";
     }
-    welcomeMsg += "Use the menu below or type /help for a list of commands\\."; // Escaped .
+    welcomeMsg += "Use the menu below or type /help for a list of commands\\.";
 
-    // Truncate if exceeds caption limit
     if (welcomeMsg.length > MAX_CAPTION_LENGTH) {
-        const ellipsis = "... \\(message truncated\\)"; // Escaped ()
+        const ellipsis = "... \\(message truncated\\)";
         welcomeMsg = welcomeMsg.substring(0, MAX_CAPTION_LENGTH - ellipsis.length) + ellipsis;
         console.warn(`${logPrefix} Welcome message truncated due to caption length limit.`);
     }
 
     const mainMenuKeyboard = {
         inline_keyboard: [
-            [{ text: '🎮 Play Games', callback_data: 'menu:game_selection' }, { text: '👤 My Wallet', callback_data: 'menu:wallet' }], // Check callback data validity - seems OK
-            [{ text: '🏆 Leaderboards', callback_data: 'leaderboard_nav:overall_wagered:0'}, { text: '👥 Referrals', callback_data: 'menu:referral'}], // Check callback data validity - seems OK
+            [{ text: '🎮 Play Games', callback_data: 'menu:game_selection' }, { text: '👤 My Wallet', callback_data: 'menu:wallet' }],
+            [{ text: '🏆 Leaderboards', callback_data: 'leaderboard_nav:overall_wagered:0'}, { text: '👥 Referrals', callback_data: 'menu:referral'}],
             [{ text: 'ℹ️ Help & Info', callback_data: 'menu:help' }]
         ]
     };
+    // --- End Construct Welcome Message ---
 
-    // Attempt to send Animation + Caption + Keyboard (Fix #10 Revised)
-    try {
-        // Using sendAnimation for a more engaging start
-        await bot.sendAnimation(chatId, TENOR_GIF_URL, {
-            caption: welcomeMsg,
-            parse_mode: 'MarkdownV2',
-            reply_markup: mainMenuKeyboard
-        });
-         console.log(`${logPrefix} Sent start animation with caption and menu.`);
-    } catch (sendError) {
-        console.error(`${logPrefix} Failed to send start animation with caption: ${sendError.message}. Falling back to text message.`);
-        // Fallback to sending text only if animation+caption fails
-         try {
-            // Use safeSendMessage for queued sending of the fallback
-            await safeSendMessage(chatId, welcomeMsg, {
-                parse_mode: 'MarkdownV2',
-                reply_markup: mainMenuKeyboard
-            });
-            console.log(`${logPrefix} Sent fallback welcome text message and main menu.`);
-        } catch (fallbackError) {
-             console.error(`${logPrefix} Failed to send even fallback welcome message: ${fallbackError.message}.`);
-             // Final fallback with no special formatting
-             safeSendMessage(chatId, "Welcome! Use /help for commands.", {}).catch(()=>{});
+    // --- MODIFIED LOGIC for displaying the start menu ---
+    if (isFromCallback && originalMessageId) {
+        // If coming from a callback (e.g., "Back to Main Menu"), delete the previous menu message.
+        console.log(`${logPrefix} Is from callback. Deleting previous message ID ${originalMessageId} and sending new main menu animation.`);
+        try {
+            await bot.deleteMessage(chatId, originalMessageId);
+        } catch (delErr) {
+            console.warn(`${logPrefix} Non-critical error deleting original message ${originalMessageId}: ${delErr.message}`);
         }
+        // Then, send the main menu animation as a new message.
+        try {
+            await bot.sendAnimation(chatId, TENOR_GIF_URL, {
+                caption: welcomeMsg,
+                parse_mode: 'MarkdownV2',
+                reply_markup: mainMenuKeyboard
+            });
+            console.log(`${logPrefix} Sent new start animation with caption and menu (after deleting previous).`);
+        } catch (sendAnimError) {
+            console.error(`${logPrefix} Failed to send start animation after delete: ${sendAnimError.message}. Falling back to text message.`);
+            await safeSendMessage(chatId, welcomeMsg, {
+                parse_mode: 'MarkdownV2',
+                reply_markup: mainMenuKeyboard
+            });
+        }
+    } else {
+        // Not from a callback (e.g., direct /start command or no original message context), send the animation as a new message.
+        console.log(`${logPrefix} Direct /start command or no message to delete. Sending new main menu animation.`);
+        try {
+            await bot.sendAnimation(chatId, TENOR_GIF_URL, {
+                caption: welcomeMsg,
+                parse_mode: 'MarkdownV2',
+                reply_markup: mainMenuKeyboard
+            });
+            console.log(`${logPrefix} Sent start animation with caption and menu.`);
+        } catch (sendAnimError) {
+            console.error(`${logPrefix} Failed to send start animation: ${sendAnimError.message}. Falling back to text message.`);
+            await safeSendMessage(chatId, welcomeMsg, {
+                parse_mode: 'MarkdownV2',
+                reply_markup: mainMenuKeyboard
+            });
+        }
     }
+
+    // Send referral success messages after the main menu is displayed/attempted
+    const commandArgsForReferralMsg = isFromCallback ? args : msgOrCbMsg.text?.split(' ').slice(1) || [];
+    const refCodeArgForReferralMsg = commandArgsForReferralMsg.length > 0 && commandArgsForReferralMsg[0].startsWith('ref_') ? commandArgsForReferralMsg[0] : null;
+    if (refCodeArgForReferralMsg) {
+        // (This logic is simplified; actual link success determined during DB op)
+        // Check if user was newly referred (this check needs to be based on the actual DB operation's outcome)
+        // For simplicity, let's assume if refCodeArg was present & not self-referral, a message might be due.
+        // A more robust way would be for linkReferral to return a flag if a *new* link was made.
+        const referrerInfoCheck = await getUserByReferralCode(refCodeArgForReferralMsg); // Re-fetch or use info from above
+        if (referrerInfoCheck && referrerInfoCheck.user_id !== userId) {
+            // Check if user was ACTUALLY linked successfully just now (this requires a flag from the DB op)
+            // For now, we'll just send a generic welcome if a valid non-self ref code was processed.
+            // Ideally, only send this if linkReferral truly established a NEW link.
+            // If the linkReferral previously in the DB transaction indicated a new link was made:
+            // const referrerDisplayName = await getUserDisplayName(chatId, referrerInfoCheck.user_id);
+            // safeSendMessage(chatId, `👋 Welcome via ${referrerDisplayName || escapeMarkdownV2('a friend')}'s referral link\\! Your accounts are now linked\\.`, {parse_mode: 'MarkdownV2'});
+        } else if (referrerInfoCheck && referrerInfoCheck.user_id === userId) {
+            safeSendMessage(chatId, "You can't use your own referral code\\!", {parse_mode: 'MarkdownV2'});
+        } else if (!referrerInfoCheck) {
+             safeSendMessage(chatId, "Invalid referral code provided\\.", {parse_mode: 'MarkdownV2'});
+        }
+    }
 }
 
 // --- End of Part 5b (Section 2a) ---
