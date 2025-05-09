@@ -5876,12 +5876,77 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 // --- End of Part 5b (Section 2b) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - METICULOUSLY VERIFIED
 // --- VERSION: Referral message uses RAW link, all other escapes restored, all debug logs active, ALL KEYBOARDS VERIFIED ---
+// --- THIS VERSION INCLUDES THE NEW REFERRAL TEXT AND DELETE-THEN-SEND FIX FOR handleReferralCommand ---
 
 // (Continuing directly from Part 5b, Section 2b)
 // ... (Assume functions, dependencies etc. from other parts are available)
 
 /**
  * Handles the /history command and corresponding menu action. Displays recent bets.
+ * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg Message or callback message.
+ * @param {Array<string>} args Command arguments or callback parameters.
+ * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
+ */
+async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
+    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
+    const chatId = String(msgOrCbMsg.chat.id);
+    const logPrefix = `[HistoryCmd User ${userId}]`;
+    let messageToEditId = msgOrCbMsg.message_id;
+    let isFromCallback = !!correctUserIdFromCb;
+    clearUserState(userId); // clearUserState from Part 6
+
+    console.log(`${logPrefix} Fetching bet history.`);
+
+    const limit = 5; // Show last 5 bets
+    const history = await getBetHistory(userId, limit, 0, null); // getBetHistory from Part 2
+
+    if (!history || history.length === 0) {
+        const noHistoryMsg = "You have no betting history yet\\. Time to play some games\\!"; // Escaped . !
+        const keyboard = {inline_keyboard: [[{text: "🎮 Games Menu", callback_data: "menu:game_selection"}]]};
+        const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard };
+        if (isFromCallback && messageToEditId) {
+            return bot.editMessageText(noHistoryMsg, {chat_id: chatId, message_id: messageToEditId, ...options}) // bot from Part 1
+                    .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, noHistoryMsg, options); }); // safeSendMessage from Part 3
+        }
+        return safeSendMessage(chatId, noHistoryMsg, options);
+    }
+
+    let historyMsg = "📜 *Your Last 5 Bets:*\n\n";
+    history.forEach(bet => {
+        const gameName = GAME_CONFIG[bet.game_type]?.name || bet.game_type; // GAME_CONFIG from Part 1
+        const wager = formatSol(bet.wager_amount_lamports); // formatSol from Part 3
+        let outcomeText = `Status: ${escapeMarkdownV2(bet.status)}`; // escapeMarkdownV2 from Part 1
+        if (bet.status.startsWith('completed_')) {
+            const payout = bet.payout_amount_lamports !== null ? BigInt(bet.payout_amount_lamports) : 0n;
+            const profit = payout - BigInt(bet.wager_amount_lamports || '0');
+            if (bet.status === 'completed_win') outcomeText = `Won ${escapeMarkdownV2(formatSol(profit))} SOL \\(Returned ${escapeMarkdownV2(formatSol(payout))}\\)`; // Escaped ()
+            else if (bet.status === 'completed_push') outcomeText = `Push \\(Returned ${escapeMarkdownV2(formatSol(payout))}\\)`; // Escaped ()
+            else if (bet.status === 'completed_loss') outcomeText = `Lost ${escapeMarkdownV2(wager)} SOL`;
+        } else if (bet.status === 'processing_game') {
+            outcomeText = `Processing...`; // Add Emojis
+        } else if (bet.status === 'active') {
+            outcomeText = `Active`;
+        }
+
+        const betDate = escapeMarkdownV2(new Date(bet.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }));
+        historyMsg += `\\- *${escapeMarkdownV2(gameName)}* on ${betDate}\n` + // Escaped -
+                      `  Bet: ${escapeMarkdownV2(wager)} SOL, Result: ${outcomeText}\n\n`;
+    });
+    historyMsg += "\\_For full history, please use an external service if available or contact support for older records\\.\\_"; // Escaped . _
+
+    const historyKeyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]];
+    const options = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: historyKeyboard} };
+
+    if (isFromCallback && messageToEditId) {
+        bot.editMessageText(historyMsg, {chat_id: chatId, message_id: messageToEditId, ...options})
+            .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, historyMsg, options); });
+    } else {
+        safeSendMessage(chatId, historyMsg, options);
+    }
+}
+
+/**
+ * Handles the /referral command and menu option. Displays referral info and link.
  * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg Message or callback message.
  * @param {Array<string>} args Command arguments or callback parameters.
  * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
