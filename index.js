@@ -5951,6 +5951,8 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
 }
 
 /**
+ * Handles the /referral command and menu option. Displays referral info and // ===== START OF FULL handleReferralCommand FUNCTION (with Test String and Debug Logs) =====
+/**
  * Handles the /referral command and menu option. Displays referral info and link.
  * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg Message or callback message.
  * @param {Array<string>} args Command arguments or callback parameters.
@@ -5964,7 +5966,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
     clearUserState(userId); 
 
     const fallbackKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] };
-    const logPrefix = `[ReferralCmd User ${userId}]`; // Added for consistency in logging
+    const logPrefix = `[ReferralCmd User ${userId}]`;
 
     try { 
         const userDetails = await getUserWalletDetails(userId); 
@@ -5979,7 +5981,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             return safeSendMessage(chatId, noWalletMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
         }
 
-        let currentRefCode = userDetails.referral_code; // Use let as it might be re-assigned
+        let currentRefCode = userDetails.referral_code;
         if (!currentRefCode) {
             console.warn(`${logPrefix} Referral code was missing after wallet link check. Attempting to generate.`);
             let clientGen = null;
@@ -6014,8 +6016,8 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         const totalEarningsLamports = await getTotalReferralEarnings(userId);
         const totalEarningsSOL = escapeMarkdownV2(formatSol(totalEarningsLamports));
         const referralCount = escapeMarkdownV2(String(userDetails.referral_count || 0));
-        const withdrawalAddress = escapeMarkdownV2(userDetails.external_withdrawal_address); // This is the display-escaped withdrawal address
-        const escapedRefCode = escapeMarkdownV2(currentRefCode); // Use the potentially newly generated or confirmed refCode
+        const withdrawalAddress = escapeMarkdownV2(userDetails.external_withdrawal_address); // Correctly defined and escaped
+        const escapedRefCode = escapeMarkdownV2(currentRefCode);
 
         let botUsername = process.env.BOT_USERNAME || 'YOUR_BOT_USERNAME';
         if (botUsername === 'YOUR_BOT_USERNAME') {
@@ -6028,7 +6030,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
                 console.warn(`${logPrefix} Could not fetch bot username for referral link, link might be incorrect: ${e.message}`);
             }
         }
-        const rawReferralLink = `https://t.me/${botUsername}?start=${currentRefCode}`; // Use currentRefCode for the raw link
+        const rawReferralLink = `https://t.me/${botUsername}?start=${currentRefCode}`;
         const escapedReferralLinkForCodeBlock = escapeMarkdownV2(rawReferralLink);
 
         const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS));
@@ -6048,24 +6050,23 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         }).join('\\, ');
         console.log(`[Debug Tier Build User ${userId}] Final tiersDesc string generated: '${tiersDesc}'`);
 
-        let referralMsg_TEST_NO_PARENS = `🤝 *Your Referral Dashboard*\n\n` +
-    `Share your unique link to earn SOL when your friends play\\!\n\n` +
-    `*Your Code:* \`${escapedRefCode}\`\n` +
-    // Intentionally keeping the clickable link line REMOVED for this test as per your last log
-    // `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` + 
-    `Your link to copy: \`${escapedReferralLinkForCodeBlock}\`\n\n` + // Simplified the "Tap button" line, removed ()
-    `*Successful Referrals:* ${referralCount}\n` +
-    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-    `*How Rewards Work:*\n` +
-    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* - min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n` + // Removed parentheses around min wager
-    `   *Tiers:* ${tiersDesc}\n` + // tiersDesc should be fine based on your logs
-    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones e\\.g\\. 1 SOL, 5 SOL wagered, etc\\.\\.\\.\n\n` + // Removed parentheses around e.g.
-    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
+        // --- TEST MESSAGE STRING (NO PARENTHESES IN STATIC TEXT) ---
+        let testMessageString = `🤝 *Your Referral Dashboard*\n\n` +
+            `Share your unique link to earn SOL when your friends play\\!\n\n` +
+            `*Your Code:* \`${escapedRefCode}\`\n` +
+            // The line `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` is TEMPORARILY REMOVED
+            `Your link to copy: \`${escapedReferralLinkForCodeBlock}\`\n\n` + // Simplified the "Tap button" line, NO PARENS
+            `*Successful Referrals:* ${referralCount}\n` +
+            `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+            `*How Rewards Work:*\n` +
+            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* - min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n` + // NO PARENS around min wager
+            `   *Tiers:* ${tiersDesc}\n` +
+            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones e\\.g\\. 1 SOL, 5 SOL wagered, etc\\.\\.\\.\n\n` + // NO PARENS around e.g.
+            `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``; // Using the correctly defined 'withdrawalAddress'
 
-console.log("--- START OF referralMsg_TEST_NO_PARENS ---");
-console.log(referralMsg_TEST_NO_PARENS);
-console.log("--- END OF referralMsg_TEST_NO_PARENS ---");
-
+        console.log(`--- START OF TEST MESSAGE STRING (User ${userId}) ---`);
+        console.log(testMessageString);
+        console.log(`--- END OF TEST MESSAGE STRING (User ${userId}) ---`);
 
         const keyboard = [
             [{ text: '🔗 Share My Referral Link!', switch_inline_query: rawReferralLink }],
@@ -6073,15 +6074,16 @@ console.log("--- END OF referralMsg_TEST_NO_PARENS ---");
         ];
         const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: {inline_keyboard: keyboard} };
 
+        // Use 'testMessageString' in your send/edit call
         if (isFromCallback && messageToEditId) {
-            await bot.editMessageText(referralMsg, {chat_id: chatId, message_id: messageToEditId, ...options})
+            await bot.editMessageText(testMessageString, {chat_id: chatId, message_id: messageToEditId, ...options})
                 .catch(e => {
-                    console.error(`${logPrefix} FAILED to edit referralMsg. Error: ${e.message}`);
+                    console.error(`${logPrefix} FAILED to edit testMessageString. Error: ${e.message}`);
                     if (e.response && e.response.body) {
                         console.error(`${logPrefix} Telegram API Error Body on EDIT:`, JSON.stringify(e.response.body));
                     }
                     if (!e.message?.toLowerCase().includes("can't parse entities") && !e.message?.includes("message is not modified")) {
-                         safeSendMessage(chatId, referralMsg, options).catch(e_send => {
+                         safeSendMessage(chatId, testMessageString, options).catch(e_send => { // Try sending new if not parse error or "not modified"
                             console.error(`${logPrefix} Fallback safeSendMessage ALSO FAILED. Error: ${e_send.message}`);
                             if (e_send.response && e_send.response.body) {
                                 console.error(`${logPrefix} Telegram API Error Body on Fallback SEND:`, JSON.stringify(e_send.response.body));
@@ -6092,9 +6094,9 @@ console.log("--- END OF referralMsg_TEST_NO_PARENS ---");
                     }
                 });
         } else {
-            await safeSendMessage(chatId, referralMsg, options)
+            await safeSendMessage(chatId, testMessageString, options)
                 .catch(e => {
-                    console.error(`${logPrefix} FAILED to send new referralMsg. Error: ${e.message}`);
+                    console.error(`${logPrefix} FAILED to send new testMessageString. Error: ${e.message}`);
                     if (e.response && e.response.body) {
                         console.error(`${logPrefix} Telegram API Error Body on SEND:`, JSON.stringify(e.response.body));
                     }
@@ -6114,128 +6116,7 @@ console.log("--- END OF referralMsg_TEST_NO_PARENS ---");
         }
     }
 }
-
-
-/**
- * Handles the /deposit command and 'quick_deposit' callback. Shows deposit address.
- * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg Message or callback message.
- * @param {Array<string>} args Command arguments or callback parameters.
- * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
- */
-async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
-    const chatId = String(msgOrCbMsg.chat.id);
-    const logPrefix = `[DepositCmd User ${userId}]`;
-    let messageToEditId = msgOrCbMsg.message_id;
-    let isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); 
-
-    let workingMessageId = messageToEditId; 
-
-    const generatingText = "⏳ Generating your unique deposit address\\.\\.\\."; 
-    try {
-        if (isFromCallback && messageToEditId) {
-            await bot.editMessageText(generatingText, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } });
-        } else {
-            const tempMsg = await safeSendMessage(chatId, generatingText, { parse_mode: 'MarkdownV2' });
-            workingMessageId = tempMsg?.message_id; 
-        }
-    } catch (editError) {
-        if (!editError.message?.includes("message is not modified")) {
-            console.warn(`${logPrefix} Failed to edit message ${messageToEditId} for generating state, sending new. Error: ${editError.message}`);
-            const tempMsg = await safeSendMessage(chatId, generatingText, { parse_mode: 'MarkdownV2' });
-            workingMessageId = tempMsg?.message_id;
-        } else {
-            workingMessageId = messageToEditId;
-        }
-    }
-
-    if (!workingMessageId) {
-        console.error(`${logPrefix} Failed to establish message context for deposit address display.`);
-        safeSendMessage(chatId, "Failed to initiate deposit process\\. Please try again\\.", { parse_mode: 'MarkdownV2' }); 
-        return;
-    }
-
-    try {
-        let tempClient = null;
-        try { tempClient = await pool.connect(); await ensureUserExists(userId, tempClient); } finally { if (tempClient) tempClient.release(); }
-
-        const existingAddresses = await queryDatabase(
-            `SELECT deposit_address, expires_at FROM deposit_addresses WHERE user_id = $1 AND status = 'pending' AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1`,
-            [userId]
-        );
-
-        if (existingAddresses.rowCount > 0) {
-            const existing = existingAddresses.rows[0];
-            const existingAddress = existing.deposit_address;
-            const existingExpiresAt = new Date(existing.expires_at);
-            const expiresInMs = existingExpiresAt.getTime() - Date.now();
-            const expiresInMinutes = Math.max(1, Math.ceil(expiresInMs / (60 * 1000))); 
-            const escapedExistingAddress = escapeMarkdownV2(existingAddress);
-
-            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapedExistingAddress}\`\n` + 
-                       `\\_\(Tap the address above to copy\\)\\_\\n\n` + 
-                       `It expires in approximately ${escapeMarkdownV2(String(expiresInMinutes))} minutes\\.`; 
-            text += `\n\nOnce you send SOL, it will be credited after confirmations\\. New deposits to this address will be credited until it expires\\.`; 
-
-            const keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }], [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${existingAddress}` }]];
-            bot.editMessageText(text, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: keyboard } });
-            return; 
-        }
-
-        console.log(`${logPrefix} No active address found. Generating new one.`);
-        const nextIndex = await getNextDepositAddressIndex(userId); 
-        const derivedInfo = await generateUniqueDepositAddress(userId, nextIndex); 
-        if (!derivedInfo) {
-            throw new Error("Failed to generate deposit address\\. Master seed phrase might be an issue\\."); 
-        }
-
-        const depositAddress = derivedInfo.publicKey.toBase58();
-        const expiresAt = new Date(Date.now() + DEPOSIT_ADDRESS_EXPIRY_MS); 
-        const recordResult = await createDepositAddressRecord(userId, depositAddress, derivedInfo.derivationPath, expiresAt); 
-        if (!recordResult.success) {
-            throw new Error(escapeMarkdownV2(recordResult.error || "Failed to save deposit address record in DB\\.")); 
-        }
-
-        const expiryMinutes = escapeMarkdownV2(String(Math.round(DEPOSIT_ADDRESS_EXPIRY_MS / (60 * 1000))));
-        const confirmationLevel = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL); 
-        const escapedAddress = escapeMarkdownV2(depositAddress);
-
-        const message = `💰 *Your Unique Deposit Address*\n\n` +
-                        `Send SOL to this unique address:\n\n` +
-                        `\`${escapedAddress}\`\n` + 
-                        `\\_\(Tap the address above to copy\\)\\_\\n\n` + 
-                        `⚠️ *Important:*\n` +
-                        `1\\. This address is unique to you and for this deposit session\\. It will expire in *${expiryMinutes} minutes*\\.\n` + 
-                        `2\\. For new deposits, use \`/deposit\` again or the menu option\\.\n` + 
-                        `3\\. Confirmation: *${confirmationLevel}* network confirmations required\\.`; 
-
-        const depositKeyboard = [
-            [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${depositAddress}` }],
-            [{ text: '✅ Done / Back to Wallet', callback_data: 'menu:wallet' }]
-        ];
-        const options = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: depositKeyboard} };
-
-        await bot.editMessageText(message, {chat_id: chatId, message_id: workingMessageId, ...options}).catch(e => {
-             if (e.message && (e.message.includes("can't parse entities") || e.message.includes("bad request"))) {
-                 console.error(`❌ [DepositCmd User ${userId}] PARSE ERROR with revised hint! Message attempted: ${message}`);
-                 const plainMessage = `Your Deposit Address (Tap to copy):\n${depositAddress}\n\nExpires in ${expiryMinutes} minutes. Confirmation: ${confirmationLevel}. Do not reuse after expiry.`;
-                 safeSendMessage(chatId, plainMessage, {reply_markup: {inline_keyboard: depositKeyboard}});
-             }
-             else if (!e.message.includes("message is not modified")) {
-                 console.warn(`${logPrefix} Failed to edit message ${workingMessageId} with deposit address, sending new. Error: ${e.message}`);
-                 safeSendMessage(chatId, message, options);
-             }
-         });
-
-    } catch (error) {
-        console.error(`${logPrefix} Error generating deposit address: ${error.message}`);
-        const errorMsg = `❌ Error generating deposit address: ${escapeMarkdownV2(error.message)}\\. Please try again\\. If the issue persists, contact support\\.`; 
-        const errorKeyboard = [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]];
-        const errorOptions = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: errorKeyboard} };
-        bot.editMessageText(errorMsg, {chat_id: chatId, message_id: workingMessageId, ...errorOptions}).catch(e => safeSendMessage(chatId, errorMsg, errorOptions));
-    }
-}
+// ===== END OF FULL handleReferralCommand FUNCTION =====
 
 /**
  * Handles the /withdraw command and 'menu:withdraw' callback. Starts withdrawal process.
