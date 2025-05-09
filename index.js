@@ -6027,24 +6027,28 @@ const milestonePercent = escapeMarkdownV2(String((REFERRAL_MILESTONE_REWARD_PERC
 
 const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => {
     const count = t.maxCount === Infinity ? '100+' : `<=${t.maxCount}`;
-    const percent = escapeMarkdownV2(String((t.percent * 100).toFixed(1))); // Escapes the dot in "5.0"
-    return `${count} refs = ${percent}\\%`; // Escape % for safety (though not strictly required)
+    const percent = String((t.percent * 100).toFixed(1)).replace(/\./g, '\\.'); // escape . in "5.0"
+    return `${count} refs = ${percent}\\%`; // escape %
 }).join(', ');
 
-      // *** CORRECTED VERSION: Removed unnecessary escaping 
-        let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
-  `Share your unique link to earn SOL when your friends play!\n\n` +
-  `*Your Code:* \`${escapedRefCode}\`\n` +
-  `*Your Clickable Link:*\n[Click here to use your link](${referralLink})\n` +
-  `_Tap button below or copy here: \`${referralLink}\`_\n\n` +
+const safeReferralLink = referralLink.replace(/_/g, '\\_');
+const safeRefCode = escapedRefCode.replace(/_/g, '\\_');
+const safeWithdrawalAddress = withdrawalAddress.replace(/_/g, '\\_');
+
+let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
+  `Share your unique link to earn SOL when your friends play\\!\n\n` +
+  `*Your Code:* \`${safeRefCode}\`\n` +
+  `*Your Clickable Link:*\n[Click here to use your link](${safeReferralLink})\n` +
+  `_Tap button below or copy here: \`${safeReferralLink}\`_\n\n` +
   `*Successful Referrals:* ${referralCount}\n` +
   `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
   `*How Rewards Work:*\n` +
-  `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \$begin:math:text$min ${minBetAmount} SOL wager\\$end:math:text$\\. Your % increases with more referrals!\n` +
+  `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \$begin:math:text$min ${minBetAmount} SOL wager\\$end:math:text$\\. Your % increases with more referrals\\!\n` +
   `   *Tiers:* ${tiersDesc}\n` +
-  `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \$begin:math:text$e\\\\.g\\\\., 1 SOL, 5 SOL wagered, etc\\$end:math:text$\\.\n\n` +
-  `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
-        // Button uses the raw link for the switch_inline_query parameter
+  `2\\. *Milestone Bonus:* Earn ${milestonePercent}\\% of their total wagered amount as they hit milestones \$begin:math:text$e\\\\.g\\\\., 1 SOL, 5 SOL wagered, etc\\\\.\\$end:math:text$\n\n` +
+  `Rewards are paid to your linked wallet: \`${safeWithdrawalAddress}\``;
+    
+        // Button uses the raw link for the switch_inline_query parameter
         const keyboard = [
             [{ text: '🔗 Share My Referral Link!', switch_inline_query: referralLink }],
             [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
