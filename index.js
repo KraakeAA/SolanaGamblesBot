@@ -6079,7 +6079,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
     `Share your unique link to earn SOL when your friends play\\!\n\n` +
     `*Your Code:* \`${escapedRefCode}\`\n` +
     // MODIFIED LINE: Just output the raw link directly.
-    `*Your Clickable Link:*\n${rawReferralLink}\n` + 
+    `*Your Clickable Link:*\n${rawReferralLink}\n` +
     `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
     `*Successful Referrals:* ${referralCount}\n` +
     `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
