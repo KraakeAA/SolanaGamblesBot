@@ -6057,7 +6057,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             `*Successful Referrals:* ${referralCount}\n` +
             `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
             `*How Rewards Work:*\n` +
-            1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\- min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n + //
+            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\- min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n` +
             `   *Tiers:* ${tiersDesc}\n` +
             `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones e\\.g\\. 1 SOL, 5 SOL wagered, etc\\.\\.\\.\n\n` + // NO PARENS around e.g.
             `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``; // Using the correctly defined 'withdrawalAddress'
