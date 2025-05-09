@@ -6056,22 +6056,20 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         
         // --- MODIFIED Full Production referralMsg: Link simplified, parentheses restored and escaped ---
         let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
-            `Share your unique link to earn SOL when your friends play\\!\n\n` +
-            `*Your Code:* \`${escapedRefCode}\`\n` +
-            // MODIFIED LINE: Just output the raw link directly. Telegram should auto-link it.
-            `*Your Clickable Link:*\n${rawReferralLink}\n` + 
-            `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` + // Parentheses here are literal and escaped
-            `*Successful Referrals:* ${referralCount}\n` +
-            `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-            `*How Rewards Work:*\n` +
-            // Parentheses around "min wager" are literal and escaped
-            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
-            `   *Tiers:* ${tiersDesc}\n` +
-            // Parentheses around "e.g." are literal and escaped
-            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
-            `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
+    `Share your unique link to earn SOL when your friends play\\!\n\n` +
+    `*Your Code:* \`${escapedRefCode}\`\n` +
+    // MODIFIED LINK TEXT to be extremely simple:
+    `*Your Clickable Link:*\n[Link](${rawReferralLink})\n` + 
+    `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
+    `*Successful Referrals:* ${referralCount}\n` +
+    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+    `*How Rewards Work:*\n` +
+    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
+    `   *Tiers:* ${tiersDesc}\n` +
+    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
+    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
         
-        const messageToSend = referralMsg; 
+const messageToSend = referralMsg; 
 
         console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - Simplified Link Test) ---`);
         console.log(messageToSend); 
