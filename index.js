@@ -6022,14 +6022,14 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         if (botUsername === 'YOUR_BOT_USERNAME') { try { const me = await bot.getMe(); if (me.username) { botUsername = me.username; } } catch (e) { console.warn("Could not fetch bot username, referral link might be incorrect.");} }
         const referralLink = `https://t.me/${botUsername}?start=${refCode}`; // Raw link needed for Telegram auto-linking and button
 
-        const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS)); // Constants from Part 1
-        const milestonePercent = escapeMarkdownV2(String((REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(1))); // Format nicely
-        // *** FIX #2: Escape % sign in tiersDesc generation (Verified Already Present) ***
-        const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => { // Constants from Part 1
-            const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${t.maxCount}`; // Escape < = +
-            const percent = escapeMarkdownV2(String((t.percent * 100).toFixed(1))); // Format nicely
-            return `${count} refs \\= ${percent}%`; // Added \\%
-        }).join(', ');
+        const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS));
+const milestonePercent = escapeMarkdownV2(String((REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(1)));
+
+const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => {
+    const count = t.maxCount === Infinity ? '100+' : `<=${t.maxCount}`;
+    const percent = escapeMarkdownV2(String((t.percent * 100).toFixed(1)));
+    return `${count} refs = ${percent}%`;
+}).join(', ');
 
       // *** CORRECTED VERSION: Removed unnecessary escaping for '%' ***
         let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
