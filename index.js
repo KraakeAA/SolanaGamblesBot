@@ -5874,8 +5874,8 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
 
 // --- End of Part 5b (Section 2b) ---
-// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - REVISED
-// --- VERSION: Targeting stable referral message by simplifying link, keeping other escapes and debug logs ---
+// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - FINAL STABLE VERSION
+// --- VERSION: Based on 3.2.1v - Referral message uses raw link, all debug logs active, syntax verified ---
 
 // (Continuing directly from Part 5b, Section 2b)
 // ... (Assume functions, dependencies etc. from other parts are available)
@@ -6002,7 +6002,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             if (!currentRefCode) { throw new Error("Could not get/gen ref code for referral msg.");}
         }
         
-        // --- Variable Definitions & Debug Logging ---
+        // --- START OF DETAILED VARIABLE LOGGING ---
         console.log(`[VarDebug User ${userId}] Raw currentRefCode: '${currentRefCode}'`);
         const escapedRefCode = escapeMarkdownV2(currentRefCode);
         console.log(`[VarDebug User ${userId}] Escaped escapedRefCode: '${escapedRefCode}'`);
@@ -6053,25 +6053,25 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             return `${count} refs \\= ${tierPercent}%`;
         }).join('\\, ');
         console.log(`[Debug Tier Build User ${userId}] Final tiersDesc string generated: '${tiersDesc}'`);
-        
-        // --- MODIFIED Full Production referralMsg: Link simplified, parentheses restored and escaped ---
-        let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
-    `Share your unique link to earn SOL when your friends play\\!\n\n` +
-    `*Your Code:* \`${escapedRefCode}\`\n` +
-    // MODIFIED LINK TEXT to be extremely simple:
-    `*Your Clickable Link:*\n[Link](${rawReferralLink})\n` + 
-    `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
-    `*Successful Referrals:* ${referralCount}\n` +
-    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-    `*How Rewards Work:*\n` +
-    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
-    `   *Tiers:* ${tiersDesc}\n` +
-    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
-    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
-        
-const messageToSend = referralMsg; 
+        // --- END OF DETAILED VARIABLE LOGGING ---
 
-        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - Simplified Link Test) ---`);
+        // --- Current Test: Full message but with SIMPLIFIED link (no [text](URL) syntax) ---
+        let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
+            `Share your unique link to earn SOL when your friends play\\!\n\n` +
+            `*Your Code:* \`${escapedRefCode}\`\n` +
+            `*Your Clickable Link:*\n${rawReferralLink}\n` + // Using RAW link directly for auto-linking
+            `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` + // Parentheses here are literal and escaped
+            `*Successful Referrals:* ${referralCount}\n` +
+            `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+            `*How Rewards Work:*\n` +
+            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Parentheses here are literal and escaped
+            `   *Tiers:* ${tiersDesc}\n` +
+            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Parentheses here are literal and escaped
+            `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
+        
+        const messageToSend = referralMsg; 
+
+        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - Raw Link Test) ---`);
         console.log(messageToSend); 
         console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
 
@@ -6089,9 +6089,10 @@ const messageToSend = referralMsg;
                         console.error(`${logPrefix} Telegram API Error Body on EDIT:`, JSON.stringify(e.response.body));
                     }
                     const errorMsgLowerCase = e.message?.toLowerCase() || "";
-                    if (errorMsgLowerCase.includes("message is not modified") || errorMsgLowerCase.includes("there is no text in the message to edit")) {
+                    const errorDescLowerCase = e.response?.body?.description?.toLowerCase() || ""; // Check description too
+                    if (errorMsgLowerCase.includes("message is not modified") || errorDescLowerCase.includes("message is not modified") || errorDescLowerCase.includes("there is no text in the message to edit")) {
                         console.log(`${logPrefix} Message not modified or no text to edit, edit call skipped/ignored by Telegram. This is usually fine.`);
-                    } else if (errorMsgLowerCase.includes("can't parse entities")) {
+                    } else if (errorMsgLowerCase.includes("can't parse entities") || errorDescLowerCase.includes("can't parse entities")) {
                         safeSendMessage(chatId, "⚠️ An error occurred displaying referral information due to a formatting problem\\. Please try again later or contact support\\.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
                     } else {
                          safeSendMessage(chatId, messageToSend, options).catch(e_send => { 
