@@ -5874,8 +5874,8 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
 
 // --- End of Part 5b (Section 2b) ---
-// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - FULLY CORRECTED AND VERIFIED
-// --- VERSION: Based on 3.2.1v - Final attempt for referral command with full message and extensive logging, syntax checked for all functions in this section ---
+// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - FULL PRODUCTION MESSAGE WITH ALL DEBUG LOGS
+// --- VERSION: Based on 3.2.1v - Final attempt for referral command with full message and extensive logging ---
 
 // (Continuing directly from Part 5b, Section 2b)
 // ... (Assume functions, dependencies etc. from other parts are available:
@@ -6570,12 +6570,12 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
                 keyboard.inline_keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]];
                 break;
 
-            case 'leaderboards': // Corrected this case to include the back button
+            case 'leaderboards':
                 text = "🏆 *Leaderboards*\n\nSelect a category:";
                 keyboard.inline_keyboard = [
                     [{ text: '💰 Overall Wagered', callback_data: 'leaderboard_nav:overall_wagered:0' }], 
                     [{ text: '📈 Overall Profit', callback_data: 'leaderboard_nav:overall_profit:0' }], 
-                    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }] // Added missing back button
+                    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }] // Corrected: Added missing back button here
                 ];
                 break;
 
