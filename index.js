@@ -5874,8 +5874,8 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
 
 // --- End of Part 5b (Section 2b) ---
-// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - STABLE SIMPLIFIED REFERRAL MESSAGE
-// --- VERSION: Using the referral message structure that previously passed parsing (gave "no text to edit" error) ---
+// index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - DEFINITIVE VERSION
+// --- VERSION: Using simplified link in referralMsg, all other escapes restored, full debug logs ---
 
 // (Continuing directly from Part 5b, Section 2b)
 // ... (Assume functions, dependencies etc. from other parts are available)
@@ -6002,7 +6002,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             if (!currentRefCode) { throw new Error("Could not get/gen ref code for referral msg.");}
         }
         
-        // --- Variable Definitions & Debug Logging ---
+        // --- START OF DETAILED VARIABLE LOGGING ---
         console.log(`[VarDebug User ${userId}] Raw currentRefCode: '${currentRefCode}'`);
         const escapedRefCode = escapeMarkdownV2(currentRefCode);
         console.log(`[VarDebug User ${userId}] Escaped escapedRefCode: '${escapedRefCode}'`);
@@ -6047,35 +6047,34 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${escapeMarkdownV2(String(t.maxCount))}`;
             const rawTierPercentValue = (t.percent * 100);
             const rawTierPercentString = rawTierPercentValue.toFixed(1);
-            // console.log(`[Debug Tier Build User ${userId}] For count: ${count}, rawTierPercentValue: ${rawTierPercentValue}, rawTierPercentString: '${rawTierPercentString}'`); // Already active
+            // console.log(`[Debug Tier Build User ${userId}] For count: ${count}, rawTierPercentValue: ${rawTierPercentValue}, rawTierPercentString: '${rawTierPercentString}'`);
             const tierPercent = escapeMarkdownV2(rawTierPercentString);
-            // console.log(`[Debug Tier Build User ${userId}] Escaped tierPercent string for count ${count}: '${tierPercent}'`); // Already active
+            // console.log(`[Debug Tier Build User ${userId}] Escaped tierPercent string for count ${count}: '${tierPercent}'`);
             return `${count} refs \\= ${tierPercent}%`;
         }).join('\\, ');
         console.log(`[Debug Tier Build User ${userId}] Final tiersDesc string generated: '${tiersDesc}'`);
         
-        // --- Using the SIMPLIFIED message string that previously PASSED PARSING ---
-        // (This version avoids [text](URL) and explicit static parentheses)
+        // --- Message construction using SIMPLIFIED LINK (raw URL), but with all other parentheses ESCAPED ---
         let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
             `Share your unique link to earn SOL when your friends play\\!\n\n` +
             `*Your Code:* \`${escapedRefCode}\`\n` +
-            // Using raw link directly, letting Telegram auto-link it:
+            // Using RAW link directly for auto-linking by Telegram
             `*Your Clickable Link:*\n${rawReferralLink}\n` + 
-            // Simplified "Tap button" line, no explicit escaped parentheses:
-            `_Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`_\n\n` + 
+            // Escaped parentheses for the "Tap button below" line
+            `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
             `*Successful Referrals:* ${referralCount}\n` +
             `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
             `*How Rewards Work:*\n` +
-            // No explicit parentheses around min wager:
-            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\- min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n` +
+            // Escaped parentheses for the "Initial Bonus" line
+            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
             `   *Tiers:* ${tiersDesc}\n` +
-            // No explicit parentheses around e.g.:
-            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones e\\.g\\. 1 SOL, 5 SOL wagered, etc\\.\\.\\.\n\n` +
+            // Escaped parentheses for the "Milestone Bonus" line
+            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
             `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
         
         const messageToSend = referralMsg; 
 
-        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - Simplified Message Test) ---`);
+        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - Raw Link, Escaped Parens) ---`);
         console.log(messageToSend); 
         console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
 
@@ -6617,7 +6616,7 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
     }
 }
 
-// --- End of Part 5b (Section 2c) --- ---
+// --- End of Part 5b (Section 2c) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2d of 4)
 // --- VERSION: 3.2.1r --- (Applying Fixes: Ensure game commands handle amounts/routing, Verify handler maps + previous)
 
