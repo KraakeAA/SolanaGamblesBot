@@ -5979,140 +5979,141 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             return safeSendMessage(chatId, noWalletMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
         }
 
-        let currentRefCode = userDetails.referral_code;
-        if (!currentRefCode) {
-            console.warn(`${logPrefix} Referral code was missing after wallet link check. Attempting to generate.`);
-            let clientGen = null;
-            try {
-                clientGen = await pool.connect(); await clientGen.query('BEGIN');
-                const walletCheck = await queryDatabase('SELECT referral_code FROM wallets WHERE user_id=$1 FOR UPDATE', [userId], clientGen);
-                if (walletCheck.rowCount > 0 && !walletCheck.rows[0].referral_code) {
-                    currentRefCode = generateReferralCode(); 
-                    await queryDatabase('UPDATE wallets SET referral_code=$1 WHERE user_id=$2', [currentRefCode, userId], clientGen);
-                    await clientGen.query('COMMIT');
-                    console.log(`${logPrefix} Generated missing referral code: ${currentRefCode}`);
-                    updateWalletCache(userId, { referralCode: currentRefCode }); 
-                } else if (walletCheck.rowCount > 0 && walletCheck.rows[0].referral_code) {
-                    await clientGen.query('ROLLBACK'); 
-                    currentRefCode = walletCheck.rows[0].referral_code; 
-                } else { 
-                    await clientGen.query('ROLLBACK');
-                    throw new Error("User not found during referral code generation sanity check.");
-                }
-            } catch (genError) {
-                if(clientGen) await clientGen.query('ROLLBACK').catch(()=>{});
-                console.error(`${logPrefix} Error in on-demand referral code generation: ${genError.message}`);
-                throw genError; 
-            } finally { if(clientGen) clientGen.release(); }
-            
-            if (!currentRefCode) { 
-                 console.error(`${logPrefix} CRITICAL: Referral code is still missing after generation attempt.`);
-                 throw new Error("Could not retrieve or generate referral code.");
+        // Ensure refCode is defined (it should be after the checks you have)
+let currentRefCode = userDetails.referral_code; // Use let as it might be re-assigned if generated
+const logPrefix = `[ReferralCmd User ${userId}]`; // Defined for logging consistency
+
+if (!currentRefCode) {
+    console.warn(`${logPrefix} Referral code was missing after wallet link check. Attempting to generate.`);
+    let clientGen = null;
+    try {
+        clientGen = await pool.connect(); await clientGen.query('BEGIN');
+        const walletCheck = await queryDatabase('SELECT referral_code FROM wallets WHERE user_id=$1 FOR UPDATE', [userId], clientGen);
+        if (walletCheck.rowCount > 0 && !walletCheck.rows[0].referral_code) {
+            currentRefCode = generateReferralCode(); 
+            await queryDatabase('UPDATE wallets SET referral_code=$1 WHERE user_id=$2', [currentRefCode, userId], clientGen);
+            await clientGen.query('COMMIT');
+            console.log(`${logPrefix} Generated missing referral code: ${currentRefCode}`);
+            updateWalletCache(userId, { referralCode: currentRefCode }); 
+        } else if (walletCheck.rowCount > 0 && walletCheck.rows[0].referral_code) {
+            await clientGen.query('ROLLBACK'); 
+            currentRefCode = walletCheck.rows[0].referral_code; 
+            console.log(`${logPrefix} Used existing referral code: ${currentRefCode}`);
+        } else { 
+            await clientGen.query('ROLLBACK');
+            throw new Error("User not found during referral code generation sanity check.");
+        }
+    } catch (genError) {
+        if(clientGen) await clientGen.query('ROLLBACK').catch(()=>{});
+        console.error(`${logPrefix} Error in on-demand referral code generation: ${genError.message}`);
+        throw genError; 
+    } finally { if(clientGen) clientGen.release(); }
+    
+    if (!currentRefCode) { 
+         console.error(`${logPrefix} CRITICAL: Referral code is still missing after generation attempt.`);
+         throw new Error("Could not retrieve or generate referral code for referral message construction.");
+    }
+}
+
+const totalEarningsLamports = await getTotalReferralEarnings(userId);
+const totalEarningsSOL = escapeMarkdownV2(formatSol(totalEarningsLamports));
+const referralCount = escapeMarkdownV2(String(userDetails.referral_count || 0));
+const withdrawalAddress = escapeMarkdownV2(userDetails.external_withdrawal_address); 
+const escapedRefCode = escapeMarkdownV2(currentRefCode); 
+
+let botUsername = process.env.BOT_USERNAME || 'YOUR_BOT_USERNAME';
+if (botUsername === 'YOUR_BOT_USERNAME') {
+    try {
+        const me = await bot.getMe();
+        if (me.username) {
+            botUsername = me.username;
+        }
+    } catch (e) {
+        console.warn(`${logPrefix} Could not fetch bot username for referral link, link might be incorrect: ${e.message}`);
+    }
+}
+const rawReferralLink = `https://t.me/${botUsername}?start=${currentRefCode}`; 
+const escapedReferralLinkForCodeBlock = escapeMarkdownV2(rawReferralLink); 
+
+const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS));
+const milestonePercentNumber = (REFERRAL_MILESTONE_REWARD_PERCENT * 100);
+const milestonePercentString = milestonePercentNumber.toFixed(1); 
+const milestonePercent = escapeMarkdownV2(milestonePercentString);
+
+console.log(`[Debug Tiers User ${userId}] Starting construction of tiersDesc. REFERRAL_INITIAL_BONUS_TIERS:`, JSON.stringify(REFERRAL_INITIAL_BONUS_TIERS));
+const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => {
+    const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${escapeMarkdownV2(String(t.maxCount))}`;
+    const rawTierPercentValue = (t.percent * 100);
+    const rawTierPercentString = rawTierPercentValue.toFixed(1);
+    console.log(`[Debug Tier Build User ${userId}] For count: ${count}, rawTierPercentValue: ${rawTierPercentValue}, rawTierPercentString: '${rawTierPercentString}'`);
+    const tierPercent = escapeMarkdownV2(rawTierPercentString);
+    console.log(`[Debug Tier Build User ${userId}] Escaped tierPercent string for count ${count}: '${tierPercent}'`);
+    return `${count} refs \\= ${tierPercent}%`;
+}).join('\\, ');
+console.log(`[Debug Tier Build User ${userId}] Final tiersDesc string generated: '${tiersDesc}'`);
+
+// --- Fully Corrected referralMsg Construction ---
+let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
+    `Share your unique link to earn SOL when your friends play\\!\n\n` +
+    `*Your Code:* \`${escapedRefCode}\`\n` +
+    // Use the RAW 'rawReferralLink' for the clickable URL part of [text](URL)
+    `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` +
+    // Use the 'escapedReferralLinkForCodeBlock' for the part inside backticks
+    // All parentheses, underscores are explicitly escaped here for the display text.
+    `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
+    `*Successful Referrals:* ${referralCount}\n` +
+    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+    `*How Rewards Work:*\n` +
+    // Parentheses around "min wager" are now correctly escaped
+    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
+    `   *Tiers:* ${tiersDesc}\n` +
+    // Parentheses around "e.g." are now correctly escaped
+    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
+    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
+
+// Log the exact message being sent for debugging
+console.log(`--- START OF referralMsg ATTEMPT (handleReferralCommand User ${userId}) ---`);
+console.log(referralMsg);
+console.log(`--- END OF referralMsg ATTEMPT (User ${userId}) ---`);
+
+const keyboard = [
+    [{ text: '🔗 Share My Referral Link!', switch_inline_query: rawReferralLink }],
+    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
+];
+const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: {inline_keyboard: keyboard} };
+
+if (isFromCallback && messageToEditId) {
+    await bot.editMessageText(referralMsg, {chat_id: chatId, message_id: messageToEditId, ...options})
+        .catch(e => {
+            console.error(`${logPrefix} FAILED to edit referralMsg. Error: ${e.message}`);
+            if (e.response && e.response.body) {
+                console.error(`${logPrefix} Telegram API Error Body on EDIT:`, JSON.stringify(e.response.body));
             }
-        }
-        
-        const totalEarningsLamports = await getTotalReferralEarnings(userId);
-        const totalEarningsSOL = escapeMarkdownV2(formatSol(totalEarningsLamports));
-        const referralCount = escapeMarkdownV2(String(userDetails.referral_count || 0));
-        const withdrawalAddress = escapeMarkdownV2(userDetails.external_withdrawal_address); // Correctly defined and escaped
-        const escapedRefCode = escapeMarkdownV2(currentRefCode);
-
-        let botUsername = process.env.BOT_USERNAME || 'YOUR_BOT_USERNAME';
-        if (botUsername === 'YOUR_BOT_USERNAME') {
-            try {
-                const me = await bot.getMe();
-                if (me.username) {
-                    botUsername = me.username;
-                }
-            } catch (e) {
-                console.warn(`${logPrefix} Could not fetch bot username for referral link, link might be incorrect: ${e.message}`);
+            // Check for "message is not modified" or "there is no text in the message to edit"
+            const errorMsgLowerCase = e.message?.toLowerCase() || "";
+            if (errorMsgLowerCase.includes("message is not modified") || errorMsgLowerCase.includes("there is no text in the message to edit")) {
+                console.log(`${logPrefix} Message not modified, edit call skipped/ignored by Telegram. This is usually fine.`);
+            } else if (errorMsgLowerCase.includes("can't parse entities")) {
+                safeSendMessage(chatId, "⚠️ An error occurred displaying referral information due to a formatting problem\\. Please try again later or contact support\\.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
+            } else {
+                 // For other edit errors, try sending as a new message
+                 safeSendMessage(chatId, referralMsg, options).catch(e_send => {
+                    console.error(`${logPrefix} Fallback safeSendMessage ALSO FAILED. Error: ${e_send.message}`);
+                    if (e_send.response && e_send.response.body) {
+                        console.error(`${logPrefix} Telegram API Error Body on Fallback SEND:`, JSON.stringify(e_send.response.body));
+                    }
+                 });
             }
-        }
-        const rawReferralLink = `https://t.me/${botUsername}?start=${currentRefCode}`;
-        const escapedReferralLinkForCodeBlock = escapeMarkdownV2(rawReferralLink);
-
-        const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS));
-        const milestonePercentNumber = (REFERRAL_MILESTONE_REWARD_PERCENT * 100);
-        const milestonePercentString = milestonePercentNumber.toFixed(1); 
-        const milestonePercent = escapeMarkdownV2(milestonePercentString);
-
-        console.log(`[Debug Tiers User ${userId}] Starting construction of tiersDesc. REFERRAL_INITIAL_BONUS_TIERS:`, JSON.stringify(REFERRAL_INITIAL_BONUS_TIERS));
-        const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => {
-            const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${escapeMarkdownV2(String(t.maxCount))}`;
-            const rawTierPercentValue = (t.percent * 100);
-            const rawTierPercentString = rawTierPercentValue.toFixed(1);
-            console.log(`[Debug Tier Build User ${userId}] For count: ${count}, rawTierPercentValue: ${rawTierPercentValue}, rawTierPercentString: '${rawTierPercentString}'`);
-            const tierPercent = escapeMarkdownV2(rawTierPercentString);
-            console.log(`[Debug Tier Build User ${userId}] Escaped tierPercent string for count ${count}: '${tierPercent}'`);
-            return `${count} refs \\= ${tierPercent}%`;
-        }).join('\\, ');
-        console.log(`[Debug Tier Build User ${userId}] Final tiersDesc string generated: '${tiersDesc}'`);
-
-        // --- TEST MESSAGE STRING (NO PARENTHESES IN STATIC TEXT) ---
-        let testMessageString = `🤝 *Your Referral Dashboard*\n\n` +
-            `Share your unique link to earn SOL when your friends play\\!\n\n` +
-            `*Your Code:* \`${escapedRefCode}\`\n` +
-            // The line `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` is TEMPORARILY REMOVED
-            `Your link to copy: \`${escapedReferralLinkForCodeBlock}\`\n\n` + // Simplified the "Tap button" line, NO PARENS
-            `*Successful Referrals:* ${referralCount}\n` +
-            `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-            `*How Rewards Work:*\n` +
-            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\- min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n` +
-            `   *Tiers:* ${tiersDesc}\n` +
-            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones e\\.g\\. 1 SOL, 5 SOL wagered, etc\\.\\.\\.\n\n` + // NO PARENS around e.g.
-            `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``; // Using the correctly defined 'withdrawalAddress'
-
-        console.log(`--- START OF TEST MESSAGE STRING (User ${userId}) ---`);
-        console.log(testMessageString);
-        console.log(`--- END OF TEST MESSAGE STRING (User ${userId}) ---`);
-
-        const keyboard = [
-            [{ text: '🔗 Share My Referral Link!', switch_inline_query: rawReferralLink }],
-            [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
-        ];
-        const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: {inline_keyboard: keyboard} };
-
-        // Use 'testMessageString' in your send/edit call
-        if (isFromCallback && messageToEditId) {
-            await bot.editMessageText(testMessageString, {chat_id: chatId, message_id: messageToEditId, ...options})
-                .catch(e => {
-                    console.error(`${logPrefix} FAILED to edit testMessageString. Error: ${e.message}`);
-                    if (e.response && e.response.body) {
-                        console.error(`${logPrefix} Telegram API Error Body on EDIT:`, JSON.stringify(e.response.body));
-                    }
-                    if (!e.message?.toLowerCase().includes("can't parse entities") && !e.message?.includes("message is not modified")) {
-                         safeSendMessage(chatId, testMessageString, options).catch(e_send => { // Try sending new if not parse error or "not modified"
-                            console.error(`${logPrefix} Fallback safeSendMessage ALSO FAILED. Error: ${e_send.message}`);
-                            if (e_send.response && e_send.response.body) {
-                                console.error(`${logPrefix} Telegram API Error Body on Fallback SEND:`, JSON.stringify(e_send.response.body));
-                            }
-                         });
-                    } else if (e.message?.toLowerCase().includes("can't parse entities")){
-                         safeSendMessage(chatId, "⚠️ An error occurred displaying referral information due to a formatting problem\\. Please try again later or contact support\\.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
-                    }
-                });
-        } else {
-            await safeSendMessage(chatId, testMessageString, options)
-                .catch(e => {
-                    console.error(`${logPrefix} FAILED to send new testMessageString. Error: ${e.message}`);
-                    if (e.response && e.response.body) {
-                        console.error(`${logPrefix} Telegram API Error Body on SEND:`, JSON.stringify(e.response.body));
-                    }
-                    safeSendMessage(chatId, "⚠️ An error occurred displaying referral information\\. Please try again later or contact support\\.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
-                });
-        }
-
-    } catch (error) { 
-        console.error(`${logPrefix} Error in main referral command handler: ${error.message}`, error.stack);
-        const errorText = `⚠️ An error occurred displaying referral info: ${escapeMarkdownV2(error.message)}\\.`; 
-        if (isFromCallback && messageToEditId) {
-             bot.editMessageText(errorText, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(()=>{
-                 safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
-             });
-        } else {
-             safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
-        }
-    }
+        });
+} else {
+    await safeSendMessage(chatId, referralMsg, options)
+        .catch(e => {
+            console.error(`${logPrefix} FAILED to send new referralMsg. Error: ${e.message}`);
+            if (e.response && e.response.body) {
+                console.error(`${logPrefix} Telegram API Error Body on SEND:`, JSON.stringify(e.response.body));
+            }
+            safeSendMessage(chatId, "⚠️ An error occurred displaying referral information\\. Please try again later or contact support\\.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
+        });
 }
 
 
