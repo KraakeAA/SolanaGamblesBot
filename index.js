@@ -6025,28 +6025,39 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS));
 const milestonePercent = escapeMarkdownV2(String((REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(1)));
 
+// Corrected tiersDesc (ensure escapeMarkdownV2 is available from Part 1)
 const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => {
-    const count = t.maxCount === Infinity ? '100+' : `<=${t.maxCount}`;
-    const percent = String((t.percent * 100).toFixed(1)).replace(/\./g, '\\.'); // escape . in "5.0"
-    return `${count} refs = ${percent}\\%`; // escape %
-}).join(', ');
+    const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${escapeMarkdownV2(String(t.maxCount))}`;
+    // Assuming escapeMarkdownV2 handles the period in the output of toFixed(1)
+    const percent = escapeMarkdownV2(String((t.percent * 100).toFixed(1))); 
+    return `${count} refs \\= ${percent}%`; // Use literal '%', escape '='
+}).join('\\, '); // Escape the join comma
 
-const safeReferralLink = referralLink.replace(/_/g, '\\_');
-const safeRefCode = escapedRefCode.replace(/_/g, '\\_');
-const safeWithdrawalAddress = withdrawalAddress.replace(/_/g, '\\_');
+// Assuming referralLink, refCode, withdrawalAddress are raw values here
+// and escapedRefCode was from escapeMarkdownV2(refCode)
+// It's generally better to escape the full string once, or ensure variables are fully escaped before use.
+// For simplicity with your current structure, let's assume these are pre-processed for underscores as you intended.
+// However, if they contain other special Markdown chars, `escapeMarkdownV2` is more robust.
+const safeReferralLink = escapeMarkdownV2(referralLink); // More robust
+const safeRefCode = escapeMarkdownV2(refCode); // Use original refCode and escape it fully here
+const safeWithdrawalAddress = escapeMarkdownV2(withdrawalAddress); // More robust
+
+// Assuming minBetAmount and totalEarningsSOL are already CORRECTLY ESCAPED (e.g., output of escapeMarkdownV2(formatSol(...)))
+// Assuming referralCount is a simple number (doesn't need escaping unless it's a string with special chars)
+// Assuming milestonePercent is already CORRECTLY ESCAPED (e.g., output of escapeMarkdownV2(String(...toFixed(1))))
 
 let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
-  `Share your unique link to earn SOL when your friends play\\!\n\n` +
-  `*Your Code:* \`${safeRefCode}\`\n` +
-  `*Your Clickable Link:*\n[Click here to use your link](${safeReferralLink})\n` +
-  `_Tap button below or copy here: \`${safeReferralLink}\`_\n\n` +
-  `*Successful Referrals:* ${referralCount}\n` +
-  `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
-  `*How Rewards Work:*\n` +
-  `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \$begin:math:text$min ${minBetAmount} SOL wager\\$end:math:text$\\. Your % increases with more referrals\\!\n` +
-  `   *Tiers:* ${tiersDesc}\n` +
-  `2\\. *Milestone Bonus:* Earn ${milestonePercent}\\% of their total wagered amount as they hit milestones \$begin:math:text$e\\\\.g\\\\., 1 SOL, 5 SOL wagered, etc\\\\.\\$end:math:text$\n\n` +
-  `Rewards are paid to your linked wallet: \`${safeWithdrawalAddress}\``;
+    `Share your unique link to earn SOL when your friends play\\!\n\n` +
+    `*Your Code:* \`${safeRefCode}\`\n` + // safeRefCode is now fully escaped
+    `*Your Clickable Link:*\n[Click here to use your link](${safeReferralLink})\n` + // Using fully escaped safeReferralLink for URL part
+    `\\_\(Tap button below or copy here: \`${safeReferralLink}\`\\)_\n\n` + // Using fully escaped safeReferralLink inside backticks
+    `*Successful Referrals:* ${referralCount}\n` +
+    `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+    `*How Rewards Work:*\n` +
+    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` + // Corrected parentheses and period
+    `   *Tiers:* ${tiersDesc}\n` + // Using corrected tiersDesc
+    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` + // Corrected parentheses, period, and ellipsis
+    `Rewards are paid to your linked wallet: \`${safeWithdrawalAddress}\``; // Using fully escaped safeWithdrawalAddress
     
         // Button uses the raw link for the switch_inline_query parameter
         const keyboard = [
