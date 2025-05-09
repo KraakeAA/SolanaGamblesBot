@@ -6048,22 +6048,24 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         }).join('\\, ');
         console.log(`[Debug Tier Build User ${userId}] Final tiersDesc string generated: '${tiersDesc}'`);
 
-        let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
+        let referralMsg_TEST_NO_PARENS = `🤝 *Your Referral Dashboard*\n\n` +
     `Share your unique link to earn SOL when your friends play\\!\n\n` +
     `*Your Code:* \`${escapedRefCode}\`\n` +
-    // `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` + // <<<< LINE TEMPORARILY REMOVED FOR TESTING
-    `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
+    // Intentionally keeping the clickable link line REMOVED for this test as per your last log
+    // `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` + 
+    `Your link to copy: \`${escapedReferralLinkForCodeBlock}\`\n\n` + // Simplified the "Tap button" line, removed ()
     `*Successful Referrals:* ${referralCount}\n` +
     `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
     `*How Rewards Work:*\n` +
-    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
-    `   *Tiers:* ${tiersDesc}\n` +
-    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
+    `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* - min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n` + // Removed parentheses around min wager
+    `   *Tiers:* ${tiersDesc}\n` + // tiersDesc should be fine based on your logs
+    `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones e\\.g\\. 1 SOL, 5 SOL wagered, etc\\.\\.\\.\n\n` + // Removed parentheses around e.g.
     `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
 
-        console.log(`--- START OF referralMsg ATTEMPT (handleReferralCommand User ${userId}) ---`);
-        console.log(referralMsg);
-        console.log(`--- END OF referralMsg ATTEMPT (User ${userId}) ---`);
+console.log("--- START OF referralMsg_TEST_NO_PARENS ---");
+console.log(referralMsg_TEST_NO_PARENS);
+console.log("--- END OF referralMsg_TEST_NO_PARENS ---");
+
 
         const keyboard = [
             [{ text: '🔗 Share My Referral Link!', switch_inline_query: rawReferralLink }],
