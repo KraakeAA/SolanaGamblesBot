@@ -6107,7 +6107,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
 
 /**
- * Handles the /deposit command and 'quick_deposit' callback. Shows deposit address.
+  * Handles the /deposit command and 'quick_deposit' callback. Shows deposit address.
  * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg Message or callback message.
  * @param {Array<string>} args Command arguments or callback parameters.
  * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
@@ -6120,16 +6120,15 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
     let isFromCallback = !!correctUserIdFromCb;
     clearUserState(userId); // clearUserState from Part 6
 
-    let workingMessageId = messageToEditId; // Will hold the ID of the message we're working with (either original or new "generating" message)
+    let workingMessageId = messageToEditId; // Will hold the ID of the message we're working with
 
-    const generatingText = "⏳ Generating your unique deposit address\\.\\.\\."; // Escaped . ... Add Emoji
+    const generatingText = "⏳ Generating your deposit address\\.\\ Please wait\\.\\.\\."; // Slightly more professional "Please wait"
     try {
         if (isFromCallback && messageToEditId) {
             await bot.editMessageText(generatingText, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } });
         } else {
-            // If not from callback, or if messageToEditId is somehow undefined, send a new message.
             const tempMsg = await safeSendMessage(chatId, generatingText, { parse_mode: 'MarkdownV2' });
-            workingMessageId = tempMsg?.message_id; // Update workingMessageId to the new message's ID
+            workingMessageId = tempMsg?.message_id; 
         }
     } catch (editError) {
         if (!editError.message?.includes("message is not modified")) {
@@ -6137,89 +6136,89 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
             const tempMsg = await safeSendMessage(chatId, generatingText, { parse_mode: 'MarkdownV2' });
             workingMessageId = tempMsg?.message_id;
         } else {
-            // If message not modified, it means the text was already "Generating...", so workingMessageId is still valid.
             workingMessageId = messageToEditId;
         }
     }
 
     if (!workingMessageId) {
         console.error(`${logPrefix} Failed to establish message context for deposit address display.`);
-        safeSendMessage(chatId, "Failed to initiate deposit process\\. Please try again\\.", { parse_mode: 'MarkdownV2' }); // Escaped .
+        await safeSendMessage(chatId, "Failed to initiate deposit process\\. Please try again\\.", { parse_mode: 'MarkdownV2' }); 
         return;
     }
 
     try {
-        // Ensure user exists (usually done by main handlers, but good for direct calls too)
         let tempClient = null;
-        try { tempClient = await pool.connect(); await ensureUserExists(userId, tempClient); /* from Part 2 */ } finally { if (tempClient) tempClient.release(); }
+        try { tempClient = await pool.connect(); await ensureUserExists(userId, tempClient); } finally { if (tempClient) tempClient.release(); }
 
-        // Check for existing, non-expired pending address for this user
-        const existingAddresses = await queryDatabase( // from Part 2
+        const existingAddresses = await queryDatabase(
             `SELECT deposit_address, expires_at FROM deposit_addresses WHERE user_id = $1 AND status = 'pending' AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1`,
             [userId]
         );
+
+        const confirmationLevelEscaped = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL); // Constant from Part 1
 
         if (existingAddresses.rowCount > 0) {
             const existing = existingAddresses.rows[0];
             const existingAddress = existing.deposit_address;
             const existingExpiresAt = new Date(existing.expires_at);
             const expiresInMs = existingExpiresAt.getTime() - Date.now();
-            const expiresInMinutes = Math.max(1, Math.ceil(expiresInMs / (60 * 1000))); // Ensure at least 1 min displayed
+            const expiresInMinutes = Math.max(1, Math.ceil(expiresInMs / (60 * 1000))); 
             const escapedExistingAddress = escapeMarkdownV2(existingAddress);
+            const expiresInMinutesEscaped = escapeMarkdownV2(String(expiresInMinutes));
 
-            let text = `💰 *Active Deposit Address*\n\nYou already have an active deposit address:\n\`${escapedExistingAddress}\`\n` + // Add Emoji, Escaped `
-                       `\\_\(Tap the address above to copy\\)\\_\\n\n` + // Escaped _ ( ) \
-                       `It expires in approximately ${escapeMarkdownV2(String(expiresInMinutes))} minutes\\.`; // Escaped .
-            text += `\n\nOnce you send SOL, it will be credited after confirmations\\. New deposits to this address will be credited until it expires\\.`; // Escaped .
+            // --- NEW TEXT FOR EXISTING ADDRESS ---
+            let text = `💰 *Your Active Deposit Address*\n\n` +
+                       `You have an active deposit address available:\n\n` +
+                       `\`${escapedExistingAddress}\`\n` +
+                       `\\_\(Tap the address above to copy\\)\\_\\n\n` + // Escaped _ ( ) \
+                       `This address will expire in approximately *${expiresInMinutesEscaped} minutes*\\.\n\n` + // Escaped .
+                       `Please send SOL to this address\\. Funds will be credited to your account after network confirmations \\(${confirmationLevelEscaped}\\)\\. You can continue to use this address for new deposits until it expires\\.`; // Escaped . ()
 
             const keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }], [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${existingAddress}` }]];
-            bot.editMessageText(text, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: keyboard } });
-            return; // Exit after showing existing address
+            await bot.editMessageText(text, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: keyboard } });
+            return; 
         }
 
         console.log(`${logPrefix} No active address found. Generating new one.`);
-        const nextIndex = await getNextDepositAddressIndex(userId); // from Part 2
-        const derivedInfo = await generateUniqueDepositAddress(userId, nextIndex); // from Part 3
+        const nextIndex = await getNextDepositAddressIndex(userId); 
+        const derivedInfo = await generateUniqueDepositAddress(userId, nextIndex); 
         if (!derivedInfo) {
-            throw new Error("Failed to generate deposit address\\. Master seed phrase might be an issue\\."); // Escaped .
+            throw new Error("Failed to generate deposit address\\. Master seed phrase might be an issue\\."); 
         }
 
         const depositAddress = derivedInfo.publicKey.toBase58();
-        const expiresAt = new Date(Date.now() + DEPOSIT_ADDRESS_EXPIRY_MS); // DEPOSIT_ADDRESS_EXPIRY_MS from Part 1 constants
-        const recordResult = await createDepositAddressRecord(userId, depositAddress, derivedInfo.derivationPath, expiresAt); // from Part 2
+        const expiresAt = new Date(Date.now() + DEPOSIT_ADDRESS_EXPIRY_MS); 
+        const recordResult = await createDepositAddressRecord(userId, depositAddress, derivedInfo.derivationPath, expiresAt); 
         if (!recordResult.success) {
-            throw new Error(escapeMarkdownV2(recordResult.error || "Failed to save deposit address record in DB\\.")); // Escaped .
+            throw new Error(escapeMarkdownV2(recordResult.error || "Failed to save deposit address record in DB\\.")); 
         }
 
-        // Add to active cache (from Part 3)
         addActiveDepositAddressCache(depositAddress, userId, expiresAt.getTime());
 
-        const expiryMinutes = escapeMarkdownV2(String(Math.round(DEPOSIT_ADDRESS_EXPIRY_MS / (60 * 1000))));
-        const confirmationLevel = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL); // Constant from Part 1
+        const expiryMinutesEscaped = escapeMarkdownV2(String(Math.round(DEPOSIT_ADDRESS_EXPIRY_MS / (60 * 1000))));
         const escapedAddress = escapeMarkdownV2(depositAddress);
 
-        // Revised message structure based on original image (IMG_1928.jpg)
-        const message = `💰 *Your Unique Deposit Address*\n\n` +
-                        `Send SOL to this unique address:\n\n` +
-                        `\`${escapedAddress}\`\n` + // Address in code block
-                        `\\_\(Tap the address above to copy\\)\\_\\n\n` + // Italicized tap to copy hint
-                        `⚠️ *Important:*\n` +
-                        `1\\. This address is unique to you and for this deposit session\\. It will expire in *${expiryMinutes} minutes*\\.\n` + // Corrected "minutes"
-                        `2\\. For new deposits, use \`/deposit\` again or the menu option\\.\n` + // Use /deposit
-                        `3\\. Confirmation: *${confirmationLevel}* network confirmations required\\.`; // Period at the end
+        // --- NEW TEXT FOR NEWLY GENERATED ADDRESS ---
+        const message = `💰 *Your New Deposit Address*\n\n` +
+                        `Please send SOL to your unique deposit address below:\n\n` +
+                        `\`${escapedAddress}\`\n` +
+                        `\\_\(Tap the address above to copy\\)\\_\\n\n` + // Escaped _ ( ) \
+                        `⚠️ *Important Information:*\n` +
+                        `* This address is unique to you and is valid for this deposit session only\\.\n` + // Escaped .
+                        `* It will expire in approximately *${expiryMinutesEscaped} minutes*\\. __Do not use after expiry\\.__\n` + // Escaped . __ for bold underscore
+                        `* Funds require *${confirmationLevelEscaped}* network confirmations to be credited\\.\n` + // Escaped .
+                        `* To generate a new address later, please use the \`/deposit\` command or the "Deposit SOL" option in your wallet menu\\.`; // Escaped .
 
         const depositKeyboard = [
-            [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${depositAddress}` }], // Add Emoji
-            [{ text: '✅ Done / Back to Wallet', callback_data: 'menu:wallet' }] // Add Emoji
+            [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${depositAddress}` }], 
+            [{ text: '✅ Done / Back to Wallet', callback_data: 'menu:wallet' }] 
         ];
         const options = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: depositKeyboard} };
 
-        // Attempt to edit the "Generating..." message
-        await bot.editMessageText(message, {chat_id: chatId, message_id: workingMessageId, ...options}).catch(async e => { // make async for safeSendMessage
-             if (e.message && (e.message.toLowerCase().includes("can't parse entities") || e.message.toLowerCase().includes("bad request"))) { // More robust check
-                 console.error(`❌ [DepositCmd User ${userId}] PARSE ERROR with revised hint! Message attempted: ${message}`);
-                // Fallback to plain text if MarkdownV2 fails, keeping QR button
-                 const plainMessage = `Your Deposit Address (Tap to copy):\n${depositAddress}\n\nExpires in ${expiryMinutes} minutes. Confirmation: ${confirmationLevel}. Do not reuse after expiry.`;
+        await bot.editMessageText(message, {chat_id: chatId, message_id: workingMessageId, ...options}).catch(async e => { 
+             if (e.message && (e.message.toLowerCase().includes("can't parse entities") || e.message.toLowerCase().includes("bad request"))) { 
+                 console.error(`❌ [DepositCmd User ${userId}] PARSE ERROR displaying new deposit address! Message attempted: ${message}`);
+                 const plainMessage = `Your New Deposit Address (Tap to copy):\n${depositAddress}\n\nExpires in approx. ${expiryMinutesEscaped} minutes. Confirmations: ${confirmationLevelEscaped}. Important: Valid for this session only. Do not use after expiry. Use /deposit for new address.`;
                  await safeSendMessage(chatId, plainMessage, {reply_markup: {inline_keyboard: depositKeyboard}});
              }
              else if (!e.message.includes("message is not modified")) {
@@ -6230,12 +6229,11 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
 
     } catch (error) {
         console.error(`${logPrefix} Error generating deposit address: ${error.message}`);
-        const errorMsg = `❌ Error generating deposit address: ${escapeMarkdownV2(error.message)}\\. Please try again\\. If the issue persists, contact support\\.`; // Escaped .
-        const errorKeyboard = [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]; // Add Emoji
+        const errorMsg = `❌ Error generating deposit address: ${escapeMarkdownV2(error.message)}\\. Please try again\\. If the issue persists, contact support\\.`; 
+        const errorKeyboard = [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]; 
         const errorOptions = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: errorKeyboard} };
-        // Attempt to edit the "Generating..." message to show the error.
-        bot.editMessageText(errorMsg, {chat_id: chatId, message_id: workingMessageId, ...errorOptions})
-           .catch(async e => await safeSendMessage(chatId, errorMsg, errorOptions)); // make async for safeSendMessage
+        await bot.editMessageText(errorMsg, {chat_id: chatId, message_id: workingMessageId, ...errorOptions})
+           .catch(async e => await safeSendMessage(chatId, errorMsg, errorOptions)); 
     }
 }
 
