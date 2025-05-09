@@ -5886,70 +5886,6 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
  * @param {Array<string>} args Command arguments or callback parameters.
  * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
  */
-async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
-    const chatId = String(msgOrCbMsg.chat.id);
-    const logPrefix = `[HistoryCmd User ${userId}]`;
-    let messageToEditId = msgOrCbMsg.message_id;
-    let isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); // clearUserState from Part 6
-
-    console.log(`${logPrefix} Fetching bet history.`);
-
-    const limit = 5; // Show last 5 bets
-    const history = await getBetHistory(userId, limit, 0, null); // getBetHistory from Part 2
-
-    if (!history || history.length === 0) {
-        const noHistoryMsg = "You have no betting history yet\\. Time to play some games\\!"; // Escaped . !
-        const keyboard = {inline_keyboard: [[{text: "🎮 Games Menu", callback_data: "menu:game_selection"}]]};
-        const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard };
-        if (isFromCallback && messageToEditId) {
-            return bot.editMessageText(noHistoryMsg, {chat_id: chatId, message_id: messageToEditId, ...options}) // bot from Part 1
-                    .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, noHistoryMsg, options); }); // safeSendMessage from Part 3
-        }
-        return safeSendMessage(chatId, noHistoryMsg, options);
-    }
-
-    let historyMsg = "📜 *Your Last 5 Bets:*\n\n";
-    history.forEach(bet => {
-        const gameName = GAME_CONFIG[bet.game_type]?.name || bet.game_type; // GAME_CONFIG from Part 1
-        const wager = formatSol(bet.wager_amount_lamports); // formatSol from Part 3
-        let outcomeText = `Status: ${escapeMarkdownV2(bet.status)}`; // escapeMarkdownV2 from Part 1
-        if (bet.status.startsWith('completed_')) {
-            const payout = bet.payout_amount_lamports !== null ? BigInt(bet.payout_amount_lamports) : 0n;
-            const profit = payout - BigInt(bet.wager_amount_lamports || '0');
-            if (bet.status === 'completed_win') outcomeText = `Won ${escapeMarkdownV2(formatSol(profit))} SOL \\(Returned ${escapeMarkdownV2(formatSol(payout))}\\)`; // Escaped ()
-            else if (bet.status === 'completed_push') outcomeText = `Push \\(Returned ${escapeMarkdownV2(formatSol(payout))}\\)`; // Escaped ()
-            else if (bet.status === 'completed_loss') outcomeText = `Lost ${escapeMarkdownV2(wager)} SOL`;
-        } else if (bet.status === 'processing_game') {
-            outcomeText = `Processing...`; // Add Emojis
-        } else if (bet.status === 'active') {
-            outcomeText = `Active`;
-        }
-
-        const betDate = escapeMarkdownV2(new Date(bet.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }));
-        historyMsg += `\\- *${escapeMarkdownV2(gameName)}* on ${betDate}\n` + // Escaped -
-                      `  Bet: ${escapeMarkdownV2(wager)} SOL, Result: ${outcomeText}\n\n`;
-    });
-    historyMsg += "\\_For full history, please use an external service if available or contact support for older records\\.\\_"; // Escaped . _
-
-    const historyKeyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]];
-    const options = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: historyKeyboard} };
-
-    if (isFromCallback && messageToEditId) {
-        bot.editMessageText(historyMsg, {chat_id: chatId, message_id: messageToEditId, ...options})
-            .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, historyMsg, options); });
-    } else {
-        safeSendMessage(chatId, historyMsg, options);
-    }
-}
-
-/**
- * Handles the /referral command and menu option. Displays referral info and link.
- * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg Message or callback message.
- * @param {Array<string>} args Command arguments or callback parameters.
- * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
- */
 async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
@@ -5968,9 +5904,9 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emojis
             if (isFromCallback && messageToEditId) {
                 return bot.editMessageText(noWalletMsg, {chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
-                        .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard }); });
+                        .catch(async e => { if (!e.message.includes("message is not modified")) await safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard }); });
             }
-            return safeSendMessage(chatId, noWalletMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+            return await safeSendMessage(chatId, noWalletMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
         }
 
         let currentRefCode = userDetails.referral_code;
@@ -6002,67 +5938,51 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             if (!currentRefCode) { throw new Error("Could not get/gen ref code for referral msg.");} // Safety check
         }
         
-        // --- START OF DETAILED VARIABLE LOGGING (as per original for debugging) ---
-        console.log(`[VarDebug User ${userId}] Raw currentRefCode: '${currentRefCode}'`);
-        const escapedRefCode = escapeMarkdownV2(currentRefCode);
-        console.log(`[VarDebug User ${userId}] Escaped escapedRefCode: '${escapedRefCode}'`);
-
+        // Prepare variables for the new message format
         const totalEarningsLamports = await getTotalReferralEarnings(userId); // from Part 2
-        const rawTotalEarningsSOL = formatSol(totalEarningsLamports);
-        console.log(`[VarDebug User ${userId}] Raw totalEarningsSOL: '${rawTotalEarningsSOL}'`);
-        const totalEarningsSOL = escapeMarkdownV2(rawTotalEarningsSOL);
-        console.log(`[VarDebug User ${userId}] Escaped totalEarningsSOL: '${totalEarningsSOL}'`);
-
-        const rawReferralCount = String(userDetails.referral_count || 0);
-        console.log(`[VarDebug User ${userId}] Raw referralCount: '${rawReferralCount}'`);
-        const referralCount = escapeMarkdownV2(rawReferralCount);
-        console.log(`[VarDebug User ${userId}] Escaped referralCount: '${referralCount}'`);
-        
-        const rawUserWithdrawalAddress = userDetails.external_withdrawal_address; // Already confirmed this exists
-        console.log(`[VarDebug User ${userId}] Raw withdrawalAddress: '${rawUserWithdrawalAddress}'`);
-        const withdrawalAddress = escapeMarkdownV2(rawUserWithdrawalAddress); 
-        console.log(`[VarDebug User ${userId}] Escaped withdrawalAddress: '${withdrawalAddress}'`);
+        const totalEarningsSOL = escapeMarkdownV2(formatSol(totalEarningsLamports));
+        const referralCount = escapeMarkdownV2(String(userDetails.referral_count || 0));
+        const withdrawalAddress = escapeMarkdownV2(userDetails.external_withdrawal_address); 
 
         let botUsername = process.env.BOT_USERNAME || 'YOUR_BOT_USERNAME'; // process.env from Part 1
         if (botUsername === 'YOUR_BOT_USERNAME') { try { const me = await bot.getMe(); if (me.username) { botUsername = me.username; } } catch (e) { console.warn(`${logPrefix} Could not fetch bot username: ${e.message}`);} }
-        console.log(`[VarDebug User ${userId}] botUsername: '${botUsername}'`);
         // The referral link for the switch_inline_query should be raw, not Markdown escaped.
         const rawReferralLink = `https://t.me/${botUsername}?start=${currentRefCode}`; 
-        console.log(`[VarDebug User ${userId}] Raw rawReferralLink: '${rawReferralLink}'`);
         // The version for display in a code block needs escaping.
         const escapedReferralLinkForCodeBlock = escapeMarkdownV2(rawReferralLink); 
-        console.log(`[VarDebug User ${userId}] Escaped escapedReferralLinkForCodeBlock: '${escapedReferralLinkForCodeBlock}'`);
 
-        const rawMinBetAmount = formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS); // Constant from Part 1
-        console.log(`[VarDebug User ${userId}] Raw minBetAmount: '${rawMinBetAmount}'`);
-        const minBetAmount = escapeMarkdownV2(rawMinBetAmount);
-        console.log(`[VarDebug User ${userId}] Escaped minBetAmount: '${minBetAmount}'`);
+        const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS)); // Constant from Part 1
+        const milestonePercent = escapeMarkdownV2((REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(1)); // Constant from Part 1
 
-        const milestonePercentNumber = (REFERRAL_MILESTONE_REWARD_PERCENT * 100); // Constant from Part 1
-        const rawMilestonePercentString = milestonePercentNumber.toFixed(1); 
-        console.log(`[VarDebug User ${userId}] Raw milestonePercentString: '${rawMilestonePercentString}'`);
-        const milestonePercent = escapeMarkdownV2(rawMilestonePercentString);
-        console.log(`[VarDebug User ${userId}] Escaped milestonePercent: '${milestonePercent}'`);
+        // Build tier descriptions for the new format
+        let tiersDisplay = REFERRAL_INITIAL_BONUS_TIERS.map(t => { // Constant from Part 1
+            const countPrefix = t.maxCount === Infinity ? "100\\+ Referrals:" : `Up to ${escapeMarkdownV2(String(t.maxCount))} Referrals:`;
+            const tierPercent = escapeMarkdownV2((t.percent * 100).toFixed(1));
+            return `       ▫️ ${countPrefix} *${tierPercent}%*`; // Indent for sub-bullets
+        }).join('\n');
 
-        console.log(`[Debug Tiers User ${userId}] Starting construction of tiersDesc. REFERRAL_INITIAL_BONUS_TIERS:`, JSON.stringify(REFERRAL_INITIAL_BONUS_TIERS)); // Constant from Part 1
-        const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => {
-            const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${escapeMarkdownV2(String(t.maxCount))}`; // Escaped < = +
-            const rawTierPercentValue = (t.percent * 100);
-            const rawTierPercentString = rawTierPercentValue.toFixed(1);
-            const tierPercent = escapeMarkdownV2(rawTierPercentString);
-            return `${count} refs \\= ${tierPercent}%`; // Escaped = %
-        }).join('\\, '); // Escaped ,
-        console.log(`[Debug Tier Build User ${userId}] Final tiersDesc string generated: '${tiersDesc}'`);
-        
-        let messageToSend = `🤝 *Your Referral Dashboard*\n\n` +
-            `Your link to copy: \`${escapedReferralLinkForCodeBlock}\`\n\n` +
-            `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` + // Escaped `
-            `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\- min ${minBetAmount} SOL wager\\. Your % increases with more referrals\\!\n` + // Escaped . - ! %
-            `   *Tiers:* ${tiersDesc}\n` +
-            `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones e\\.g\\. 1 SOL, 5 SOL wagered, etc\\.\\.\\.\n\n` + // Escaped . %
-            `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``; // Escaped `
+        // Construct the new message
+        let messageToSend = `🤝 *Your Referral Dashboard* 🤝\n\n` +
+                            `*Invite Friends & Earn SOL\\!*\n\n` + // Escaped !
+                            `🔗 *Your Unique Referral Link:*\n` +
+                            `\`${escapedReferralLinkForCodeBlock}\`\n` +
+                            `\\_\(Tap the button below to share\\!\\)\\_\\n\n` + // Escaped _ ( ) ! \
+                            `📊 *Your Stats:*\n` +
+                            `  ▫️ *Referrals:* ${referralCount}\n` +
+                            `  ▫️ *Total Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
+                            `🎁 *How You Earn:*\n\n` +
+                            `  1️⃣ *Initial Bet Bonus:*\n` +
+                            `     When your friend places their first qualifying bet \\(min\\. ${minBetAmount} SOL\\), you earn a percentage of *their bet amount\\!* The more friends you refer, the higher your percentage:\n` + // Escaped () ! .
+                            `${tiersDisplay}\n\n` +
+                            `  2️⃣ *Wager Milestone Bonus:*\n` +
+                            `     As your referred friends play and reach wagering milestones \\(e\\.g\\., they've wagered a total of 1 SOL, 5 SOL, 25 SOL, etc\\.\\), you'll receive *${milestonePercent}%* of that milestone amount\\.\n\n` + // Escaped () . %
+                            `💸 *Payouts:*\n` +
+                            `   All referral rewards are automatically paid out in SOL to your linked wallet:\n` +
+                            `   \`${withdrawalAddress}\`\n\n` +
+                            `*Keep sharing and earning\\!* ✨`; // Escaped !
 
-        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - Replicating IMG_1900 Structure) ---`);
+
+        console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - New Format) ---`);
         console.log(messageToSend); 
         console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
 
@@ -6072,7 +5992,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         ];
         const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: {inline_keyboard: keyboard} };
 
-        // --- MODIFIED SECTION FOR FIX ---
+        // --- IMPLEMENTED "DELETE THEN SEND NEW" FIX ---
         if (isFromCallback && messageToEditId) {
             try {
                 // Attempt to delete the original message (e.g., the animation message if that's where the button was)
@@ -6087,7 +6007,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
                 await safeSendMessage(chatId, messageToSend, options);
 
             } catch (e) { // Catch errors from deleteMessage or safeSendMessage
-                console.error(`${logPrefix} Error in 'delete then send new' block: ${e.message}`);
+                console.error(`${logPrefix} Error in 'delete then send new' block for referral: ${e.message}`);
                 // Send a generic error message to the user if the primary action fails
                 await safeSendMessage(chatId, "⚠️ An error occurred displaying referral information. Please try again later or contact support.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
             }
@@ -6104,7 +6024,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
                     await safeSendMessage(chatId, "⚠️ An error occurred displaying referral information. Please try again later or contact support.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
                 });
         }
-        // --- END OF MODIFIED SECTION ---
+        // --- END OF IMPLEMENTED FIX ---
 
     } catch (error) { // Catch for the entire handleReferralCommand logic
         console.error(`${logPrefix} Error in main referral command handler: ${error.message}`, error.stack);
