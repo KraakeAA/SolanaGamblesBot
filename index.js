@@ -6010,94 +6010,124 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             if (!userDetails.referral_code) { throw new Error("Could not retrieve or generate referral code."); }
         }
 
-        // User's variable setup from their "current version"
-const refCode = userDetails.referral_code; // RAW
+        // Ensure refCode is defined
+const refCode = userDetails.referral_code;
+if (!refCode) {
+    console.error(`[ReferralCmd User ${userId}] CRITICAL: Referral code is unexpectedly missing at message construction time.`);
+    const errorMsg = "⚠️ An internal error occurred with your referral details\\. Please try linking your wallet again or contact support\\.";
+    if (isFromCallback && messageToEditId) {
+        bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(() => {
+            safeSendMessage(chatId, errorMsg, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
+        });
+    } else {
+        safeSendMessage(chatId, errorMsg, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
+    }
+    return; 
+}
+
 const totalEarningsLamports = await getTotalReferralEarnings(userId);
-const totalEarningsSOL = escapeMarkdownV2(formatSol(totalEarningsLamports)); // ESCAPED
-const referralCount = escapeMarkdownV2(String(userDetails.referral_count || 0)); // ESCAPED
-
-// THIS IS THE CORRECT VARIABLE TO USE FOR THE DISPLAYED, ESCAPED ADDRESS:
-const withdrawalAddress = escapeMarkdownV2(userDetails.external_withdrawal_address); // ESCAPED
-
-const escapedRefCode = escapeMarkdownV2(refCode); // ESCAPED
+const totalEarningsSOL = escapeMarkdownV2(formatSol(totalEarningsLamports));
+const referralCount = escapeMarkdownV2(String(userDetails.referral_count || 0));
+const displayWithdrawalAddress = escapeMarkdownV2(userDetails.external_withdrawal_address);
+const escapedRefCode = escapeMarkdownV2(refCode);
 
 let botUsername = process.env.BOT_USERNAME || 'YOUR_BOT_USERNAME';
-if (botUsername === 'YOUR_BOT_USERNAME') { /* ... fetch bot username ... */ }
-const referralLink = `https://t.me/${botUsername}?start=${refCode}`; // RAW URL
+if (botUsername === 'YOUR_BOT_USERNAME') {
+    try {
+        const me = await bot.getMe();
+        if (me.username) {
+            botUsername = me.username;
+        }
+    } catch (e) {
+        console.warn(`[ReferralCmd User ${userId}] Could not fetch bot username for referral link, link might be incorrect: ${e.message}`);
+    }
+}
+const rawReferralLink = `https://t.me/${botUsername}?start=${refCode}`;
+const escapedReferralLinkForCodeBlock = escapeMarkdownV2(rawReferralLink);
 
-const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS)); // ESCAPED
-const milestonePercent = escapeMarkdownV2(String((REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(1))); // ESCAPED
+const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS));
+const milestonePercentNumber = (REFERRAL_MILESTONE_REWARD_PERCENT * 100);
+// Using toFixed(1) to ensure at least one decimal place like "5.0%" for consistency, 
+// or toFixed(0) if you prefer "5%" for whole numbers.
+// Let's stick to toFixed(1) for now as per previous examples.
+const milestonePercentString = milestonePercentNumber.toFixed(1); 
+const milestonePercent = escapeMarkdownV2(milestonePercentString);
 
+// tiersDesc construction with detailed logging
+console.log(`[Debug Tiers] Starting construction of tiersDesc for user ${userId}. REFERRAL_INITIAL_BONUS_TIERS:`, JSON.stringify(REFERRAL_INITIAL_BONUS_TIERS));
 const tiersDesc = REFERRAL_INITIAL_BONUS_TIERS.map(t => {
     const count = t.maxCount === Infinity ? '100\\+' : `\\<\\=${escapeMarkdownV2(String(t.maxCount))}`;
-    const percent = escapeMarkdownV2(String((t.percent * 100).toFixed(1))); 
-    return `${count} refs \\= ${percent}%`;
-}).join('\\, ');
+    
+    const rawTierPercentValue = (t.percent * 100);
+    const rawTierPercentString = rawTierPercentValue.toFixed(1); // Consistently use 1 decimal place for ".0"
+    console.log(`[Debug Tier Build] For count: ${count}, rawTierPercentValue: ${rawTierPercentValue}, rawTierPercentString: '${rawTierPercentString}'`);
+    
+    const tierPercent = escapeMarkdownV2(rawTierPercentString); // escapeMarkdownV2 should handle the '.'
+    console.log(`[Debug Tier Build] Escaped tierPercent string for count ${count}: '${tierPercent}'`);
+    
+    return `${count} refs \\= ${tierPercent}%`;
+}).join('\\, '); // Escape the join comma
+console.log(`[Debug Tier Build] Final tiersDesc string generated for user ${userId}: '${tiersDesc}'`);
 
-const referralLinkForDisplayInBackticks = escapeMarkdownV2(referralLink);
-
-// --- CORRECTED referralMsg CONSTRUCTION (using 'withdrawalAddress') ---
+// --- Fully Corrected referralMsg Construction ---
 let referralMsg = `🤝 *Your Referral Dashboard*\n\n` +
     `Share your unique link to earn SOL when your friends play\\!\n\n` +
     `*Your Code:* \`${escapedRefCode}\`\n` +
-    `*Your Clickable Link:*\n[Click here to use your link](${referralLink})\n` +
-    `\\_\(Tap button below or copy here: \`${referralLinkForDisplayInBackticks}\`\\)_\n\n` +
+    `*Your Clickable Link:*\n[Click here to use your link](${rawReferralLink})\n` +
+    `\\_\(Tap button below or copy here: \`${escapedReferralLinkForCodeBlock}\`\\)_\n\n` +
     `*Successful Referrals:* ${referralCount}\n` +
     `*Total Referral Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
     `*How Rewards Work:*\n` +
     `1\\. *Initial Bonus:* Earn a % of your referral's *first qualifying bet* \\(min ${minBetAmount} SOL wager\\)\\. Your % increases with more referrals\\!\n` +
     `   *Tiers:* ${tiersDesc}\n` +
     `2\\. *Milestone Bonus:* Earn ${milestonePercent}% of their total wagered amount as they hit milestones \\(e\\.g\\., 1 SOL, 5 SOL wagered, etc\\.\\)\\.\\.\n\n` +
-    // Use your existing 'withdrawalAddress' variable here, which is already correctly escaped
-    `Rewards are paid to your linked wallet: \`${withdrawalAddress}\``;
-    
-        // Button uses the raw link for the switch_inline_query parameter
-        const keyboard = [
-            [{ text: '🔗 Share My Referral Link!', switch_inline_query: referralLink }],
-            [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
-        ];
-        const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: {inline_keyboard: keyboard} };
+    `Rewards are paid to your linked wallet: \`${displayWidthdrawalAddress}\``;
 
-        // Edit or send the message
-        if (isFromCallback && messageToEditId) {
-            await bot.editMessageText(referralMsg, {chat_id: chatId, message_id: messageToEditId, ...options}).catch(e => {
-                // Handle potential parse error on edit
-                if (e.message?.toLowerCase().includes("can't parse entities")) {
-                    console.error(`[ReferralCmd User ${userId}] PARSE ERROR on editMessageText. Text: ${referralMsg}`, e);
-                    safeSendMessage(chatId, "Error displaying referral info due to formatting. Please try again.", { reply_markup: fallbackKeyboard }); // Fallback simple message
-                } else if (!e.message.includes("message is not modified")) {
-                    console.warn(`[ReferralCmd User ${userId}] Failed edit, sending new. Error: ${e.message}`);
-                    safeSendMessage(chatId, referralMsg, options); // Fallback send new
-                }
-            });
-        } else {
-            await safeSendMessage(chatId, referralMsg, options).catch(e => {
-                // Handle potential parse error on send
-                if (e.message?.toLowerCase().includes("can't parse entities")) {
-                     console.error(`[ReferralCmd User ${userId}] PARSE ERROR on safeSendMessage. Text: ${referralMsg}`, e);
-                     safeSendMessage(chatId, "Error displaying referral info due to formatting. Please try again.", { reply_markup: fallbackKeyboard }); // Fallback simple message
-                } else {
-                     console.error(`[ReferralCmd User ${userId}] Error sending referral message: ${e.message}`);
-                     safeSendMessage(chatId, "Error displaying referral info. Please try again.", { reply_markup: fallbackKeyboard });
-                }
-            });
-        }
+// Log the exact message being sent for debugging
+console.log(`--- START OF referralMsg ATTEMPT (handleReferralCommand User ${userId}) ---`);
+console.log(referralMsg);
+console.log(`--- END OF referralMsg ATTEMPT (User ${userId}) ---`);
 
-    } catch (error) { // Catch errors during setup or message sending
-        console.error(`[ReferralCmd User ${userId}] Error: ${error.message}`);
-        const errorText = `⚠️ An error occurred displaying referral info: ${escapeMarkdownV2(error.message)}\\.`; // Escaped .
-        // *** FIX #8: Improve Error Recovery for Referral Command (Verified Already Present) ***
-        if (isFromCallback && messageToEditId) {
-             // Try to edit the message to show the error
-             bot.editMessageText(errorText, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(()=>{
-                 // If editing fails, send the error as a new message
-                 safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
-             });
-        } else {
-             // Send error as a new message if not from callback
-             safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
-        }
-    }
+// Keyboard definition
+const keyboard = [
+    [{ text: '🔗 Share My Referral Link!', switch_inline_query: rawReferralLink }],
+    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
+];
+const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: {inline_keyboard: keyboard} };
+
+// Your message sending/editing logic (ensure this is how it's structured in your code)
+// This part is assumed from your document's structure for handleReferralCommand
+if (isFromCallback && messageToEditId) {
+    await bot.editMessageText(referralMsg, {chat_id: chatId, message_id: messageToEditId, ...options})
+        .catch(e => {
+            console.error(`[ReferralCmd User ${userId}] FAILED to edit referralMsg. Error: ${e.message}`);
+            if (e.response && e.response.body) {
+                console.error(`[ReferralCmd User ${userId}] Telegram API Error Body on EDIT:`, JSON.stringify(e.response.body));
+            }
+            // Fallback safe send if edit fails badly (e.g., message not found, not just parse error)
+            if (!e.message?.toLowerCase().includes("can't parse entities")) {
+                 safeSendMessage(chatId, referralMsg, options).catch(e_send => {
+                    console.error(`[ReferralCmd User ${userId}] Fallback safeSendMessage ALSO FAILED. Error: ${e_send.message}`);
+                    if (e_send.response && e_send.response.body) {
+                        console.error(`[ReferralCmd User ${userId}] Telegram API Error Body on Fallback SEND:`, JSON.stringify(e_send.response.body));
+                    }
+                 });
+            } else {
+                 // If it was a parse error on edit, we've logged the API error body, don't retry send with same faulty msg.
+                 // Send a generic error message to the user instead.
+                 safeSendMessage(chatId, "⚠️ An error occurred displaying referral information due to a formatting problem. Please try again later or contact support.", {reply_markup: fallbackKeyboard});
+            }
+        });
+} else {
+    await safeSendMessage(chatId, referralMsg, options)
+        .catch(e => {
+            console.error(`[ReferralCmd User ${userId}] FAILED to send new referralMsg. Error: ${e.message}`);
+            if (e.response && e.response.body) {
+                console.error(`[ReferralCmd User ${userId}] Telegram API Error Body on SEND:`, JSON.stringify(e.response.body));
+            }
+            // Send a generic error message to the user if initial send fails.
+            safeSendMessage(chatId, "⚠️ An error occurred displaying referral information. Please try again later or contact support.", {reply_markup: fallbackKeyboard});
+        });
 }
 
 /**
