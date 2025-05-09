@@ -5875,11 +5875,11 @@ async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null)
 
 // --- End of Part 5b (Section 2b) ---
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2c of 4) - METICULOUSLY VERIFIED
-// --- VERSION: Referral message uses RAW link, all other escapes restored, all debug logs active, ALL KEYBOARDS VERIFIED ---
-// --- THIS VERSION INCLUDES THE NEW REFERRAL TEXT AND DELETE-THEN-SEND FIX FOR handleReferralCommand ---
+// --- VERSION: Includes fixes for animation editing (referral) and robust MarkdownV2 escaping for referral & deposit messages ---
 
 // (Continuing directly from Part 5b, Section 2b)
 // ... (Assume functions, dependencies etc. from other parts are available)
+// ... (escapeMarkdownV2, formatSol, getUserWalletDetails, getTotalReferralEarnings, generateReferralCode, safeSendMessage, clearUserState, queryDatabase, pool, bot, constants, GAME_CONFIG etc. are defined elsewhere)
 
 /**
  * Handles the /history command and corresponding menu action. Displays recent bets.
@@ -5906,9 +5906,9 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard };
         if (isFromCallback && messageToEditId) {
             return bot.editMessageText(noHistoryMsg, {chat_id: chatId, message_id: messageToEditId, ...options}) // bot from Part 1
-                    .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, noHistoryMsg, options); }); // safeSendMessage from Part 3
+                    .catch(async e => { if (!e.message.includes("message is not modified")) await safeSendMessage(chatId, noHistoryMsg, options); }); // safeSendMessage from Part 3
         }
-        return safeSendMessage(chatId, noHistoryMsg, options);
+        return await safeSendMessage(chatId, noHistoryMsg, options);
     }
 
     let historyMsg = "📜 *Your Last 5 Bets:*\n\n";
@@ -5938,10 +5938,10 @@ async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null
     const options = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: historyKeyboard} };
 
     if (isFromCallback && messageToEditId) {
-        bot.editMessageText(historyMsg, {chat_id: chatId, message_id: messageToEditId, ...options})
-            .catch(e => { if (!e.message.includes("message is not modified")) safeSendMessage(chatId, historyMsg, options); });
+        await bot.editMessageText(historyMsg, {chat_id: chatId, message_id: messageToEditId, ...options})
+            .catch(async e => { if (!e.message.includes("message is not modified")) await safeSendMessage(chatId, historyMsg, options); });
     } else {
-        safeSendMessage(chatId, historyMsg, options);
+        await safeSendMessage(chatId, historyMsg, options);
     }
 }
 
@@ -5956,20 +5956,20 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
     const chatId = String(msgOrCbMsg.chat.id);
     let messageToEditId = msgOrCbMsg.message_id; // This is the ID of the message with the button, if from callback
     let isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); // clearUserState from Part 6
+    clearUserState(userId);
 
     const fallbackKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] };
     const logPrefix = `[ReferralCmd User ${userId}]`;
 
-    try { // Outer try-catch for the entire command logic
-        const userDetails = await getUserWalletDetails(userId); // from Part 2
+    try {
+        const userDetails = await getUserWalletDetails(userId);
 
         if (!userDetails?.external_withdrawal_address) {
-            const noWalletMsg = `❌ You need to link your wallet first using \`/wallet <YourSolAddress>\` before using the referral system\\. This ensures rewards can be paid out\\.`; // Escaped . `
-            const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emojis
+            const noWalletMsg = `❌ You need to link your wallet first using \`/wallet <YourSolAddress>\` before using the referral system\\. This ensures rewards can be paid out\\.`;
+            const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]};
             if (isFromCallback && messageToEditId) {
-                return bot.editMessageText(noWalletMsg, {chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
-                        .catch(async e => { if (!e.message.includes("message is not modified")) await safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard }); });
+                await bot.deleteMessage(chatId, messageToEditId).catch(delErr => console.warn(`${logPrefix} Non-critical error deleting original message ${messageToEditId} for noWalletMsg: ${delErr.message}`));
+                return await safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard });
             }
             return await safeSendMessage(chatId, noWalletMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
         }
@@ -5979,124 +5979,107 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
             console.warn(`${logPrefix} Referral code was missing. Attempting to generate.`);
             let clientGen = null;
             try {
-                clientGen = await pool.connect(); await clientGen.query('BEGIN'); // pool from Part 1
-                const walletCheck = await queryDatabase('SELECT referral_code FROM wallets WHERE user_id=$1 FOR UPDATE', [userId], clientGen); // queryDatabase from Part 2
+                clientGen = await pool.connect(); await clientGen.query('BEGIN');
+                const walletCheck = await queryDatabase('SELECT referral_code FROM wallets WHERE user_id=$1 FOR UPDATE', [userId], clientGen);
                 if (walletCheck.rowCount > 0 && !walletCheck.rows[0].referral_code) {
-                    currentRefCode = generateReferralCode(); // generateReferralCode from Part 3
+                    currentRefCode = generateReferralCode();
                     await queryDatabase('UPDATE wallets SET referral_code=$1 WHERE user_id=$2', [currentRefCode, userId], clientGen);
                     await clientGen.query('COMMIT');
                     console.log(`${logPrefix} Generated missing referral code: ${currentRefCode}`);
-                    updateWalletCache(userId, { referralCode: currentRefCode }); // updateWalletCache from Part 3
+                    updateWalletCache(userId, { referralCode: currentRefCode });
                 } else if (walletCheck.rowCount > 0 && walletCheck.rows[0].referral_code) {
-                    await clientGen.query('ROLLBACK'); // No change needed, code already exists
-                    currentRefCode = walletCheck.rows[0].referral_code; // Use existing
+                    await clientGen.query('ROLLBACK');
+                    currentRefCode = walletCheck.rows[0].referral_code;
                     console.log(`${logPrefix} Used existing referral code: ${currentRefCode}`);
-                } else { // Should not happen if userDetails existed
+                } else { 
                     await clientGen.query('ROLLBACK');
                     throw new Error("User not found for ref code gen.");
                 }
             } catch (genError) {
-                if(clientGen) await clientGen.query('ROLLBACK').catch(()=>{}); // Rollback on error
+                if(clientGen) await clientGen.query('ROLLBACK').catch(()=>{});
                 console.error(`${logPrefix} Error in on-demand ref code generation: ${genError.message}`);
-                throw genError; // Re-throw to be caught by outer try-catch
+                throw genError; 
             } finally { if(clientGen) clientGen.release(); }
-            if (!currentRefCode) { throw new Error("Could not get/gen ref code for referral msg.");} // Safety check
+            if (!currentRefCode) { throw new Error("Could not get/gen ref code for referral msg.");}
         }
         
-        // Prepare variables for the new message format
-        const totalEarningsLamports = await getTotalReferralEarnings(userId); // from Part 2
+        const totalEarningsLamports = await getTotalReferralEarnings(userId);
         const totalEarningsSOL = escapeMarkdownV2(formatSol(totalEarningsLamports));
         const referralCount = escapeMarkdownV2(String(userDetails.referral_count || 0));
         const withdrawalAddress = escapeMarkdownV2(userDetails.external_withdrawal_address); 
 
-        let botUsername = process.env.BOT_USERNAME || 'YOUR_BOT_USERNAME'; // process.env from Part 1
+        let botUsername = process.env.BOT_USERNAME || 'YOUR_BOT_USERNAME';
         if (botUsername === 'YOUR_BOT_USERNAME') { try { const me = await bot.getMe(); if (me.username) { botUsername = me.username; } } catch (e) { console.warn(`${logPrefix} Could not fetch bot username: ${e.message}`);} }
-        // The referral link for the switch_inline_query should be raw, not Markdown escaped.
         const rawReferralLink = `https://t.me/${botUsername}?start=${currentRefCode}`; 
-        // The version for display in a code block needs escaping.
         const escapedReferralLinkForCodeBlock = escapeMarkdownV2(rawReferralLink); 
 
-        const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS)); // Constant from Part 1
-        const milestonePercent = escapeMarkdownV2((REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(1)); // Constant from Part 1
+        const minBetAmount = escapeMarkdownV2(formatSol(REFERRAL_INITIAL_BET_MIN_LAMPORTS));
+        const milestonePercent = escapeMarkdownV2((REFERRAL_MILESTONE_REWARD_PERCENT * 100).toFixed(1));
 
-        // Build tier descriptions for the new format
-        let tiersDisplay = REFERRAL_INITIAL_BONUS_TIERS.map(t => { // Constant from Part 1
+        let tiersDisplay = REFERRAL_INITIAL_BONUS_TIERS.map(t => {
             const countPrefix = t.maxCount === Infinity ? "100\\+ Referrals:" : `Up to ${escapeMarkdownV2(String(t.maxCount))} Referrals:`;
             const tierPercent = escapeMarkdownV2((t.percent * 100).toFixed(1));
-            return `       ▫️ ${countPrefix} *${tierPercent}%*`; // Indent for sub-bullets
+            return `       ▫️ ${countPrefix} *${tierPercent}\%*`; // Escaped %
         }).join('\n');
 
-        // Construct the new message
         let messageToSend = `🤝 *Your Referral Dashboard* 🤝\n\n` +
                             `*Invite Friends & Earn SOL\\!*\n\n` +
                             `🔗 *Your Unique Referral Link:*\n` +
                             `\`${escapedReferralLinkForCodeBlock}\`\n` +
-                            `_\\(Tap the button below to share\\!\\)_\\n\n` +
+                            `_\\(Tap the button below to share\\!\\)_\\n\n` + // Escaped _ ( ) ! \
                             `📊 *Your Stats:*\n` +
                             `  ▫️ *Referrals:* ${referralCount}\n` +
                             `  ▫️ *Total Earnings Paid:* ${totalEarningsSOL} SOL\n\n` +
                             `🎁 *How You Earn:*\n\n` +
                             `  1️⃣ *Initial Bet Bonus:*\n` +
-                            `     When your friend places their first qualifying bet \\(min\\. ${minBetAmount} SOL\\), you earn a percentage of *their bet amount\\!* The more friends you refer, the higher your percentage:\n` +
-                            `${tiersDisplay}\n\n` + // tiersDisplay includes escaped %
+                            `     When your friend places their first qualifying bet \\(min\\. ${minBetAmount} SOL\\), you earn a percentage of *their bet amount\\!* The more friends you refer, the higher your percentage:\n` + // Escaped ( ) . !
+                            `${tiersDisplay}\n\n` +
                             `  2️⃣ *Wager Milestone Bonus:*\n` +
-                            `     As your referred friends play and reach wagering milestones \\(e\\.g\\., they've wagered a total of 1 SOL, 5 SOL, 25 SOL, etc\\.\\), you'll receive *${milestonePercent}\%* of that milestone amount\\.\n\n` + // Note: \% to escape the percent sign
+                            `     As your referred friends play and reach wagering milestones \\(e\\.g\\., they've wagered a total of 1 SOL, 5 SOL, 25 SOL, etc\\.\\), you'll receive *${milestonePercent}\%* of that milestone amount\\.\n\n` + // Escaped ( ) . %
                             `💸 *Payouts:*\n` +
                             `   All referral rewards are automatically paid out in SOL to your linked wallet:\n` +
                             `   \`${withdrawalAddress}\`\n\n` +
-                            `*Keep sharing and earning\\!* ✨`;
+                            `*Keep sharing and earning\\!* ✨`; // Escaped !
 
         console.log(`--- START OF MESSAGE ATTEMPT (handleReferralCommand User ${userId} - New Format) ---`);
         console.log(messageToSend); 
         console.log(`--- END OF MESSAGE ATTEMPT (User ${userId}) ---`);
 
         const keyboard = [
-            [{ text: '🔗 Share My Referral Link!', switch_inline_query: rawReferralLink }], // Use raw link for switch_inline_query
+            [{ text: '🔗 Share My Referral Link!', switch_inline_query: rawReferralLink }],
             [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
         ];
         const options = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: {inline_keyboard: keyboard} };
 
-        // --- IMPLEMENTED "DELETE THEN SEND NEW" FIX ---
         if (isFromCallback && messageToEditId) {
             try {
-                // Attempt to delete the original message (e.g., the animation message if that's where the button was)
                 console.log(`${logPrefix} Deleting original message ${messageToEditId} before sending new referral info.`);
                 await bot.deleteMessage(chatId, messageToEditId).catch(delErr => {
-                    // Log if deletion fails, but don't necessarily stop the process, as message might already be gone
                     console.warn(`${logPrefix} Non-critical error deleting original message ${messageToEditId}: ${delErr.message}`);
                 });
-
-                // Then, send the new referral message
                 console.log(`${logPrefix} Sending new referral message after attempting delete.`);
                 await safeSendMessage(chatId, messageToSend, options);
-
-            } catch (e) { // Catch errors from deleteMessage or safeSendMessage
+            } catch (e) { 
                 console.error(`${logPrefix} Error in 'delete then send new' block for referral: ${e.message}`);
-                // Send a generic error message to the user if the primary action fails
-                await safeSendMessage(chatId, "⚠️ An error occurred displaying referral information. Please try again later or contact support.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
+                await safeSendMessage(chatId, "⚠️ An error occurred displaying referral information\\. Please try again later or contact support\\.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
             }
         } else {
-            // This part handles sending a new message if not from callback or no valid messageToEditId
             console.log(`${logPrefix} Not from callback or no messageToEditId, sending new referral message.`);
             await safeSendMessage(chatId, messageToSend, options)
-                .catch(async e_send => { // Make catch async for potential notification
+                .catch(async e_send => { 
                     console.error(`${logPrefix} FAILED to send new message. Error: ${e_send.message}`);
                     if (e_send.response && e_send.response.body) {
                         console.error(`${logPrefix} Telegram API Error Body on SEND:`, JSON.stringify(e_send.response.body));
                     }
-                    // Send a generic error to user
-                    await safeSendMessage(chatId, "⚠️ An error occurred displaying referral information. Please try again later or contact support.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
+                    await safeSendMessage(chatId, "⚠️ An error occurred displaying referral information\\. Please try again later or contact support\\.", {parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard});
                 });
         }
-        // --- END OF IMPLEMENTED FIX ---
 
-    } catch (error) { // Catch for the entire handleReferralCommand logic
+    } catch (error) { 
         console.error(`${logPrefix} Error in main referral command handler: ${error.message}`, error.stack);
-        const errorText = `⚠️ An error occurred displaying referral info: ${escapeMarkdownV2(error.message)}\\.`; // Escaped .
-        // Attempt to inform user, whether it was an edit context or new message context
+        const errorText = `⚠️ An error occurred displaying referral info: ${escapeMarkdownV2(error.message)}\\.`; 
         if (isFromCallback && messageToEditId) {
-            // Try to edit the original message to show the error, if not possible, send new
-             bot.editMessageText(errorText, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(async ()=>{ // make async for safeSendMessage
+             bot.editMessageText(errorText, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(async ()=>{ 
                  await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
              });
         } else {
@@ -6107,7 +6090,7 @@ async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 
 
 /**
-  * Handles the /deposit command and 'quick_deposit' callback. Shows deposit address.
+ * Handles the /deposit command and 'quick_deposit' callback. Shows deposit address.
  * @param {import('node-telegram-bot-api').Message | import('node-telegram-bot-api').CallbackQuery['message']} msgOrCbMsg Message or callback message.
  * @param {Array<string>} args Command arguments or callback parameters.
  * @param {string | null} [correctUserIdFromCb=null] User ID if from callback.
@@ -6118,11 +6101,11 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
     const logPrefix = `[DepositCmd User ${userId}]`;
     let messageToEditId = msgOrCbMsg.message_id;
     let isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); // clearUserState from Part 6
+    clearUserState(userId);
 
-    let workingMessageId = messageToEditId; // Will hold the ID of the message we're working with
+    let workingMessageId = messageToEditId; 
 
-    const generatingText = "⏳ Generating your deposit address\\.\\ Please wait\\.\\.\\."; // Slightly more professional "Please wait"
+    const generatingText = "⏳ Generating your deposit address\\.\\ Please wait\\.\\.\\.";
     try {
         if (isFromCallback && messageToEditId) {
             await bot.editMessageText(generatingText, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } });
@@ -6150,12 +6133,12 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         let tempClient = null;
         try { tempClient = await pool.connect(); await ensureUserExists(userId, tempClient); } finally { if (tempClient) tempClient.release(); }
 
+        const confirmationLevelEscaped = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL);
+
         const existingAddresses = await queryDatabase(
             `SELECT deposit_address, expires_at FROM deposit_addresses WHERE user_id = $1 AND status = 'pending' AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1`,
             [userId]
         );
-
-        const confirmationLevelEscaped = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL); // Constant from Part 1
 
         if (existingAddresses.rowCount > 0) {
             const existing = existingAddresses.rows[0];
@@ -6166,13 +6149,12 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
             const escapedExistingAddress = escapeMarkdownV2(existingAddress);
             const expiresInMinutesEscaped = escapeMarkdownV2(String(expiresInMinutes));
 
-            // --- NEW TEXT FOR EXISTING ADDRESS ---
             let text = `💰 *Your Active Deposit Address*\n\n` +
                        `You have an active deposit address available:\n\n` +
                        `\`${escapedExistingAddress}\`\n` +
-                       `\\_\(Tap the address above to copy\\)\\_\\n\n` + // Escaped _ ( ) \
-                       `This address will expire in approximately *${expiresInMinutesEscaped} minutes*\\.\n\n` + // Escaped .
-                       `Please send SOL to this address\\. Funds will be credited to your account after network confirmations \\(${confirmationLevelEscaped}\\)\\. You can continue to use this address for new deposits until it expires\\.`; // Escaped . ()
+                       `_\\(Tap the address above to copy\\)_\\n\n` + // Using italicized hint with escaped parens
+                       `This address will expire in approximately *${expiresInMinutesEscaped} minutes*\\.\n\n` +
+                       `Please send SOL to this address\\. Funds will be credited to your account after network confirmations \\(${confirmationLevelEscaped}\\)\\. You can continue to use this address for new deposits until it expires\\.`;
 
             const keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }], [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${existingAddress}` }]];
             await bot.editMessageText(text, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: keyboard } });
@@ -6198,16 +6180,15 @@ async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null
         const expiryMinutesEscaped = escapeMarkdownV2(String(Math.round(DEPOSIT_ADDRESS_EXPIRY_MS / (60 * 1000))));
         const escapedAddress = escapeMarkdownV2(depositAddress);
 
-        // --- NEW TEXT FOR NEWLY GENERATED ADDRESS ---
         const message = `💰 *Your New Deposit Address*\n\n` +
                         `Please send SOL to your unique deposit address below:\n\n` +
                         `\`${escapedAddress}\`\n` +
-                        `\\_\(Tap the address above to copy\\)\\_\\n\n` + // Escaped _ ( ) \
+                        `_\\(Tap the address above to copy\\)_\\n\n` + // Using italicized hint with escaped parens
                         `⚠️ *Important Information:*\n` +
-                        `* This address is unique to you and is valid for this deposit session only\\.\n` + // Escaped .
-                        `* It will expire in approximately *${expiryMinutesEscaped} minutes*\\. __Do not use after expiry\\.__\n` + // Escaped . __ for bold underscore
-                        `* Funds require *${confirmationLevelEscaped}* network confirmations to be credited\\.\n` + // Escaped .
-                        `* To generate a new address later, please use the \`/deposit\` command or the "Deposit SOL" option in your wallet menu\\.`; // Escaped .
+                        `* This address is unique to you and is valid for this deposit session only\\.\n` +
+                        `* It will expire in approximately *${expiryMinutesEscaped} minutes*\\. __Do not use after expiry\\.__\n` +
+                        `* Funds require *${confirmationLevelEscaped}* network confirmations to be credited\\.\n` +
+                        `* To generate a new address later, please use the \`/deposit\` command or the "Deposit SOL" option in your wallet menu\\.`;
 
         const depositKeyboard = [
             [{ text: `📲 Show QR Code`, url: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=solana:${depositAddress}` }], 
@@ -6247,14 +6228,14 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
     const logPrefix = `[WithdrawCmd User ${userId}]`;
-    const breadcrumb = "Withdraw SOL"; // Breadcrumb for context
+    const breadcrumb = "Withdraw SOL"; 
     let messageToEditId = msgOrCbMsg.message_id;
     let isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); // clearUserState from Part 6
+    clearUserState(userId); 
 
-    let workingMessageId = messageToEditId; // Will hold the ID of the message we're working with
+    let workingMessageId = messageToEditId; 
 
-    const preparingText = "💸 Preparing withdrawal process\\.\\.\\."; // Escaped . ... Add Emoji
+    const preparingText = "💸 Preparing withdrawal process\\.\\.\\."; 
     try {
         if (isFromCallback && messageToEditId) {
             await bot.editMessageText(preparingText, { chat_id: chatId, message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } });
@@ -6273,40 +6254,41 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
     }
     if (!workingMessageId) {
         console.error(`${logPrefix} Failed message context for withdraw.`);
-        safeSendMessage(chatId, "Failed to initiate withdrawal process\\. Please try again\\.", { parse_mode: 'MarkdownV2' }); // Escaped .
+        await safeSendMessage(chatId, "Failed to initiate withdrawal process\\. Please try again\\.", { parse_mode: 'MarkdownV2' }); 
         return;
     }
 
     try {
-        const linkedAddress = await getLinkedWallet(userId); // from Part 2
+        const linkedAddress = await getLinkedWallet(userId); 
         if (!linkedAddress) {
-            const noWalletMsg = `⚠️ You must set your withdrawal address first using \`/wallet <YourSolanaAddress>\`\\.`; // Escaped . `
-            const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emojis
-            return bot.editMessageText(noWalletMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
-                    .catch(async e => await safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard})); // make async for safeSendMessage
+            const noWalletMsg = `⚠️ You must set your withdrawal address first using \`/wallet <YourSolanaAddress>\`\\.`; 
+            const keyboard = {inline_keyboard: [[{text: "🔗 Link Wallet", callback_data: "menu:link_wallet_prompt"}, {text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; 
+            await bot.editMessageText(noWalletMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
+                    .catch(async e => await safeSendMessage(chatId, noWalletMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard})); 
+                    return; // Return after sending/editing
         }
 
-        const currentBalance = await getUserBalance(userId); // from Part 2
-        const feeLamports = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS || '5000'); // From Part 1 constants
-        const minWithdrawTotal = MIN_WITHDRAWAL_LAMPORTS + feeLamports; // MIN_WITHDRAWAL_LAMPORTS from Part 1 constants
+        const currentBalance = await getUserBalance(userId); 
+        const feeLamports = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS || '5000'); 
+        const minWithdrawTotal = MIN_WITHDRAWAL_LAMPORTS + feeLamports; 
 
         if (currentBalance < minWithdrawTotal) {
-            const lowBalMsg = `⚠️ Your balance \\(${escapeMarkdownV2(formatSol(currentBalance))} SOL\\) is below the minimum required to withdraw \\(${escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS))} SOL \\+ ${escapeMarkdownV2(formatSol(feeLamports))} SOL fee\\)\\.`; // Escaped . () +
-            const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emoji
-            return bot.editMessageText(lowBalMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
-                    .catch(async e => await safeSendMessage(chatId, lowBalMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard})); // make async for safeSendMessage
+            const lowBalMsg = `⚠️ Your balance \\(${escapeMarkdownV2(formatSol(currentBalance))} SOL\\) is below the minimum required to withdraw \\(${escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS))} SOL \\+ ${escapeMarkdownV2(formatSol(feeLamports))} SOL fee\\)\\.`; 
+            const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; 
+            await bot.editMessageText(lowBalMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
+                    .catch(async e => await safeSendMessage(chatId, lowBalMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard})); 
+                    return; // Return after sending/editing
         }
 
-        // Set user state to await withdrawal amount
-        userStateCache.set(userId, { // userStateCache from Part 1
-            state: 'awaiting_withdrawal_amount', // Use 'state' consistently
+        userStateCache.set(userId, { 
+            state: 'awaiting_withdrawal_amount', 
             chatId: String(chatId),
-            messageId: workingMessageId, // The ID of the "Preparing..." or prompt message
+            messageId: workingMessageId, 
             data: {
                 linkedWallet: linkedAddress,
                 breadcrumb,
-                originalMessageId: workingMessageId, // Store the ID of this prompt message
-                currentBalance: currentBalance.toString() // Pass current balance to next state
+                originalMessageId: workingMessageId, 
+                currentBalance: currentBalance.toString() 
             },
             timestamp: Date.now()
         });
@@ -6314,23 +6296,23 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
         const minWithdrawSOLText = escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS));
         const feeSOLText = escapeMarkdownV2(formatSol(feeLamports));
         const escapedAddress = escapeMarkdownV2(linkedAddress);
-        const promptText = `${escapeMarkdownV2(breadcrumb)}\n\n` + // Escaped breadcrumb
-                            `Your withdrawal address: \`${escapedAddress}\`\n` + // Escaped `
-                            `Minimum withdrawal: ${minWithdrawSOLText} SOL\\. Fee: ${feeSOLText} SOL\\.\n\n` + // Escaped .
-                            `Please enter the amount of SOL you wish to withdraw \\(e\\.g\\., 0\\.5\\), or /cancel\\:`; // Escaped . () \ :
+        const promptText = `${escapeMarkdownV2(breadcrumb)}\n\n` + 
+                            `Your withdrawal address: \`${escapedAddress}\`\n` + 
+                            `Minimum withdrawal: ${minWithdrawSOLText} SOL\\. Fee: ${feeSOLText} SOL\\.\n\n` + 
+                            `Please enter the amount of SOL you wish to withdraw \\(e\\.g\\., 0\\.5\\), or /cancel\\:`; 
 
         await bot.editMessageText(promptText, {
             chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2',
-            reply_markup: { inline_keyboard: [[{ text: '❌ Cancel Withdrawal', callback_data: 'menu:wallet' }]]} // Add Emoji
+            reply_markup: { inline_keyboard: [[{ text: '❌ Cancel Withdrawal', callback_data: 'menu:wallet' }]]} 
         });
 
     } catch (error) {
         console.error(`${logPrefix} Error setting up withdrawal: ${error.message}`);
-        const errorMsg = `❌ Error starting withdrawal\\. Please try again\\. Or /cancel\\.`; // Escaped . Add Emoji
-        const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; // Add Emoji
-        bot.editMessageText(errorMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
-            .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard})); // make async for safeSendMessage
-        clearUserState(userId); // Clear state on error
+        const errorMsg = `❌ Error starting withdrawal\\. Please try again\\. Or /cancel\\.`; 
+        const keyboard = {inline_keyboard: [[{text: "↩️ Back to Menu", callback_data: "menu:main"}]]}; 
+        await bot.editMessageText(errorMsg, {chat_id: chatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard})
+            .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: keyboard})); 
+        clearUserState(userId); 
     }
 }
 
@@ -6343,23 +6325,21 @@ async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = nul
 async function handleLeaderboardsCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
-    const messageId = msgOrCbMsg.message_id; // Message ID to potentially edit
+    const messageId = msgOrCbMsg.message_id; 
     const isFromCallback = !!correctUserIdFromCb;
-    clearUserState(userId); // Clear any pending user state
+    clearUserState(userId); 
 
-    let type = 'overall_wagered'; // Default leaderboard type
-    let page = 0; // Default page (0-indexed)
+    let type = 'overall_wagered'; 
+    let page = 0; 
 
     if (isFromCallback) {
-        // For callback 'leaderboard_nav:type:page'
         type = args[0] || 'overall_wagered';
         page = parseInt(args[1] || '0', 10);
-        if (isNaN(page) || page < 0) page = 0; // Ensure page is valid
+        if (isNaN(page) || page < 0) page = 0; 
     } else {
-        // For command /leaderboards [type] [page_num]
         type = args.length > 1 ? args[1] : 'overall_wagered';
-        page = args.length > 2 ? parseInt(args[2], 10) - 1 : 0; // User inputs 1-indexed page
-        if (isNaN(page) || page < 0) page = 0; // Ensure page is valid
+        page = args.length > 2 ? parseInt(args[2], 10) - 1 : 0; 
+        if (isNaN(page) || page < 0) page = 0; 
     }
 
     await displayLeaderboard(chatId, messageId, userId, type, page, isFromCallback);
@@ -6383,7 +6363,7 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
 
     let querySQL = '';
     let paramsSQL = [itemsPerPage, offset];
-    let title = '🏆 Overall Top Wagerers'; // Default title
+    let title = '🏆 Overall Top Wagerers'; 
 
     switch (type) {
         case 'overall_wagered':
@@ -6391,7 +6371,6 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
             title = '🏆 Overall Top Wagerers (Total SOL)';
             break;
         case 'overall_profit':
-            // This query calculates profit from the bets table
             querySQL = `
                 SELECT
                     b.user_id,
@@ -6405,32 +6384,30 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
             `;
             title = '📈 Overall Top Profit (Total SOL)';
             break;
-        // Add more cases for other leaderboard types (e.g., daily_wagered, game_specific_slots_profit)
         default:
-            const errorText = `⚠️ Leaderboard type \`${escapeMarkdownV2(type)}\` is not available yet\\.`; // Escaped . `
-            const backKeyboard = { inline_keyboard: [[{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; // Add Emojis
-            if (isFromCallback && messageId) { bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
-            else { safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
+            const errorText = `⚠️ Leaderboard type \`${escapeMarkdownV2(type)}\` is not available yet\\.`; 
+            const backKeyboard = { inline_keyboard: [[{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; 
+            if (isFromCallback && messageId) { await bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
+            else { await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
             return;
     }
 
     try {
-        const results = await queryDatabase(querySQL, paramsSQL); // from Part 2
-        let leaderboardText = `👑 *${escapeMarkdownV2(title)}* \\- Page ${escapeMarkdownV2(String(page + 1))}\n\n`; // Add Emoji, Escaped -
+        const results = await queryDatabase(querySQL, paramsSQL); 
+        let leaderboardText = `👑 *${escapeMarkdownV2(title)}* \\- Page ${escapeMarkdownV2(String(page + 1))}\n\n`; 
 
         if (results.rows.length === 0) {
-            leaderboardText += (page === 0) ? "No data available for this leaderboard yet\\." : "No more entries on this page\\."; // Escaped .
+            leaderboardText += (page === 0) ? "No data available for this leaderboard yet\\." : "No more entries on this page\\."; 
         } else {
             for (let i = 0; i < results.rows.length; i++) {
                 const row = results.rows[i];
                 const rank = offset + i + 1;
-                // For display, use a masked user ID. A better approach would be to store/fetch display names.
-                const displayName = `User\\.\\.\\.${escapeMarkdownV2(String(row.user_id).slice(-5))}`; // Escaped ...
+                const displayName = `User\\.\\.\\.${escapeMarkdownV2(String(row.user_id).slice(-5))}`; 
                 let valueDisplay = 'N/A';
                 if (row.score !== undefined && row.score !== null) {
-                    valueDisplay = `${escapeMarkdownV2(formatSol(row.score))} SOL`; // formatSol from Part 3
+                    valueDisplay = `${escapeMarkdownV2(formatSol(row.score))} SOL`; 
                 }
-                leaderboardText += `${escapeMarkdownV2(String(rank))}\\. ${displayName}: ${valueDisplay}\n`; // Escaped .
+                leaderboardText += `${escapeMarkdownV2(String(rank))}\\. ${displayName}: ${valueDisplay}\n`; 
             }
         }
 
@@ -6439,28 +6416,28 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
         if (page > 0) {
             rowNav.push({ text: '⬅️ Previous', callback_data: `leaderboard_nav:${type}:${page - 1}` });
         }
-        if (results.rows.length === itemsPerPage) { // Only show Next if a full page was fetched
+        if (results.rows.length === itemsPerPage) { 
             rowNav.push({ text: 'Next ➡️', callback_data: `leaderboard_nav:${type}:${page + 1}` });
         }
         if (rowNav.length > 0) keyboardButtons.push(rowNav);
-        keyboardButtons.push([{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Main Menu', callback_data: 'menu:main' }]); // Add Emojis
+        keyboardButtons.push([{ text: '🏆 Leaderboards Home', callback_data: 'menu:leaderboards' }, { text: '↩️ Main Menu', callback_data: 'menu:main' }]); 
 
         const replyMarkup = { inline_keyboard: keyboardButtons };
         const options = { parse_mode: 'MarkdownV2', reply_markup: replyMarkup };
 
         if (isFromCallback && messageId) {
-            bot.editMessageText(leaderboardText, { chat_id: chatId, message_id: messageId, ...options })
+            await bot.editMessageText(leaderboardText, { chat_id: chatId, message_id: messageId, ...options })
                 .catch(e => { if (!e.message.includes("message is not modified")) console.warn(`[DisplayLeaderboard] Edit error: ${e.message}`); });
         } else {
-            safeSendMessage(chatId, leaderboardText, options); // safeSendMessage from Part 3
+            await safeSendMessage(chatId, leaderboardText, options); 
         }
 
     } catch (err) {
         console.error(`${logPrefix} Error fetching leaderboard data: ${err.message}`);
-        const errorText = `⚠️ Error loading leaderboard: ${escapeMarkdownV2(err.message)}\\. Please try again later\\.`; // Escaped .
-        const backKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; // Add Emoji
-        if (isFromCallback && messageId) { bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
-        else { safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
+        const errorText = `⚠️ Error loading leaderboard: ${escapeMarkdownV2(err.message)}\\. Please try again later\\.`; 
+        const backKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; 
+        if (isFromCallback && messageId) { await bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
+        else { await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: backKeyboard }); }
     }
 }
 
@@ -6476,136 +6453,131 @@ async function displayLeaderboard(chatId, messageId, userId, type = 'overall_wag
 async function handleMenuAction(userId, chatId, messageId, menuType, params = [], isFromCallback = true) {
     const logPrefix = `[MenuAction User ${userId} Menu ${menuType}]`;
     console.log(`${logPrefix} Handling menu action.`);
-    let text = `Menu: ${escapeMarkdownV2(menuType)}`; // Default text, will be overridden
-    let keyboard = { inline_keyboard: [] }; // Default keyboard
-    let setState = null; // For actions that require further user input
-    const fallbackKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; // Add Emoji
+    let text = `Menu: ${escapeMarkdownV2(menuType)}`; 
+    let keyboard = { inline_keyboard: [] }; 
+    let setState = null; 
+    const fallbackKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]] }; 
 
-    // Clear state for most menu actions, except those that set new state
-    if (menuType !== 'link_wallet_prompt') { // 'link_wallet_prompt' sets its own state
-        clearUserState(userId); // clearUserState from Part 6
+    if (menuType !== 'link_wallet_prompt') { 
+        clearUserState(userId); 
     }
 
     try {
         switch (menuType) {
             case 'link_wallet_prompt':
-                clearUserState(userId); // Clear any old state before setting new one
+                clearUserState(userId); 
                 const breadcrumbWallet = "Link Wallet";
-                // Escaped . ` \
-                text = `🔗 *Link/Update External Wallet*\n\nPlease send your Solana wallet address in the chat\\.\n\nExample: \`SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\`\n\nOr type /cancel to go back\\.`; // Add Emoji
-                keyboard.inline_keyboard = [ [{ text: '❌ Cancel', callback_data: 'menu:wallet' }] ]; // Add Emoji
+                text = `🔗 *Link/Update External Wallet*\n\nPlease send your Solana wallet address in the chat\\.\n\nExample: \`SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\`\n\nOr type /cancel to go back\\.`; 
+                keyboard.inline_keyboard = [ [{ text: '❌ Cancel', callback_data: 'menu:wallet' }] ]; 
                 setState = {
-                    state: 'awaiting_withdrawal_address', // Standardized state name
+                    state: 'awaiting_withdrawal_address', 
                     chatId: String(chatId),
-                    messageId: messageId, // ID of the message that will show this prompt
+                    messageId: messageId, 
                     data: { breadcrumb: breadcrumbWallet, originalMessageId: messageId },
                     timestamp: Date.now()
                 };
                 break;
 
             case 'wallet':
-                // Fetch user balance and details
-                const userBalance = await getUserBalance(userId); // from Part 2
-                const userDetails = await getUserWalletDetails(userId); // from Part 2
-                // Build wallet message text, ensure all dynamic parts are escaped
-                text = `👤 *Your Wallet & Stats*\n\n*Balance:* ${escapeMarkdownV2(formatSol(userBalance))} SOL\n`; // Add Emoji
+                const userBalance = await getUserBalance(userId); 
+                const userDetails = await getUserWalletDetails(userId); 
+                text = `👤 *Your Wallet & Stats*\n\n*Balance:* ${escapeMarkdownV2(formatSol(userBalance))} SOL\n`;
                 if (userDetails?.external_withdrawal_address) {
-                    text += `*Withdrawal Address:* \`${escapeMarkdownV2(userDetails.external_withdrawal_address)}\`\n`; // Escaped `
+                    text += `*Withdrawal Address:* \`${escapeMarkdownV2(userDetails.external_withdrawal_address)}\`\n`; 
                 } else {
-                    text += `*Withdrawal Address:* Not Set \\(Use \`/wallet <YourSolAddress>\` or button below\\)\n`; // Escaped () ` \
+                    text += `*Withdrawal Address:* Not Set \\(Use \`/wallet <YourSolAddress>\` or button below\\)\n`; 
                 }
                 if (userDetails?.referral_code) {
-                    text += `*Referral Code:* \`${escapeMarkdownV2(userDetails.referral_code)}\`\n`; // Escaped `
+                    text += `*Referral Code:* \`${escapeMarkdownV2(userDetails.referral_code)}\`\n`; 
                 } else {
-                    text += `*Referral Code:* Not Yet Generated \\(Link wallet first\\)\n`; // Escaped ()
+                    text += `*Referral Code:* Not Yet Generated \\(Link wallet first\\)\n`; 
                 }
                 text += `*Referrals Made:* ${escapeMarkdownV2(String(userDetails?.referral_count || 0))}\n`;
                 text += `*Total Wagered:* ${escapeMarkdownV2(formatSol(userDetails?.total_wagered || 0n))} SOL\n`;
-
-                // Combine DB and memory cache for last bet amounts for display
                 const lastBetsDB = userDetails?.last_bet_amounts || {};
-                const lastBetsMemory = userLastBetAmounts.get(userId) || new Map(); // userLastBetAmounts from Part 1 state
-                const combinedLastBets = {...lastBetsDB}; // Clone DB bets
-                // Overlay memory bets (which might be more up-to-date)
-                lastBetsMemory.forEach((value, key) => { combinedLastBets[key] = value.toString(); }); // Ensure string for formatSol
+                const lastBetsMemory = userLastBetAmounts.get(userId) || new Map(); 
+                const combinedLastBets = {...lastBetsDB};
+                lastBetsMemory.forEach((value, key) => { combinedLastBets[key] = value.toString(); }); 
 
                 if (Object.keys(combinedLastBets).length > 0) {
-                    text += `\n*Last Bet Amounts \\(Approx\\.\\):*\n`; // Escaped . () \
+                    text += `\n*Last Bet Amounts \\(Approx\\.\\):*\n`; 
                     for (const gameKey in combinedLastBets) {
-                        if (GAME_CONFIG[gameKey]) { // GAME_CONFIG from Part 1
+                        if (GAME_CONFIG[gameKey]) { 
                             let formattedAmount = 'N/A';
-                            try { formattedAmount = formatSol(BigInt(combinedLastBets[gameKey])); } // formatSol from Part 3
+                            try { formattedAmount = formatSol(BigInt(combinedLastBets[gameKey])); } 
                             catch { console.warn(`[MenuAction Wallet] Invalid BigInt format for last bet amount, game ${gameKey}: ${combinedLastBets[gameKey]}`); }
-                            text += `  \\- ${escapeMarkdownV2(GAME_CONFIG[gameKey]?.name || gameKey)}: ${escapeMarkdownV2(formattedAmount)} SOL\n`; // Escaped -
+                            text += `  \\- ${escapeMarkdownV2(GAME_CONFIG[gameKey]?.name || gameKey)}: ${escapeMarkdownV2(formattedAmount)} SOL\n`; 
                         }
                     }
                 }
                 keyboard.inline_keyboard = [
-                    [{ text: '📜 Bet History', callback_data: 'menu:history' }], // Add Emoji
-                    [{ text: '💰 Deposit SOL', callback_data: 'quick_deposit' }, { text: '💸 Withdraw SOL', callback_data: 'menu:withdraw' }], // Add Emojis
-                    [{ text: '🔗 Link/Update Address', callback_data: 'menu:link_wallet_prompt' }], // Add Emoji
-                    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }] // Add Emoji
+                    [{ text: '📜 Bet History', callback_data: 'menu:history' }], 
+                    [{ text: '💰 Deposit SOL', callback_data: 'quick_deposit' }, { text: '💸 Withdraw SOL', callback_data: 'menu:withdraw' }], 
+                    [{ text: '🔗 Link/Update Address', callback_data: 'menu:link_wallet_prompt' }], 
+                    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }] 
                 ];
                 break;
 
-            case 'my_stats': // Placeholder
-                text = "📊 *My Stats* \\- Coming Soon\\!"; // Escaped - ! Add Emoji
-                keyboard.inline_keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]]; // Add Emoji
+            case 'my_stats':
+                text = "📊 *My Stats* \\- Coming Soon\\!"; 
+                keyboard.inline_keyboard = [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]];
                 break;
 
             case 'leaderboards':
-                text = "🏆 *Leaderboards*\n\nSelect a category:"; // Add Emoji
+                text = "🏆 *Leaderboards*\n\nSelect a category:";
                 keyboard.inline_keyboard = [
-                    [{ text: '💰 Overall Wagered', callback_data: 'leaderboard_nav:overall_wagered:0' }], // Add Emoji
-                    [{ text: '📈 Overall Profit', callback_data: 'leaderboard_nav:overall_profit:0' }], // Add Emoji
-                    // Add more leaderboard types here
-                    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }] // Add Emoji
+                    [{ text: '💰 Overall Wagered', callback_data: 'leaderboard_nav:overall_wagered:0' }], 
+                    [{ text: '📈 Overall Profit', callback_data: 'leaderboard_nav:overall_profit:0' }], 
+                    [{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]
                 ];
                 break;
 
-            // Cases that call other main handlers directly
             case 'history':
-                await handleHistoryCommand(msgOrCbMsg, ['/history'], userId); return; // Pass correct args
+                await handleHistoryCommand(msgOrCbMsg, ['/history'], userId); return; 
             case 'withdraw':
-                await handleWithdrawCommand(msgOrCbMsg, ['/withdraw'], userId); return; // Pass correct args
+                await handleWithdrawCommand(msgOrCbMsg, ['/withdraw'], userId); return; 
             case 'referral': 
-                await handleReferralCommand(msgOrCbMsg, ['/referral'], userId); return; // Pass correct args
+                await handleReferralCommand(msgOrCbMsg, ['/referral'], userId); return; 
             case 'help':
-                await handleHelpCommand(msgOrCbMsg, ['/help'], userId); return; // Pass correct args
+                await handleHelpCommand(msgOrCbMsg, ['/help'], userId); return; 
 
             default:
                 console.warn(`${logPrefix} Unknown menu type in handleMenuAction: ${menuType}`);
-                text = `⚠️ Unknown menu option: \`${escapeMarkdownV2(menuType)}\``; // Escaped `
-                keyboard.inline_keyboard = [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]]; // Add Emoji
+                text = `⚠️ Unknown menu option: \`${escapeMarkdownV2(menuType)}\``; 
+                keyboard.inline_keyboard = [[{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]];
         }
 
-        // If setState object was populated, set the user's state
         if (setState) {
-            if (!messageId) {
-                // This might happen if the original message context was lost (e.g. if called not from a callback AND msgOrCbMsg had no message_id)
-                console.error(`${logPrefix} Cannot set state for menu '${menuType}' because messageId is missing/null.`);
-                // Send the message as new if we can't edit and need to set state based on it.
-                // However, if messageId is null, the prompt for state input might not have been sent yet.
-                // The standard flow ensures messageId is present for state-setting prompts.
-                // For safety, if messageId is null here AND we need to set state, we should probably send the prompt as a new message first.
-                // This specific `handleMenuAction` is usually called from a callback, so messageId *should* be present.
-                // If called from a command directly (less common for this function), messageId would be the command message's ID.
-                // We will assume for now that if setState is true, a valid messageId context exists or will be established.
-                // The original code had setState.messageId = messageId; which is correct.
-                // The `originalMessageId` in `setState.data` should also reflect this `messageId`.
-                setState.messageId = messageId; // Should be the ID of the message *showing the prompt*
-                setState.data.originalMessageId = messageId;
-            }
-            userStateCache.set(userId, setState); // userStateCache from Part 1
-            console.log(`${logPrefix} Set user state to: ${setState.state}`);
+            if (!messageId && isFromCallback) { // Only an issue if from callback and messageId is somehow lost
+                console.error(`${logPrefix} Critical: Cannot set state for menu '${menuType}' from callback because messageId is missing.`);
+                  // Send the prompt as a new message if original context is lost but state needs to be set
+                  const promptMsg = await safeSendMessage(chatId, text, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+                  if (promptMsg?.message_id) {
+                      setState.messageId = promptMsg.message_id;
+                      setState.data.originalMessageId = promptMsg.message_id;
+                      userStateCache.set(userId, setState);
+                      console.log(`${logPrefix} Set user state to: ${setState.state} based on new prompt message.`);
+                  } else {
+                      console.error(`${logPrefix} Failed to send new prompt message for state setting.`);
+                      // User might be left without a prompt, consider a generic error message to chat
+                      await safeSendMessage(chatId, "An error occurred setting up the next step. Please try again.", { reply_markup: fallbackKeyboard });
+                  }
+                  return; // Exit after attempting to handle missing messageId for state setting
+            } else if (messageId) { // If messageId exists (common case)
+                setState.messageId = messageId; 
+                setState.data.originalMessageId = messageId; 
+                userStateCache.set(userId, setState); 
+                console.log(`${logPrefix} Set user state to: ${setState.state}`);
+            }
         }
 
         const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard };
         if (isFromCallback && messageId) {
             await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options })
-                .catch(async e => { // make async for safeSendMessage
+                .catch(async e => { 
                             if (!e.message.includes("message is not modified")) {
                                 console.warn(`${logPrefix} Failed edit for menu ${menuType}, sending new. Error: ${e.message}`);
+                                // If edit fails (e.g. "no text to edit" from animation), send as new.
                                 await safeSendMessage(chatId, text, options);
                             }
                         });
@@ -6614,22 +6586,20 @@ async function handleMenuAction(userId, chatId, messageId, menuType, params = []
         }
 
     } catch (error) {
-        console.error(`${logPrefix} Error handling menu action '${menuType}': ${error.message}`, error.stack); // Log stack
-        const errorText = `⚠️ An error occurred loading this menu \\(${escapeMarkdownV2(menuType)}\\)\\. Please try again\\.`; // Escaped . () \
-        // Attempt to inform user, whether it was an edit context or new message context
+        console.error(`${logPrefix} Error handling menu action '${menuType}': ${error.message}`, error.stack); 
+        const errorText = `⚠️ An error occurred loading this menu \\(${escapeMarkdownV2(menuType)}\\)\\. Please try again\\.`; 
          if (isFromCallback && messageId) {
-             bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(async ()=>{ // make async for safeSendMessage
+             bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard }).catch(async ()=>{ 
                  await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
              });
          } else {
              await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: fallbackKeyboard });
          }
-        // If an error occurred during state setup, clear the potentially partially set state.
-         if (setState) clearUserState(userId); // Clear potentially incomplete state
+         if (setState) clearUserState(userId);
     }
 }
 
-// --- End of Part 5b (Section 2c) ---
+// --- End of Part 5b (Section 2c) -----
 // index.js - Part 5b: General Commands, Game Commands, Menus & Maps (Section 2d of 4)
 // --- VERSION: 3.2.1r --- (Applying Fixes: Ensure game commands handle amounts/routing, Verify handler maps + previous)
 
