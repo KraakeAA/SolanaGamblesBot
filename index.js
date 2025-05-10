@@ -3920,7 +3920,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
     const gameKey = 'race';
     const gameConfig = GAME_CONFIG[gameKey];
     const logPrefix = `[RaceGame User ${userId} Bet ${betAmountLamports} Horse ${chosenHorseNumber}]`;
-    
+
     if (!RACE_HORSES || RACE_HORSES.length === 0) {
         console.error(`${logPrefix} RACE_HORSES array is not defined or empty.`);
         const errorConfigMsg = "⚠️ Race game configuration error\\. Please contact support\\.";
@@ -3932,7 +3932,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         }
         return;
     }
-    
+
     const chosenHorseConfig = RACE_HORSES[chosenHorseNumber - 1];
 
     if (!chosenHorseConfig) {
@@ -3973,7 +3973,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         const { betId, newBalance: balanceAfterBet } = betPlacementResult;
         finalUserBalance = balanceAfterBet;
 
-        const { winningLane } = simulateRaceWeighted(RACE_HORSES); 
+        const { winningLane } = simulateRaceWeighted(RACE_HORSES);
         const win = winningLane === chosenHorseNumber;
         const winningHorseConfig = RACE_HORSES[winningLane - 1];
         console.log(`${logPrefix} Predetermined winner: Lane ${winningLane} - ${winningHorseConfig.name}`);
@@ -4019,17 +4019,17 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
 
         let raceHeader = `🏁 *Race in Progress\\!* 💨\n\n`;
         const VIRTUAL_TRACK_LENGTH = 50; 
-        const VISUAL_TRACK_CHARS = 15;  
-        const FINISH_LINE_VISUAL = '🏁'; // This is now just appended at the end of each line
-        const TROPHY_CHAR = '🏆';
-        const TRACK_AHEAD_CHAR = '·'; 
-        const TRACK_BEHIND_CHAR = ' '; 
-        const HORSE_MOVING_CHAR = '🏇';
+        const VISUAL_TRACK_CHARS = 15;   // How many characters for the visual path
+        const FINISH_LINE_CHAR_STATIC = '🏁'; // Static flag at the end of each line
+        const TROPHY_CHAR_ON_TRACK = '🏆'; // Shown on the track when finished
+        const TRACK_AHEAD_CHAR = '·';    // Dots for track ahead
+        const TRACK_BEHIND_CHAR = ' ';   // Spaces for track covered
+        const HORSE_MOVING_CHAR = '🏇';   // The emoji that "moves"
 
         let positions = new Array(RACE_HORSES.length).fill(0); 
         let lastAnimationContent = "";
-        const animationDurationApproxMs = 8000; 
-        const framesPerSecond = 2.5; 
+        const animationDurationApproxMs = 8500; 
+        const framesPerSecond = 2.5; // Adjusted for smoother feel
         const totalAnimationFrames = Math.floor(animationDurationApproxMs / 1000 * framesPerSecond);
         const sleepPerFrame = Math.floor(1000 / framesPerSecond);
 
@@ -4037,7 +4037,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
 
         for (let frame = 0; frame < totalAnimationFrames; frame++) {
             let currentFrameDisplayLines = [raceHeader]; 
-            let raceStillRunning = true; 
+            let allVisuallyFinished = true; 
             
             if (frame === Math.floor(totalAnimationFrames * 0.33) && commentary.length < 25) commentary = "\n*Jockeying for position\\!*";
             else if (frame === Math.floor(totalAnimationFrames * 0.66) && commentary.length < 55) commentary = "\n*Neck and neck down the backstretch\\!*";
@@ -4046,10 +4046,9 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
                  commentary = `\n*${escapeMarkdownV2(winningHorseConfig.name)} ${winningHorseConfig.emoji} crosses the finish line\\!*`;
             }
 
-            let finishedCount = 0;
             for (let i = 0; i < RACE_HORSES.length; i++) {
                 if (positions[i] < VIRTUAL_TRACK_LENGTH) {
-                    raceStillRunning = true;
+                    allVisuallyFinished = false; 
                     let moveAmount = 0; 
                     const randomFactor = Math.random();
                     const baseProbToMove = 0.35 + (0.95 - (RACE_HORSES[i].payoutMultiplier / 12)); 
@@ -4067,37 +4066,39 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
                     positions[i] += moveAmount;
                     positions[i] = Math.min(positions[i], VIRTUAL_TRACK_LENGTH); 
                 }
-                if (positions[i] >= VIRTUAL_TRACK_LENGTH) finishedCount++;
 
                 const isUsersHorse = (i + 1) === chosenHorseNumber;
                 let rawHorseName = RACE_HORSES[i].name.substring(0, 10).padEnd(10, ' ');
                 let displayName = isUsersHorse ? `*${escapeMarkdownV2(rawHorseName.trim())}* 👉` : escapeMarkdownV2(rawHorseName);
                 
-                let trackVisual = Array(VISUAL_TRACK_CHARS).fill(TRACK_AHEAD_CHAR);
-                let visualProgressUnits = Math.floor((positions[i] / VIRTUAL_TRACK_LENGTH) * VISUAL_TRACK_CHARS);
+                let trackVisual = Array(VISUAL_TRACK_CHARS).fill(TRACK_AHEAD_CHAR); // Default to track ahead
                 
+                // Calculate visual position (0 to VISUAL_TRACK_CHARS -1 for marker placement)
+                let visualMarkerPosition = Math.floor((positions[i] / VIRTUAL_TRACK_LENGTH) * (VISUAL_TRACK_CHARS -1) ); // Scale to fit marker within track
+                visualMarkerPosition = Math.min(visualMarkerPosition, VISUAL_TRACK_CHARS - 1); 
+                visualMarkerPosition = Math.max(0, visualMarkerPosition); 
+
                 if (positions[i] >= VIRTUAL_TRACK_LENGTH) {
-                    // Horse finished: fill track with "behind" char, then horse, then trophy
-                    for(let k=0; k < VISUAL_TRACK_CHARS ; k++) { trackVisual[k] = TRACK_BEHIND_CHAR; }
-                    if (VISUAL_TRACK_CHARS > 1) {
-                        trackVisual[VISUAL_TRACK_CHARS - 2] = HORSE_MOVING_CHAR; // Horse just before trophy
-                        trackVisual[VISUAL_TRACK_CHARS - 1] = TROPHY_CHAR;       // Trophy at the end of bar
-                    } else if (VISUAL_TRACK_CHARS === 1) {
-                        trackVisual[0] = TROPHY_CHAR; // If bar is 1, just trophy
+                    // HORSE FINISHED: Fill track with "behind" char, place trophy at the very end of VISUAL_TRACK_CHARS
+                    for(let k=0; k < VISUAL_TRACK_CHARS; k++) { trackVisual[k] = TRACK_BEHIND_CHAR; } // All covered
+                    if (VISUAL_TRACK_CHARS > 0) {
+                        trackVisual[VISUAL_TRACK_CHARS - 1] = TROPHY_CHAR_ON_TRACK; // Trophy takes the last spot
                     }
                 } else {
-                    // Horse is still racing:
-                    visualProgressUnits = Math.min(visualProgressUnits, VISUAL_TRACK_CHARS - 1); // Ensure marker is within bounds
-                    visualProgressUnits = Math.max(0, visualProgressUnits);
-                    for (let k = 0; k < visualProgressUnits; k++) {
-                        trackVisual[k] = TRACK_BEHIND_CHAR;
+                    // HORSE STILL RACING:
+                    for (let k = 0; k < VISUAL_TRACK_CHARS; k++) {
+                        if (k < visualMarkerPosition) {
+                            trackVisual[k] = TRACK_BEHIND_CHAR; // Covered track
+                        } else if (k === visualMarkerPosition) {
+                            trackVisual[k] = HORSE_MOVING_CHAR; // Current horse position
+                        } else { // k > visualMarkerPosition
+                            trackVisual[k] = TRACK_AHEAD_CHAR;  // Track ahead
+                        }
                     }
-                    trackVisual[visualProgressUnits] = HORSE_MOVING_CHAR; 
-                    // The rest is already TRACK_AHEAD_CHAR
                 }
                 
                 const progressTrackString = trackVisual.join("");
-                currentFrameDisplayLines.push(`${RACE_HORSES[i].emoji} ${displayName}: ${progressTrackString} ${FINISH_LINE_VISUAL}`);
+                currentFrameDisplayLines.push(`${RACE_HORSES[i].emoji} ${displayName}: ${progressTrackString} ${FINISH_LINE_CHAR_STATIC}`);
             }
 
             let fullFrameText = currentFrameDisplayLines.join('\n') + '\n' + commentary;
@@ -4116,7 +4117,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
             if (positions[winningLane - 1] >= VIRTUAL_TRACK_LENGTH && frame > totalAnimationFrames * 0.75) {
                  break; 
             }
-            if (finishedCount >= RACE_HORSES.length && frame > totalAnimationFrames * 0.5) {
+            if (allVisuallyFinished && frame > totalAnimationFrames * 0.5) {
                 break;
             }
             
