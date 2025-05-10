@@ -3364,294 +3364,275 @@ async function handleMessage(msg) {
 // --- End Main Message Handler ---
 
 
+// In Part 5a (Telegram Message/Callback Handlers & Game Result Processing)
+
 // --- Main Callback Query Handler ---
 /**
- * Handles incoming Telegram callback queries (from inline buttons).
- * @param {import('node-telegram-bot-api').CallbackQuery} callbackQuery The callback query object.
- */
+ * Handles incoming Telegram callback queries (from inline buttons).
+ * @param {import('node-telegram-bot-api').CallbackQuery} callbackQuery The callback query object.
+ */
 async function handleCallbackQuery(callbackQuery) {
-    if (!callbackQuery || !callbackQuery.from || !callbackQuery.from.id || !callbackQuery.message || !callbackQuery.message.chat || !callbackQuery.message.chat.id || !callbackQuery.data) {
-        console.warn('[handleCallbackQuery] Received invalid callbackQuery object:', callbackQuery);
-        if (callbackQuery && callbackQuery.id) { bot.answerCallbackQuery(callbackQuery.id, { text: "Error processing action.", show_alert: true }).catch(()=>{}); }
-        return;
-    }
-    const userId = String(callbackQuery.from.id); // User who CLICKED the button
-    const chatId = String(callbackQuery.message.chat.id);
-    const messageId = callbackQuery.message.message_id;
-    const originalMessage = callbackQuery.message; // Keep original message object
-    const data = callbackQuery.data;
-    const logPrefix = `[CB Rcv User ${userId} Chat ${chatId} Data ${data}]`;
+    if (!callbackQuery || !callbackQuery.from || !callbackQuery.from.id || !callbackQuery.message || !callbackQuery.message.chat || !callbackQuery.message.chat.id || !callbackQuery.data) {
+        console.warn('[handleCallbackQuery] Received invalid callbackQuery object:', callbackQuery);
+        if (callbackQuery && callbackQuery.id) { await bot.answerCallbackQuery(callbackQuery.id, { text: "Error processing action.", show_alert: true }).catch(()=>{}); }
+        return;
+    }
+    const userId = String(callbackQuery.from.id); 
+    const chatId = String(callbackQuery.message.chat.id);
+    const messageId = callbackQuery.message.message_id; // ID of the message where the button was clicked
+    const originalMessage = callbackQuery.message; 
+    const data = callbackQuery.data;
+    const logPrefix = `[CB Rcv User ${userId} Chat ${chatId} Data ${data}]`;
 
-    console.log(`${logPrefix} Received callback.`);
-    bot.answerCallbackQuery(callbackQuery.id).catch(err => console.warn(`${logPrefix} Non-critical error answering CB query: ${err.message}`)); // Answer immediately
+    console.log(`${logPrefix} Received callback.`);
+    await bot.answerCallbackQuery(callbackQuery.id).catch(err => console.warn(`${logPrefix} Non-critical error answering CB query: ${err.message}`)); 
 
-    // *** FIX #1: Removed Callback Cooldown Check ***
+    let tempClient = null;
+    try {
+        tempClient = await pool.connect(); 
+        await ensureUserExists(userId, tempClient); 
+    } catch (dbError) {
+        console.error(`${logPrefix} DB error ensuring user exists for callback ${data}: ${dbError.message}`);
+        await safeSendMessage(chatId, "A database error occurred\\. Please try again later\\.", { parse_mode: 'MarkdownV2' }); 
+        if (tempClient) tempClient.release();
+        return;
+    } finally {
+        if (tempClient) tempClient.release();
+    }
 
-    // Parse action and params
-    const actionParts = data.split(':');
-    const action = actionParts[0];
-    const params = actionParts.slice(1); // Define params here for wider scope if needed later
+    const actionParts = data.split(':');
+    const action = actionParts[0];
+    const params = actionParts.slice(1); 
 
-    // Ensure user exists for most actions
-    let tempClient = null;
-    try {
-        tempClient = await pool.connect(); // pool from Part 1
-        await ensureUserExists(userId, tempClient); // ensureUserExists from Part 2
-    } catch (dbError) {
-        console.error(`${logPrefix} DB error ensuring user exists for callback ${data}: ${dbError.message}`);
-        safeSendMessage(chatId, "A database error occurred\\. Please try again later\\.", { parse_mode: 'MarkdownV2' }); // Escaped .
-        if (tempClient) tempClient.release();
-        return;
-    } finally {
-        if (tempClient) tempClient.release();
-    }
+    try {
+        if (action === 'menu') {
+            const menuKey = params[0] || 'main';
+            if (menuCommandHandlers && menuCommandHandlers.has(menuKey)) {
+                console.log(`${logPrefix} Routing to menu handler: ${menuKey}`);
+                const handler = menuCommandHandlers.get(menuKey);
+                const remainingParams = params.slice(1);
+                if (handler === handleMenuAction) {
+                    return handler(userId, chatId, messageId, menuKey, remainingParams, true);
+                } else if (typeof handler === 'function') {
+                    return handler(originalMessage, remainingParams, userId);
+                } else {
+                    console.error(`${logPrefix} Invalid handler found in menuCommandHandlers for key '${menuKey}'.`);
+                    await safeSendMessage(chatId, `Internal error processing menu option: ${escapeMarkdownV2(menuKey)}`, { parse_mode: 'MarkdownV2'});
+                }
+            } else {
+                console.warn(`${logPrefix} Unknown menu key: ${menuKey}`);
+                await safeSendMessage(chatId, `Unknown menu option: \`${escapeMarkdownV2(menuKey)}\``, { parse_mode: 'MarkdownV2'});
+            }
+        }
+        else if (action === 'select_game') {
+            const gameKey = params[0];
+            if (GAME_CONFIG[gameKey]) { 
+                await showBetAmountButtons(originalMessage, gameKey, null, userId); 
+            } else {
+                console.warn(`${logPrefix} Unknown game key in select_game: ${gameKey}`);
+                await bot.editMessageText(`⚠️ Unknown game: \`${escapeMarkdownV2(gameKey)}\``, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
+            }
+        }
+        else if (action === 'roulette_select_bet_type' || action === 'roulette_bet_type_category') {
+            const gameKey = 'roulette';
+            console.log(`${logPrefix} Routing intermediate step for Roulette.`);
+            await proceedToGameStep(userId, chatId, messageId, gameKey, data); 
+        }
+        else if (action === 'coinflip_select_side' || action === 'race_select_horse') {
+            const gameKey = action.split('_')[0];
+            if (GAME_CONFIG[gameKey]) {
+                 console.log(`${logPrefix} Routing intermediate step for ${gameKey}.`);
+                 await proceedToGameStep(userId, chatId, messageId, gameKey, data); 
+            } else {
+                console.error(`${logPrefix} Invalid game key derived from action: ${action}`);
+                await bot.editMessageText("⚠️ Error processing game step selection\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
+            }
+        }
+        else if (action === 'confirm_bet') {
+            const gameKey = params[0];
+            const betAmountLamportsStr = params[1];
+            const betChoice1 = params[2]; 
+            const betChoice2 = params[3]; 
 
-    // --- Route callback based on action prefix ---
-    try {
-        // Route menu actions
-        if (action === 'menu') {
-            const menuKey = params[0] || 'main';
-            // menuCommandHandlers defined in Part 5b
-            if (menuCommandHandlers && menuCommandHandlers.has(menuKey)) {
-                console.log(`${logPrefix} Routing to menu handler: ${menuKey}`);
-                const handler = menuCommandHandlers.get(menuKey);
-                const remainingParams = params.slice(1);
-                // Handle based on expected handler signature
-                // Standard command handlers expect (msgOrCbMsg, args, correctUserIdFromCb)
-                // handleMenuAction expects (userId, chatId, messageId, menuKey, params, isFromCallback)
-                if (handler === handleMenuAction) {
-                    // Specific call signature for handleMenuAction
-                    return handler(userId, chatId, messageId, menuKey, remainingParams, true);
-                } else if (typeof handler === 'function') {
-                    // Standard command handler signature
-                    // Pass originalMessage as first arg, remaining params as second, userId as third
-                    return handler(originalMessage, remainingParams, userId);
-                } else {
-                    console.error(`${logPrefix} Invalid handler found in menuCommandHandlers for key '${menuKey}'.`);
-                    return safeSendMessage(chatId, `Internal error processing menu option: ${escapeMarkdownV2(menuKey)}`, { parse_mode: 'MarkdownV2'});
-                }
-            } else {
-                console.warn(`${logPrefix} Unknown menu key: ${menuKey}`);
-                return safeSendMessage(chatId, `Unknown menu option: \`${escapeMarkdownV2(menuKey)}\``, { parse_mode: 'MarkdownV2'});
-            }
-        }
+            console.log(`${logPrefix} Confirming bet for ${gameKey}, amount ${betAmountLamportsStr}, choice1: ${betChoice1}, choice2: ${betChoice2}`);
 
-        // Route select_game action (shows bet amount buttons)
-        else if (action === 'select_game') {
-            const gameKey = params[0];
-            if (GAME_CONFIG[gameKey]) { // GAME_CONFIG from Part 1
-                await showBetAmountButtons(originalMessage, gameKey, null, userId); // showBetAmountButtons from Part 1
-            } else {
-                console.warn(`${logPrefix} Unknown game key in select_game: ${gameKey}`);
-                bot.editMessageText(`⚠️ Unknown game: \`${escapeMarkdownV2(gameKey)}\``, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
-            }
-        }
+            if (!GAME_CONFIG[gameKey] || !betAmountLamportsStr) {
+                console.error(`${logPrefix} Invalid gameKey or betAmount in confirm_bet: ${data}`);
+                await bot.editMessageText("⚠️ Error confirming bet due to invalid parameters\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
+                return;
+            }
 
-        // --- FIX #3: Explicitly handle intermediate Roulette steps ---
-        else if (action === 'roulette_select_bet_type') {
-            const gameKey = 'roulette';
-            console.log(`${logPrefix} Routing intermediate step for Roulette bet type selection.`);
-            // Call proceedToGameStep to display category buttons or handle straight bet setup
-            await proceedToGameStep(userId, chatId, messageId, gameKey, data); // data contains the full callback string
-        }
-        else if (action === 'roulette_bet_type_category') {
-            const gameKey = 'roulette';
-            console.log(`${logPrefix} Routing intermediate step for Roulette category specific bet selection.`);
-            // Call proceedToGameStep again to display specific bet buttons (Red/Black, Even/Odd, Low/High)
-            await proceedToGameStep(userId, chatId, messageId, gameKey, data); // data contains the full callback string
-        }
-        // --- End FIX #3 ---
+            let betAmountLamports;
+            try {
+                betAmountLamports = BigInt(betAmountLamportsStr);
+                if (betAmountLamports <= 0n) throw new Error("Invalid amount");
+            } catch (e) {
+                console.error(`${logPrefix} Invalid bet amount in confirm_bet: ${betAmountLamportsStr}`);
+                return bot.editMessageText(`⚠️ Invalid bet amount specified: \`${escapeMarkdownV2(betAmountLamportsStr)}\`\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
+            }
 
-        // Handle intermediate game callbacks explicitly (Coinflip, Race - Roulette handled above)
-        else if (action === 'coinflip_select_side' || action === 'race_select_horse') {
-            const gameKey = action.split('_')[0];
-            if (GAME_CONFIG[gameKey]) {
-                 console.log(`${logPrefix} Routing intermediate step for ${gameKey}.`);
-                 await proceedToGameStep(userId, chatId, messageId, gameKey, data); // data contains the full callback string
-            } else {
-                console.error(`${logPrefix} Invalid game key derived from action: ${action}`);
-                bot.editMessageText("⚠️ Error processing game step selection\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
-            }
-        }
+            await bot.editMessageText(
+                `⏳ Processing your ${escapeMarkdownV2(GAME_CONFIG[gameKey].name)} bet of ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.\\.\\.`,
+                { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] }, parse_mode: 'MarkdownV2' }
+            ).catch(e => console.warn(`${logPrefix} Error editing message for bet processing (confirm_bet): ${e.message}`));
 
-        // Handle 'confirm_bet' action (Core bet execution trigger)
-        else if (action === 'confirm_bet') {
-            const gameKey = params[0];
-            const betAmountLamportsStr = params[1];
-            const betChoice1 = params[2]; // e.g., 'heads', horse number, 'red', 'straight'
-            const betChoice2 = params[3]; // e.g., straight bet number for Roulette
-
-            console.log(`${logPrefix} Confirming bet for ${gameKey}, amount ${betAmountLamportsStr}, choice1: ${betChoice1}, choice2: ${betChoice2}`);
-
-            if (!GAME_CONFIG[gameKey] || !betAmountLamportsStr) {
-                console.error(`${logPrefix} Invalid gameKey or betAmount in confirm_bet: ${data}`);
-                bot.editMessageText("⚠️ Error confirming bet due to invalid parameters\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
-                return;
-            }
-
-            let betAmountLamports;
-            try {
-                betAmountLamports = BigInt(betAmountLamportsStr);
-                if (betAmountLamports <= 0n) throw new Error("Invalid amount");
-            } catch (e) {
-                console.error(`${logPrefix} Invalid bet amount in confirm_bet: ${betAmountLamportsStr}`);
-                 return bot.editMessageText(`⚠️ Invalid bet amount specified: \`${escapeMarkdownV2(betAmountLamportsStr)}\`\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
-            }
-
-            bot.editMessageText(
-                `⏳ Processing your ${escapeMarkdownV2(GAME_CONFIG[gameKey].name)} bet of ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.\\.\\.`,
-                { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] }, parse_mode: 'MarkdownV2' }
-            ).catch(e => console.warn(`${logPrefix} Error editing message for bet processing (confirm_bet): ${e.message}`));
-
-            switch (gameKey) {
-                case 'coinflip': return handleCoinflipGame(userId, chatId, messageId, betAmountLamports, betChoice1);
-                case 'race': return handleRaceGame(userId, chatId, messageId, betAmountLamports, parseInt(betChoice1, 10));
-                case 'slots': return handleSlotsGame(userId, chatId, messageId, betAmountLamports);
-                case 'roulette': return handleRouletteGame(userId, chatId, messageId, betAmountLamports, betChoice1, betChoice2);
-                case 'war': return handleWarGame(userId, chatId, messageId, betAmountLamports);
-                case 'crash': return handleCrashGame(userId, chatId, messageId, betAmountLamports);
-                case 'blackjack': return handleBlackjackGame(userId, chatId, messageId, betAmountLamports, 'start_game');
-                default:
-                    console.error(`${logPrefix} Unknown gameKey in confirm_bet: ${gameKey}`);
-                    return safeSendMessage(chatId, "Sorry, something went wrong with that game confirmation\\.", {parse_mode: 'MarkdownV2'});
-            }
-        }
-
-        // Handle 'play_again' action
-        else if (action === 'play_again') {
+            switch (gameKey) {
+                case 'coinflip': return handleCoinflipGame(userId, chatId, messageId, betAmountLamports, betChoice1);
+                case 'race': return handleRaceGame(userId, chatId, messageId, betAmountLamports, parseInt(betChoice1, 10));
+                case 'slots': return handleSlotsGame(userId, chatId, messageId, betAmountLamports);
+                case 'roulette': return handleRouletteGame(userId, chatId, messageId, betAmountLamports, betChoice1, betChoice2);
+                case 'war': return handleWarGame(userId, chatId, messageId, betAmountLamports);
+                case 'crash': return handleCrashGame(userId, chatId, messageId, betAmountLamports);
+                case 'blackjack': return handleBlackjackGame(userId, chatId, messageId, betAmountLamports, 'start_game');
+                default:
+                    console.error(`${logPrefix} Unknown gameKey in confirm_bet: ${gameKey}`);
+                    return safeSendMessage(chatId, "Sorry, something went wrong with that game confirmation\\.", {parse_mode: 'MarkdownV2'});
+            }
+        }
+        else if (action === 'play_again') {
             const gameKey = params[0];
             const lastBetAmountLamportsStr = params[1];
             console.log(`${logPrefix} Play Again for ${gameKey}, last bet: ${lastBetAmountLamportsStr}`);
 
             if (GAME_CONFIG[gameKey] && lastBetAmountLamportsStr) {
-                 // *** FIX: Play Again for BJ/Crash/Multi-step games should show selection again ***
                 if (gameKey === 'coinflip' || gameKey === 'race' || gameKey === 'roulette') {
-                     // For multi-step games, call proceedToGameStep to show the first choice again
-                     let initialStepCallbackPrefix = '';
+                    let initialStepCallbackPrefix = '';
                     if (gameKey === 'coinflip') initialStepCallbackPrefix = 'coinflip_select_side';
                     else if (gameKey === 'race') initialStepCallbackPrefix = 'race_select_horse';
                     else if (gameKey === 'roulette') initialStepCallbackPrefix = 'roulette_select_bet_type';
-                    // Use the existing messageId to edit the result message into the next step prompt
                     await proceedToGameStep(userId, chatId, messageId, gameKey, `${initialStepCallbackPrefix}:${lastBetAmountLamportsStr}`);
                 } else if (gameKey === 'blackjack' || gameKey === 'crash') {
-                     // These games should show bet selection again, passing the last bet amount
-                     console.log(`${logPrefix} Play Again for ${gameKey} routing to showBetAmountButtons.`);
-                     // Use the existing message context (originalMessage) to edit into the bet selection screen
-                     await showBetAmountButtons(originalMessage, gameKey, lastBetAmountLamportsStr, userId);
+                    console.log(`${logPrefix} Play Again for ${gameKey} routing to showBetAmountButtons.`);
+                    await showBetAmountButtons(originalMessage, gameKey, lastBetAmountLamportsStr, userId);
                 } else {
-                    // Games like Slots, War can directly confirm the bet again
-                    // Simulate a confirm_bet callback to re-trigger the game handler
                     const fakeCallbackData = `confirm_bet:${gameKey}:${lastBetAmountLamportsStr}`;
-                    // Construct a minimal callback object to pass to the handler
-                    // Ensure all necessary properties are present for handleCallbackQuery
                     const fakeCallbackQuery = {
-                        id: 'fakecb-pa-' + Date.now(), // Unique ID
-                        from: callbackQuery.from, // User info
-                        message: { // Message context (use original message)
+                        id: 'fakecb-pa-' + Date.now(), 
+                        from: callbackQuery.from, 
+                        message: { 
                             chat: callbackQuery.message.chat,
                             message_id: messageId,
-                            date: Math.floor(Date.now() / 1000), // Add date field
-                            text: callbackQuery.message.text || "" // Include original text if available
+                            date: Math.floor(Date.now() / 1000), 
+                            text: callbackQuery.message.text || "" 
                         },
-                        data: fakeCallbackData, // The action data
-                        chat_instance: callbackQuery.chat_instance || String(chatId) // Add chat_instance
+                        data: fakeCallbackData, 
+                        chat_instance: callbackQuery.chat_instance || String(chatId) 
                     };
-                    callbackQueue.add(() => handleCallbackQuery(fakeCallbackQuery)); // Add to queue
+                    callbackQueue.add(() => handleCallbackQuery(fakeCallbackQuery)); 
                 }
             } else {
-                bot.editMessageText("⚠️ Error processing 'Play Again' request due to invalid parameters\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
+                await bot.editMessageText("⚠️ Error processing 'Play Again' request due to invalid parameters\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
             }
+        }
+        else if (action === 'custom_amount_select') {
+            const gameKey = params[0];
+            if (GAME_CONFIG[gameKey]) { await handleCustomAmountSelection(userId, chatId, messageId, gameKey); } 
+            else { console.warn(`${logPrefix} Unknown game key for custom amount: ${gameKey}`); await bot.editMessageText(`⚠️ Unknown game for custom amount: \`${escapeMarkdownV2(gameKey)}\``, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); }
+        }
+        else if (action === 'blackjack_action') {
+            const playerChoice = params[0]; const originalBetIdStr = params[1]; const originalBetId = parseInt(originalBetIdStr, 10);
+            if (!isNaN(originalBetId) && (playerChoice === 'hit' || playerChoice === 'stand')) {
+                const gameState = userStateCache.get(userId);
+                if (gameState && gameState.action === 'awaiting_blackjack_action' && gameState.betId === originalBetId) {
+                    console.log(`${logPrefix} Blackjack action: ${playerChoice} for Bet ID ${originalBetId}`);
+                    return handleBlackjackGame(userId, chatId, messageId, BigInt(gameState.betAmountLamports), playerChoice, gameState);
+                } else {
+                    console.warn(`${logPrefix} Blackjack state mismatch or not found for action ${playerChoice}, Bet ID ${originalBetId}. State:`, gameState);
+                    await bot.editMessageText("⚠️ Blackjack game session expired or invalid\\. Please start a new game\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
+                }
+            } else { console.error(`${logPrefix} Invalid Bet ID or action received for blackjack_action: ${data}`); await bot.editMessageText("⚠️ Error processing Blackjack action due to invalid data\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); }
+        }
+        else if (action === 'cash_out_crash') {
+            const originalBetIdStr = params[0]; const originalBetId = parseInt(originalBetIdStr, 10); const gameState = userStateCache.get(userId);
+            if (!isNaN(originalBetId) && gameState && gameState.action === 'awaiting_crash_cashout' && gameState.betId === originalBetId) {
+                clearUserState(userId); 
+                const cashedOutAtMultiplier = parseFloat(gameState.currentMultiplier.toFixed(2)); const betAmountN = BigInt(gameState.betAmountLamports);
+                console.log(`${logPrefix} User initiated cash out for Crash Bet ID ${originalBetId} at ${cashedOutAtMultiplier}x.`);
+                let clientCashout = null;
+                try {
+                    clientCashout = await pool.connect(); await clientCashout.query('BEGIN');
+                    const grossWinnings = BigInt(Math.floor(Number(betAmountN) * cashedOutAtMultiplier));
+                    const profitBeforeEdge = grossWinnings - betAmountN;
+                    const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - GAME_CONFIG.crash.houseEdge))) : 0n;
+                    const payoutAmountToCredit = betAmountN + netProfit; 
+                    const balanceUpdateResult = await updateUserBalanceAndLedger(clientCashout, userId, payoutAmountToCredit, 'crash_cashout', { betId: originalBetId });
+                    if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Cashout): ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}`); }
+                    const finalUserBalance = balanceUpdateResult.newBalance;
+                    await updateBetStatus(clientCashout, originalBetId, 'completed_win', payoutAmountToCredit);
+                    await clientCashout.query('COMMIT');
+                    const cashoutSuccessMsg = `💸 *Cashed Out at ${escapeMarkdownV2(cashedOutAtMultiplier.toFixed(2))}x\\!* 💸\nOriginal Bet: ${escapeMarkdownV2(formatSol(betAmountN))} SOL\nYou won: ${escapeMarkdownV2(formatSol(netProfit))} SOL\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
+                    await bot.editMessageText(cashoutSuccessMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:crash:${betAmountN}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } }).catch(e => {});
+                } catch (dbError) {
+                    if (clientCashout) await clientCashout.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Cashout DB Rollback failed:`, rbErr)); console.error(`${logPrefix} DB Error processing cashout for Bet ID ${originalBetId}:`, dbError);
+                    await bot.editMessageText(`⚠️ Database error processing cashout for Bet ID ${originalBetId}: ${escapeMarkdownV2(dbError.message)}\\. Please contact support if balance is incorrect\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:crash:${gameState.betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } }).catch(e => {});
+                } finally { if (clientCashout) clientCashout.release(); }
+            } else {
+                console.warn(`${logPrefix} Crash state mismatch or not found for cash_out_crash, Bet ID ${originalBetId}. Game might have already ended. State:`, gameState);
+                await bot.editMessageText("⚠️ Too late to cash out or game already ended\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:crash:${gameState?.betAmountLamports || GAME_CONFIG.crash.minBetLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } });
+            }
+        }
+        else if (action === 'quick_deposit') { 
+            console.log(`${logPrefix} Handling 'quick_deposit' action.`); 
+            await handleDepositCommand(originalMessage, [], userId); 
         }
+        // --- UPDATED SECTION FOR WITHDRAWAL CONFIRMATION ---
+        else if (action === 'process_withdrawal_confirm') { 
+            const userConfirmation = params[0]; // 'yes' or 'no'
+            const priorState = userStateCache.get(userId);
 
-        // Handle 'custom_amount_select' action
-        else if (action === 'custom_amount_select') {
-            const gameKey = params[0];
-            if (GAME_CONFIG[gameKey]) { await handleCustomAmountSelection(userId, chatId, messageId, gameKey); } // Defined in Part 5b
-            else { console.warn(`${logPrefix} Unknown game key for custom amount: ${gameKey}`); bot.editMessageText(`⚠️ Unknown game for custom amount: \`${escapeMarkdownV2(gameKey)}\``, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); }
+            if (!priorState || priorState.state !== 'awaiting_withdrawal_confirmation' || !priorState.data) {
+                console.warn(`${logPrefix} No valid 'awaiting_withdrawal_confirmation' state found for user ${userId} or state data missing. Prior state:`, priorState);
+                await bot.editMessageText("⚠️ Your withdrawal session seems to have expired or is invalid\\. Please start over by using the /withdraw command or Wallet menu\\.", { 
+                    chat_id: chatId, 
+                    message_id: messageId, 
+                    parse_mode: 'MarkdownV2', 
+                    reply_markup: { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] } 
+                }).catch(async e => { // Make async for safeSendMessage
+                    console.warn(`${logPrefix} Failed to edit expired withdrawal session message: ${e.message}`);
+                    await safeSendMessage(chatId, "⚠️ Your withdrawal session seems to have expired or is invalid\\. Please start over by using the /withdraw command or Wallet menu\\.", {
+                        parse_mode: 'MarkdownV2',
+                        reply_markup: { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] } 
+                    });
+                });
+                clearUserState(userId);
+                return;
+            }
+
+            const { linkedWallet, amountLamportsStr } = priorState.data; 
+            clearUserState(userId); 
+
+            if (userConfirmation === 'yes') {
+                console.log(`${logPrefix} User confirmed withdrawal via 'process_withdrawal_confirm:yes'. Wallet: ${linkedWallet}, Amount: ${amountLamportsStr}`);
+                // Call the NEWLY RENAMED handleWithdrawalConfirmation function (previously executeWithdrawalLogic)
+                // Pass messageId (the ID of the Yes/No confirmation message) to be edited by the next steps
+                await handleWithdrawalConfirmation(userId, chatId, messageId, linkedWallet, amountLamportsStr);
+            } else { // User clicked 'no' (Cancel)
+                console.log(`${logPrefix} User cancelled withdrawal confirmation.`);
+                await bot.editMessageText("🚫 Withdrawal cancelled\\.", { 
+                    chat_id: chatId, 
+                    message_id: messageId, 
+                    parse_mode: 'MarkdownV2', 
+                    reply_markup: { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] }
+                });
+            }
+        }
+        // --- END OF UPDATED SECTION ---
+        else if (action === 'show_help_section') { 
+            const section = params[0]; 
+            await handleHelpCommand(originalMessage, [section], userId); 
         }
-
-        // Handle 'blackjack_action' (Hit/Stand)
-        else if (action === 'blackjack_action') {
-            const playerChoice = params[0]; const originalBetIdStr = params[1]; const originalBetId = parseInt(originalBetIdStr, 10);
-            if (!isNaN(originalBetId) && (playerChoice === 'hit' || playerChoice === 'stand')) {
-                const gameState = userStateCache.get(userId);
-                // Verify state matches the action and bet ID
-                if (gameState && gameState.action === 'awaiting_blackjack_action' && gameState.betId === originalBetId) {
-                    console.log(`${logPrefix} Blackjack action: ${playerChoice} for Bet ID ${originalBetId}`);
-                    // Call the main blackjack handler to process the action
-                    return handleBlackjackGame(userId, chatId, messageId, BigInt(gameState.betAmountLamports), playerChoice, gameState);
-                } else {
-                    console.warn(`${logPrefix} Blackjack state mismatch or not found for action ${playerChoice}, Bet ID ${originalBetId}. State:`, gameState);
-                    bot.editMessageText("⚠️ Blackjack game session expired or invalid\\. Please start a new game\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
-                }
-            } else { console.error(`${logPrefix} Invalid Bet ID or action received for blackjack_action: ${data}`); bot.editMessageText("⚠️ Error processing Blackjack action due to invalid data\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); }
+        else if (action === 'leaderboard_nav') { 
+            await handleLeaderboardsCommand(originalMessage, [data], userId); 
         }
-
-        // Handle 'cash_out_crash' action
-        else if (action === 'cash_out_crash') {
-            const originalBetIdStr = params[0]; const originalBetId = parseInt(originalBetIdStr, 10); const gameState = userStateCache.get(userId);
-            // Verify state matches action and bet ID
-            if (!isNaN(originalBetId) && gameState && gameState.action === 'awaiting_crash_cashout' && gameState.betId === originalBetId) {
-                clearUserState(userId); // Clear state immediately on successful cashout action
-                const cashedOutAtMultiplier = parseFloat(gameState.currentMultiplier.toFixed(2)); const betAmountN = BigInt(gameState.betAmountLamports);
-                console.log(`${logPrefix} User initiated cash out for Crash Bet ID ${originalBetId} at ${cashedOutAtMultiplier}x.`);
-                let clientCashout = null;
-                try {
-                    clientCashout = await pool.connect(); await clientCashout.query('BEGIN');
-                    // Calculate payout
-                    const grossWinnings = BigInt(Math.floor(Number(betAmountN) * cashedOutAtMultiplier));
-                    const profitBeforeEdge = grossWinnings - betAmountN;
-                    const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - GAME_CONFIG.crash.houseEdge))) : 0n;
-                    const payoutAmountToCredit = betAmountN + netProfit; // Return stake + net profit
-                    // Update balance and ledger
-                    const balanceUpdateResult = await updateUserBalanceAndLedger(clientCashout, userId, payoutAmountToCredit, 'crash_cashout', { betId: originalBetId });
-                    if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Cashout): ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}`); }
-                    const finalUserBalance = balanceUpdateResult.newBalance;
-                    // Update bet status
-                    await updateBetStatus(clientCashout, originalBetId, 'completed_win', payoutAmountToCredit);
-                    await clientCashout.query('COMMIT');
-                    // Send success message
-                    const cashoutSuccessMsg = `💸 *Cashed Out at ${escapeMarkdownV2(cashedOutAtMultiplier.toFixed(2))}x\\!* 💸\nOriginal Bet: ${escapeMarkdownV2(formatSol(betAmountN))} SOL\nYou won: ${escapeMarkdownV2(formatSol(netProfit))} SOL\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
-                    bot.editMessageText(cashoutSuccessMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:crash:${betAmountN}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } }).catch(e => {});
-                } catch (dbError) {
-                    if (clientCashout) await clientCashout.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Cashout DB Rollback failed:`, rbErr)); console.error(`${logPrefix} DB Error processing cashout for Bet ID ${originalBetId}:`, dbError);
-                    bot.editMessageText(`⚠️ Database error processing cashout for Bet ID ${originalBetId}: ${escapeMarkdownV2(dbError.message)}\\. Please contact support if balance is incorrect\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:crash:${gameState.betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } }).catch(e => {});
-                } finally { if (clientCashout) clientCashout.release(); }
-            } else {
-                // State mismatch or game already ended
-                console.warn(`${logPrefix} Crash state mismatch or not found for cash_out_crash, Bet ID ${originalBetId}. Game might have already ended. State:`, gameState);
-                // Inform user cashout was too late or game ended
-                bot.editMessageText("⚠️ Too late to cash out or game already ended\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:crash:${gameState?.betAmountLamports || GAME_CONFIG.crash.minBetLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } });
-            }
-        }
-
-        // Handle 'quick_deposit' action
-        else if (action === 'quick_deposit') { console.log(`${logPrefix} Handling 'quick_deposit' action.`); await handleDepositCommand(originalMessage, [], userId); } // handleDepositCommand defined in Part 5b
-
-        // Handle withdrawal confirmation actions
-        else if (action === 'confirm_withdrawal') { const recipientAddress = params[0]; const amountLamportsStr = params[1]; await handleWithdrawalConfirmation(userId, chatId, messageId, recipientAddress, amountLamportsStr, true); } // handleWithdrawalConfirmation defined in Part 5b
-        else if (action === 'cancel_withdrawal') { console.log(`${logPrefix} Withdrawal cancelled by user.`); bot.editMessageText("🚫 Withdrawal cancelled\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]] }}); }
-
-        // Handle Help section navigation
-        else if (action === 'show_help_section') { const section = params[0]; await handleHelpCommand(originalMessage, [section], userId); } // handleHelpCommand defined in Part 5b
-
-        // Handle Leaderboard navigation
-        else if (action === 'leaderboard_nav') { const type = params[0]; const page = parseInt(params[1] || '0', 10); await displayLeaderboard(chatId, messageId, userId, type, page, true); } // displayLeaderboard defined in Part 5b
-
-        // Default case for unhandled actions
-        else {
-            console.warn(`${logPrefix} Potentially Unhandled callback query action: '${action}' with params: ${params.join(',')}. Data: '${data}'`);
-            // Optionally inform the user or just ignore
-            // safeSendMessage(chatId, `Action '${escapeMarkdownV2(action)}' not recognized.`, {parse_mode: 'MarkdownV2'});
-        }
-
-    } catch (error) {
-        // Generic error handler for the entire callback processing
-        console.error(`${logPrefix} Error processing callback query: ${error.message}\nStack: ${error.stack}`);
-        await safeSendMessage(chatId, `⚠️ Error processing your request: ${escapeMarkdownV2(error.message)}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' });
-    }
+        else {
+            console.warn(`${logPrefix} Potentially Unhandled callback query action: '${action}' with params: ${params.join(',')}. Data: '${data}'`);
+        }
+    } catch (error) {
+        console.error(`${logPrefix} Error processing callback query: ${error.message}\nStack: ${error.stack}`);
+        await safeSendMessage(chatId, `⚠️ Error processing your request: ${escapeMarkdownV2(error.message)}\\. Please try again\\.`, { parse_mode: 'MarkdownV2' });
+    }
 }
-// --- End Main Callback Query Handler ---
+// --- End Main Callback Query Handler ---// --- End Main Callback Query Handler ---
 
 
 // --- Universal Game Step Processor (Intermediate Steps) ---
@@ -5102,91 +5083,97 @@ async function handleWithdrawalAmountInput(msg, currentState) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
     const textAmount = msg.text ? msg.text.trim() : '';
-    // Ensure state consistency
+    
     if (!currentState || !currentState.data || !currentState.data.linkedWallet || !currentState.data.breadcrumb || !currentState.data.currentBalance || (currentState.state !== 'awaiting_withdrawal_amount' && currentState.action !== 'awaiting_withdrawal_amount')) {
         console.error(`[WithdrawAmountInput User ${userId}] Invalid state data received:`, currentState);
         clearUserState(userId);
-        safeSendMessage(chatId, "An internal error occurred processing your amount input \\(context missing\\)\\. Please start withdrawal again\\.", { parse_mode: 'MarkdownV2'}); // Escaped () .
+        await safeSendMessage(chatId, "An internal error occurred processing your amount input \\(context missing\\)\\. Please start withdrawal again\\.", { parse_mode: 'MarkdownV2'});
         return;
     }
     const { linkedWallet, breadcrumb, originalMessageId, currentBalance: currentBalanceStr } = currentState.data;
     const currentBalance = BigInt(currentBalanceStr);
     const logPrefix = `[WithdrawAmountInput User ${userId}]`;
 
-    // Delete prompt and user input
-    if (originalMessageId && originalMessageId !== msg.message_id) { bot.deleteMessage(chatId, originalMessageId).catch(()=>{}); }
-    bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
+    if (originalMessageId && originalMessageId !== msg.message_id) {
+        await bot.deleteMessage(chatId, originalMessageId).catch(e => console.warn(`${logPrefix} Non-critical: Failed to delete prompt message ${originalMessageId}: ${e.message}`));
+    }
+    await bot.deleteMessage(chatId, msg.message_id).catch(e => console.warn(`${logPrefix} Non-critical: Failed to delete user input message ${msg.message_id}: ${e.message}`));
 
-    clearUserState(userId); // Clear state now
+    clearUserState(userId); // Clear the 'awaiting_withdrawal_amount' state
 
     let amountSOL = 0;
     try {
         amountSOL = parseFloat(textAmount);
-        if (isNaN(amountSOL) || amountSOL <= 0) throw new Error("Invalid number format or non\\-positive amount\\."); // Escaped . -
+        if (isNaN(amountSOL) || amountSOL <= 0) throw new Error("Invalid number format or non\\-positive amount\\.");
 
-        const amountLamports = BigInt(Math.floor(amountSOL * Number(LAMPORTS_PER_SOL))); // LAMPORTS_PER_SOL from Part 1
-        const feeLamports = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS || '5000'); // From Part 1 constants
+        const amountLamports = BigInt(Math.floor(amountSOL * Number(LAMPORTS_PER_SOL)));
+        const feeLamports = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS || '5000');
         const totalDeductionLamports = amountLamports + feeLamports;
 
-        // Validate against minimum withdrawal amount
-        if (amountLamports < MIN_WITHDRAWAL_LAMPORTS) { // From Part 1 constants
-            // MarkdownV2 Safety: Escape everything
-            const minErrorText = `${escapeMarkdownV2(breadcrumb)}\nAmount ${escapeMarkdownV2(formatSol(amountLamports))} SOL is less than the minimum withdrawal of ${escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS))} SOL\\. Please try again or /cancel\\.`; // Escaped .
-            safeSendMessage(chatId, minErrorText, {
+        if (amountLamports < MIN_WITHDRAWAL_LAMPORTS) {
+            const minErrorText = `${escapeMarkdownV2(breadcrumb)}\nAmount ${escapeMarkdownV2(formatSol(amountLamports))} SOL is less than the minimum withdrawal of ${escapeMarkdownV2(formatSol(MIN_WITHDRAWAL_LAMPORTS))} SOL\\. Please try again or /cancel\\.`;
+            await safeSendMessage(chatId, minErrorText, {
                 parse_mode: 'MarkdownV2',
-                // Add Emoji
-                // Send as new message, provide option to go back to Wallet menu
                 reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]] }
             });
             return;
         }
 
-        // Validate against user's current balance
         if (currentBalance < totalDeductionLamports) {
-            // MarkdownV2 Safety: Escape everything
-            const insufficientText = `${escapeMarkdownV2(breadcrumb)}\nInsufficient balance for withdrawal of ${escapeMarkdownV2(formatSol(amountLamports))} SOL \\(Total needed including fee: ${escapeMarkdownV2(formatSol(totalDeductionLamports))} SOL\\)\\. Your balance: ${escapeMarkdownV2(formatSol(currentBalance))} SOL\\. The fee is ${escapeMarkdownV2(formatSol(feeLamports))} SOL\\. Or /cancel\\.`; // Escaped . ()
-            safeSendMessage(chatId, insufficientText, {
+            const insufficientText = `${escapeMarkdownV2(breadcrumb)}\nInsufficient balance for withdrawal of ${escapeMarkdownV2(formatSol(amountLamports))} SOL \\(Total needed including fee: ${escapeMarkdownV2(formatSol(totalDeductionLamports))} SOL\\)\\. Your balance: ${escapeMarkdownV2(formatSol(currentBalance))} SOL\\. The fee is ${escapeMarkdownV2(formatSol(feeLamports))} SOL\\. Or /cancel\\.`;
+            await safeSendMessage(chatId, insufficientText, {
                 parse_mode: 'MarkdownV2',
-                // Add Emoji
-                // Send as new message, provide option to go back to Wallet menu
                 reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]] }
             });
             return;
         }
 
-        // Amount valid and balance sufficient, show confirmation button
         const amountSOLFormatted = escapeMarkdownV2(formatSol(amountLamports));
         const feeSOLFormatted = escapeMarkdownV2(formatSol(feeLamports));
         const totalSOLFormatted = escapeMarkdownV2(formatSol(totalDeductionLamports));
         const addressFormatted = escapeMarkdownV2(linkedWallet);
-        const finalBreadcrumb = `${escapeMarkdownV2(breadcrumb)} \\> Confirm ${amountSOLFormatted} SOL`;
+        const finalConfirmationBreadcrumb = `${escapeMarkdownV2(breadcrumb)} \\> Confirm ${amountSOLFormatted} SOL`; // Escaped >
 
-        // MarkdownV2 Safety: Escape everything
         const confirmationText = `*Confirm Withdrawal*\n\n` +
-                                 `${finalBreadcrumb}\n` +
+                                 `${finalConfirmationBreadcrumb}\n` + 
                                  `Amount: \`${amountSOLFormatted} SOL\`\n` +
                                  `Fee: \`${feeSOLFormatted} SOL\`\n` +
                                  `Total Deducted: \`${totalSOLFormatted} SOL\`\n` +
                                  `Recipient: \`${addressFormatted}\`\n\n` +
                                  `Proceed?`;
-
-        // Pass necessary info to the callback handler
-        const callbackData = `confirm_withdrawal:${linkedWallet}:${amountLamports.toString()}`;
-        const inlineKeyboard = [ // Add Emojis
-            [{ text: '✅ Yes, Confirm Withdrawal', callback_data: callbackData }],
-            [{ text: '❌ Cancel', callback_data: 'menu:wallet' }] // Go back to wallet menu
+        
+        const inlineKeyboard = [
+            [{ text: '✅ Yes, Confirm Withdrawal', callback_data: `process_withdrawal_confirm:yes` }],
+            [{ text: '❌ Cancel', callback_data: `process_withdrawal_confirm:no` }]
         ];
-        // Send confirmation as a new message
-        safeSendMessage(chatId, confirmationText, { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: inlineKeyboard } });
+
+        const sentConfirmationMsg = await safeSendMessage(chatId, confirmationText, { 
+            parse_mode: 'MarkdownV2', 
+            reply_markup: { inline_keyboard: inlineKeyboard } 
+        });
+
+        if (sentConfirmationMsg && sentConfirmationMsg.message_id) {
+            userStateCache.set(userId, {
+                state: 'awaiting_withdrawal_confirmation', 
+                chatId: String(chatId),
+                messageId: sentConfirmationMsg.message_id, 
+                data: {
+                    linkedWallet: linkedWallet,
+                    amountLamportsStr: amountLamports.toString(),
+                },
+                timestamp: Date.now()
+            });
+            console.log(`${logPrefix} Sent withdrawal confirmation. User state set to 'awaiting_withdrawal_confirmation'.`);
+        } else {
+            console.error(`${logPrefix} Failed to send withdrawal confirmation message. Cannot set 'awaiting_withdrawal_confirmation' state.`);
+            await safeSendMessage(chatId, "⚠️ Error displaying withdrawal confirmation options. Please try starting the withdrawal again.", {parse_mode: 'MarkdownV2'});
+        }
 
     } catch (e) {
-        console.error(`${logPrefix} Error processing withdrawal amount: ${e.message}`);
-        // MarkdownV2 Safety: Escape text, error message
-        const errorText = `${escapeMarkdownV2(breadcrumb)}\nInvalid amount: "${escapeMarkdownV2(textAmount)}"\\. ${escapeMarkdownV2(e.message)}\\.\nPlease enter a valid withdrawal amount or /cancel\\.`; // Escaped .
-        safeSendMessage(chatId, errorText, {
+        console.error(`${logPrefix} Error processing withdrawal amount: ${e.message}`, e); 
+        const errorText = `${escapeMarkdownV2(breadcrumb)}\nInvalid amount: "${escapeMarkdownV2(textAmount)}"\\. ${escapeMarkdownV2(e.message)}\\.\nPlease enter a valid withdrawal amount or /cancel\\.`;
+        await safeSendMessage(chatId, errorText, {
             parse_mode: 'MarkdownV2',
-            // Add Emoji
-            // Send as new message, provide option to go back to Wallet menu
             reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet', callback_data: 'menu:wallet' }]] }
         });
     }
@@ -5333,95 +5320,102 @@ async function handleRouletteStraightBetSetup(userId, chatId, messageId, gameKey
 }
 
 /**
- * Handles the confirmation (or cancellation) of a withdrawal request.
- * Called from a callback query. Deducts balance *before* queueing payout.
- * @param {string} userId
- * @param {string} chatId
- * @param {number} messageId
- * @param {string} recipientAddress The address to send to.
- * @param {string} amountLamportsStr The amount in lamports as a string.
- * @param {boolean} isConfirmed True if confirmed, false if cancelled.
- */
-async function handleWithdrawalConfirmation(userId, chatId, messageId, recipientAddress, amountLamportsStr, isConfirmed) {
-    const logPrefix = `[WithdrawConfirm User ${userId} Confirm ${isConfirmed}]`;
-    console.log(`${logPrefix} Address: ${recipientAddress}, AmountStr: ${amountLamportsStr}`);
+ * Handles the core withdrawal process AFTER user has clicked "Yes" on the confirmation.
+ * This function is called by handleCallbackQuery from the 'process_withdrawal_confirm:yes' action.
+ * @param {string} userId The user's Telegram ID.
+ * @param {string} chatId The chat ID.
+ * @param {number} confirmationMessageId The ID of the message that had the Yes/No buttons (to be edited).
+ * @param {string} recipientAddress The Solana address to send to.
+ * @param {string} amountLamportsStr The amount in lamports as a string.
+ */
+async function handleWithdrawalConfirmation(userId, chatId, confirmationMessageId, recipientAddress, amountLamportsStr) {
+    const logPrefix = `[HandleWithdrawConfirm User ${userId}]`; // Renamed logPrefix slightly
+    console.log(`${logPrefix} Confirmed. Addr: ${recipientAddress}, AmtStr: ${amountLamportsStr}, ConfirmMsgID: ${confirmationMessageId}`);
 
-    if (!isConfirmed) {
-        // MarkdownV2 Safety: Escape static text
-        await bot.editMessageText("🚫 Withdrawal cancelled by user\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] } }); // Escaped . Add Emoji
-        return;
-    }
+    const backToWalletKeyboard = { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] };
 
-    try {
-        const amountLamports = BigInt(amountLamportsStr);
-        const feeLamports = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS || '5000'); // From Part 1 constants
-        const totalDeductionLamports = amountLamports + feeLamports;
+    try {
+        const amountLamports = BigInt(amountLamportsStr);
+        const feeLamports = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS || '5000');
+        const totalDeductionLamports = amountLamports + feeLamports;
 
-        // Final balance check BEFORE creating DB record and adding to queue
-        const currentBalance = await getUserBalance(userId); // from Part 2
-        if (currentBalance < totalDeductionLamports) {
-            // MarkdownV2 Safety: Escape amounts, fee
-            const insufficientText = `⚠️ Insufficient balance for withdrawal\\. Needed: ${escapeMarkdownV2(formatSol(totalDeductionLamports))} SOL, Have: ${escapeMarkdownV2(formatSol(currentBalance))} SOL\\. Withdrawal cancelled\\.`; // Escaped .
-            return bot.editMessageText(insufficientText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] } }); // Add Emoji
-        }
+        const currentBalance = await getUserBalance(userId);
+        if (currentBalance < totalDeductionLamports) {
+            const insufficientText = `⚠️ Insufficient balance for withdrawal at the time of processing\\. Needed: ${escapeMarkdownV2(formatSol(totalDeductionLamports))} SOL, Have: ${escapeMarkdownV2(formatSol(currentBalance))} SOL\\. Withdrawal cancelled\\.`;
+            if (confirmationMessageId) {
+                await bot.editMessageText(insufficientText, { chat_id: chatId, message_id: confirmationMessageId, parse_mode: 'MarkdownV2', reply_markup: backToWalletKeyboard });
+            } else {
+                await safeSendMessage(chatId, insufficientText, { parse_mode: 'MarkdownV2', reply_markup: backToWalletKeyboard });
+            }
+            return;
+        }
 
-        // Edit message to "Processing..."
-        await bot.editMessageText("⏳ Processing your withdrawal request\\.\\.\\. This may take a moment\\.", { // Escaped . ...
-            chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] }
-        }).catch(e => console.warn(`${logPrefix} Error editing message for processing state: ${e.message}`));
+        if (confirmationMessageId) {
+            await bot.editMessageText("⏳ Processing your withdrawal request\\.\\.\\. This may take a moment\\.", { 
+                chat_id: chatId, message_id: confirmationMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] }
+            }).catch(e => console.warn(`${logPrefix} Non-critical: Error editing message ${confirmationMessageId} to processing state: ${e.message}`));
+        } else {
+            console.warn(`${logPrefix} No confirmationMessageId provided to edit to 'Processing...'. Proceeding without message edit.`);
+        }
 
-        // Create withdrawal record in DB (status 'pending') BEFORE deducting balance
-        const withdrawalRequest = await createWithdrawalRequest(userId, amountLamports, feeLamports, recipientAddress); // from Part 2
-        if (!withdrawalRequest.success || !withdrawalRequest.withdrawalId) {
-            // MarkdownV2 Safety: Escape error
-            throw new Error(`Failed to create withdrawal record: ${escapeMarkdownV2(withdrawalRequest.error || 'DB error')}`);
-        }
-        const withdrawalId = withdrawalRequest.withdrawalId;
+        const withdrawalRequest = await createWithdrawalRequest(userId, amountLamports, feeLamports, recipientAddress);
+        if (!withdrawalRequest.success || !withdrawalRequest.withdrawalId) {
+            throw new Error(`Failed to create withdrawal record: ${escapeMarkdownV2(withdrawalRequest.error || 'DB error')}`);
+        }
+        const withdrawalId = withdrawalRequest.withdrawalId;
 
-        // Now deduct balance from user's internal account within a transaction
-        let deductClient = null;
-        try {
-            deductClient = await pool.connect();
-            await deductClient.query('BEGIN');
-            const balanceUpdateResult = await updateUserBalanceAndLedger(
-                deductClient, userId, -totalDeductionLamports, // Deduct amount + fee
-                'withdrawal_initiated', { withdrawalId }, `Withdrawal ID ${withdrawalId} initiated`
-            );
-            if (!balanceUpdateResult.success) {
-                await deductClient.query('ROLLBACK'); // Rollback deduction
-                // Also mark the withdrawal request as failed in DB since balance couldn't be deducted
-                await updateWithdrawalStatus(withdrawalId, 'failed', null, null, `Failed balance deduction: ${balanceUpdateResult.error}`); // from Part 2
-                throw new Error(`Failed to deduct balance for withdrawal: ${escapeMarkdownV2(balanceUpdateResult.error || 'Balance error')}`);
-            }
-            await deductClient.query('COMMIT'); // Commit deduction
-        } catch (deductError) {
-            if (deductClient) await deductClient.query('ROLLBACK').catch(()=>{}); // Ensure rollback on error
-            // Mark withdrawal failed if deduction failed
-            await updateWithdrawalStatus(withdrawalId, 'failed', null, null, `Failed balance deduction: ${deductError.message}`);
-            throw deductError; // Re-throw to outer catch
-        } finally {
-            if (deductClient) deductClient.release();
-        }
+        let deductClient = null;
+        try {
+            deductClient = await pool.connect();
+            await deductClient.query('BEGIN');
+            const balanceUpdateResult = await updateUserBalanceAndLedger(
+                deductClient, userId, -totalDeductionLamports,
+                'withdrawal_initiated', { withdrawalId }, `Withdrawal ID ${withdrawalId} initiated`
+            );
+            if (!balanceUpdateResult.success) {
+                await deductClient.query('ROLLBACK'); 
+                await updateWithdrawalStatus(withdrawalId, 'failed', null, null, `Failed balance deduction: ${balanceUpdateResult.error}`);
+                throw new Error(`Failed to deduct balance for withdrawal: ${escapeMarkdownV2(balanceUpdateResult.error || 'Balance error')}`);
+            }
+            await deductClient.query('COMMIT'); 
+        } catch (deductError) {
+            if (deductClient) await deductClient.query('ROLLBACK').catch(()=>{}); 
+            await updateWithdrawalStatus(withdrawalId, 'failed', null, null, `Failed balance deduction in confirm: ${deductError.message}`);
+            throw deductError; 
+        } finally {
+            if (deductClient) deductClient.release();
+        }
 
-        // Add job to payout queue ONLY AFTER successful deduction
-        await addPayoutJob({ type: 'payout_withdrawal', withdrawalId: withdrawalId, userId }); // addPayoutJob from Part 6
+        await addPayoutJob({ type: 'payout_withdrawal', withdrawalId: withdrawalId, userId });
 
-        console.log(`${logPrefix} Withdrawal ID ${withdrawalId} for ${formatSol(amountLamports)} SOL to ${recipientAddress} queued for processing.`);
-        // MarkdownV2 Safety: Escape amount, address
-        const queuedMessage = `✅ Your withdrawal request for ${escapeMarkdownV2(formatSol(amountLamports))} SOL to \`${escapeMarkdownV2(recipientAddress)}\` has been queued and will be processed shortly\\.\nYou will receive another message upon completion\\.`; // Escaped .
-        // Update the message again (or send new if edit failed)
-        bot.editMessageText(queuedMessage, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] }}) // Add Emoji
-            .catch(e => safeSendMessage(chatId, queuedMessage, {parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] }})); // Add Emoji
+        console.log(`${logPrefix} Withdrawal ID ${withdrawalId} for ${formatSol(amountLamports)} SOL to ${recipientAddress} queued for processing.`);
+        const queuedMessage = `✅ Your withdrawal request for ${escapeMarkdownV2(formatSol(amountLamports))} SOL to \`${escapeMarkdownV2(recipientAddress)}\` has been queued and will be processed shortly\\.\nYou will receive another message upon completion\\.`;
+        
+        if (confirmationMessageId) {
+            await bot.editMessageText(queuedMessage, { chat_id: chatId, message_id: confirmationMessageId, parse_mode: 'MarkdownV2', reply_markup: backToWalletKeyboard })
+               .catch(async e => {
+                   console.warn(`${logPrefix} Failed to edit message ${confirmationMessageId} to 'queued', sending new. Error: ${e.message}`);
+                   await safeSendMessage(chatId, queuedMessage, {parse_mode: 'MarkdownV2', reply_markup: backToWalletKeyboard });
+               });
+        } else {
+            await safeSendMessage(chatId, queuedMessage, {parse_mode: 'MarkdownV2', reply_markup: backToWalletKeyboard });
+        }
 
-    } catch (error) {
-        console.error(`${logPrefix} Error during withdrawal confirmation: ${error.message}`);
-        // MarkdownV2 Safety: Escape error message
-        const errorMsg = `❌ Error processing withdrawal confirmation: ${escapeMarkdownV2(error.message)}\\. Please try again\\.`; // Escaped .
-        bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] }}) // Add Emoji
-            .catch(e => safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] }})); // Add Emoji
-    }
+    } catch (error) {
+        console.error(`${logPrefix} Error during withdrawal confirmation: ${error.message}`, error); 
+        const errorMsgText = `❌ Error processing your withdrawal: ${escapeMarkdownV2(error.message)}\\. Please try again or contact support if the issue persists\\.`;
+        
+        if (confirmationMessageId) {
+            await bot.editMessageText(errorMsgText, { chat_id: chatId, message_id: confirmationMessageId, parse_mode: 'MarkdownV2', reply_markup: backToWalletKeyboard })
+               .catch(async e => {
+                   console.warn(`${logPrefix} Failed to edit message ${confirmationMessageId} with final error, sending new. Error: ${e.message}`);
+                   await safeSendMessage(chatId, errorMsgText, {parse_mode: 'MarkdownV2', reply_markup: backToWalletKeyboard });
+               });
+        } else {
+            await safeSendMessage(chatId, errorMsgText, {parse_mode: 'MarkdownV2', reply_markup: backToWalletKeyboard });
+        }
+    }
 }
-
 
 // --- General Command Handlers (/start, /help, /wallet, etc.) ---
 // All command handlers accept msgOrCbMsg, args, and optional correctUserIdFromCb
