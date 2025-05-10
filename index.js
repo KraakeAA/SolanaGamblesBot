@@ -4009,7 +4009,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutAmountForDB);
         await client.query('COMMIT');
 
-        // --- ANIMATION - SIMPLER "MOVING EMOJI" APPROACH ---
+        // --- ANIMATION - "SIMPLEST APPROACH FOR HITTING THE LINE" ---
         let initialRaceText = `🏁 *Horse Race Starting\\!* 🏇\n\nYour Pick: ${chosenHorseConfig.emoji} *${escapeMarkdownV2(chosenHorseConfig.name)}*\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n*Contenders:*\n`;
         RACE_HORSES.forEach(h => initialRaceText += `${h.emoji} ${escapeMarkdownV2(h.name)} \\(${escapeMarkdownV2(h.payoutMultiplier.toFixed(1))}x\\)\n`);
         initialRaceText += "\nGet Ready\\!\\! 🚦";
@@ -4018,10 +4018,11 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         await sleep(2000);
 
         let raceHeader = `🏁 *Race in Progress\\!* 💨\n\n`;
-        const VIRTUAL_TRACK_LENGTH = 50;    // Internal units for race completion
-        const VISUAL_TRACK_SLOTS = 12;      // Number of "slots" the horse emoji can appear in
-        const FINISH_FLAG_STATIC = '🏁';    // Static flag shown after each horse's track
-        const TROPHY_AT_FINISH_SLOT = '🏆'; // Replaces horse emoji when finished
+        const VIRTUAL_TRACK_LENGTH = 50;
+        const VISUAL_TRACK_SLOTS = 15; // Number of character slots for the track bar itself
+        const TROPHY_REPLACES_HORSE = '🏆';
+        const TRACK_PLACEHOLDER_CHAR = ' '; // What an empty slot in the track bar looks like
+        const HORSE_MOVING_CHAR = '🏇';     // The marker for a running horse
 
         let positions = new Array(RACE_HORSES.length).fill(0);
         let lastAnimationContent = "";
@@ -4069,23 +4070,26 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
                 let rawHorseName = RACE_HORSES[i].name.substring(0, 10).padEnd(10, ' ');
                 let displayName = isUsersHorse ? `*${escapeMarkdownV2(rawHorseName.trim())}* 👉` : escapeMarkdownV2(rawHorseName);
 
-                let trackSlots = Array(VISUAL_TRACK_SLOTS).fill(' '); // Fill with spaces
+                let trackVisualSlots = Array(VISUAL_TRACK_SLOTS).fill(TRACK_PLACEHOLDER_CHAR);
 
-                let visualHorseSlot = Math.floor((positions[i] / VIRTUAL_TRACK_LENGTH) * (VISUAL_TRACK_SLOTS -1) ); // Scale to fit before last slot
-                visualHorseSlot = Math.min(visualHorseSlot, VISUAL_TRACK_SLOTS - 1);
-                visualHorseSlot = Math.max(0, visualHorseSlot);
+                let visualMarkerSlot = Math.floor((positions[i] / VIRTUAL_TRACK_LENGTH) * VISUAL_TRACK_SLOTS);
+                visualMarkerSlot = Math.min(visualMarkerSlot, VISUAL_TRACK_SLOTS - 1);
+                visualMarkerSlot = Math.max(0, visualMarkerSlot);
 
                 if (positions[i] >= VIRTUAL_TRACK_LENGTH) {
-                    // Horse has finished - place trophy at the end of the track slots
-                    trackSlots[VISUAL_TRACK_SLOTS - 1] = TROPHY_AT_FINISH_SLOT;
+                    // Horse has FINISHED VIRTUALLY: Place trophy at the very end of the visual track slots.
+                    // Fill all slots before it with placeholder to show the track is "empty" behind the trophy.
+                    for(let k=0; k < VISUAL_TRACK_SLOTS - 1; k++) trackVisualSlots[k] = TRACK_PLACEHOLDER_CHAR;
+                    trackVisualSlots[VISUAL_TRACK_SLOTS - 1] = TROPHY_REPLACES_HORSE;
                 } else {
-                    // Horse is racing - place its emoji at its current position
-                    trackSlots[visualHorseSlot] = RACE_HORSES[i].emoji;
+                    // Horse is RACING: Place the moving marker at its current visual slot.
+                    // Other slots remain as TRACK_PLACEHOLDER_CHAR.
+                    trackVisualSlots[visualMarkerSlot] = HORSE_MOVING_CHAR;
                 }
-                
-                const trackString = trackSlots.join(""); // Join the track slots (spaces and one emoji/trophy)
-                
-                currentFrameDisplayLines.push(`${RACE_HORSES[i].emoji} ${displayName} ${escapeMarkdownV2("[")}${trackString}${escapeMarkdownV2("]")} ${FINISH_FLAG_STATIC}`);
+
+                const progressTrackString = trackVisualSlots.join("");
+                // The FINISH_FLAG_STATIC is appended after the bracketed track display
+                currentFrameDisplayLines.push(`${RACE_HORSES[i].emoji} ${displayName} ${escapeMarkdownV2("[")}${progressTrackString}${escapeMarkdownV2("]")} 🏁`);
             }
 
             let fullFrameText = currentFrameDisplayLines.join('\n') + '\n' + commentary;
