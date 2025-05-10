@@ -3920,7 +3920,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
     const gameKey = 'race';
     const gameConfig = GAME_CONFIG[gameKey];
     const logPrefix = `[RaceGame User ${userId} Bet ${betAmountLamports} Horse ${chosenHorseNumber}]`;
-
+    
     if (!RACE_HORSES || RACE_HORSES.length === 0) {
         console.error(`${logPrefix} RACE_HORSES array is not defined or empty.`);
         const errorConfigMsg = "⚠️ Race game configuration error\\. Please contact support\\.";
@@ -3932,7 +3932,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         }
         return;
     }
-
+    
     const chosenHorseConfig = RACE_HORSES[chosenHorseNumber - 1];
 
     if (!chosenHorseConfig) {
@@ -3973,7 +3973,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         const { betId, newBalance: balanceAfterBet } = betPlacementResult;
         finalUserBalance = balanceAfterBet;
 
-        const { winningLane } = simulateRaceWeighted(RACE_HORSES);
+        const { winningLane } = simulateRaceWeighted(RACE_HORSES); 
         const win = winningLane === chosenHorseNumber;
         const winningHorseConfig = RACE_HORSES[winningLane - 1];
         console.log(`${logPrefix} Predetermined winner: Lane ${winningLane} - ${winningHorseConfig.name}`);
@@ -4009,7 +4009,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutAmountForDB);
         await client.query('COMMIT');
 
-        // --- REFINED ANIMATION FOR FINISH LINE CLARITY ---
+        // --- ANIMATION WITH IMPROVED FINISH LINE VISUAL ---
         let initialRaceText = `🏁 *Horse Race Starting\\!* 🏇\n\nYour Pick: ${chosenHorseConfig.emoji} *${escapeMarkdownV2(chosenHorseConfig.name)}*\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n*Contenders:*\n`;
         RACE_HORSES.forEach(h => initialRaceText += `${h.emoji} ${escapeMarkdownV2(h.name)} \\(${escapeMarkdownV2(h.payoutMultiplier.toFixed(1))}x\\)\n`);
         initialRaceText += "\nGet Ready\\!\\! 🚦";
@@ -4019,17 +4019,17 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
 
         let raceHeader = `🏁 *Race in Progress\\!* 💨\n\n`;
         const VIRTUAL_TRACK_LENGTH = 50; 
-        const VISUAL_TRACK_CHARS = 15;   // How many characters for the visual path (dots/spaces)
-        const FINISH_LINE_MARKER = '🏁'; // Appended after the track for all lanes
+        const VISUAL_TRACK_CHARS = 15;  
+        const FINISH_LINE_VISUAL = '🏁'; // This is now just appended at the end of each line
         const TROPHY_CHAR = '🏆';
         const TRACK_AHEAD_CHAR = '·'; 
-        const TRACK_BEHIND_CHAR = ' '; // Character for track covered (can also be a dash)
-        const HORSE_MOVING_CHAR = '🏇'; // The emoji that "moves"
+        const TRACK_BEHIND_CHAR = ' '; 
+        const HORSE_MOVING_CHAR = '🏇';
 
         let positions = new Array(RACE_HORSES.length).fill(0); 
         let lastAnimationContent = "";
-        const animationDurationApproxMs = 8500; // Slightly longer to ensure finish
-        const framesPerSecond = 2; 
+        const animationDurationApproxMs = 8000; 
+        const framesPerSecond = 2.5; 
         const totalAnimationFrames = Math.floor(animationDurationApproxMs / 1000 * framesPerSecond);
         const sleepPerFrame = Math.floor(1000 / framesPerSecond);
 
@@ -4037,7 +4037,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
 
         for (let frame = 0; frame < totalAnimationFrames; frame++) {
             let currentFrameDisplayLines = [raceHeader]; 
-            let allVisuallyFinished = true; // Assume all finished until proven otherwise in this frame
+            let raceStillRunning = true; 
             
             if (frame === Math.floor(totalAnimationFrames * 0.33) && commentary.length < 25) commentary = "\n*Jockeying for position\\!*";
             else if (frame === Math.floor(totalAnimationFrames * 0.66) && commentary.length < 55) commentary = "\n*Neck and neck down the backstretch\\!*";
@@ -4046,10 +4046,10 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
                  commentary = `\n*${escapeMarkdownV2(winningHorseConfig.name)} ${winningHorseConfig.emoji} crosses the finish line\\!*`;
             }
 
+            let finishedCount = 0;
             for (let i = 0; i < RACE_HORSES.length; i++) {
                 if (positions[i] < VIRTUAL_TRACK_LENGTH) {
-                    allVisuallyFinished = false; // At least one horse is still running
-                    // ... (Keep your existing movement logic for positions[i] here) ...
+                    raceStillRunning = true;
                     let moveAmount = 0; 
                     const randomFactor = Math.random();
                     const baseProbToMove = 0.35 + (0.95 - (RACE_HORSES[i].payoutMultiplier / 12)); 
@@ -4067,28 +4067,37 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
                     positions[i] += moveAmount;
                     positions[i] = Math.min(positions[i], VIRTUAL_TRACK_LENGTH); 
                 }
+                if (positions[i] >= VIRTUAL_TRACK_LENGTH) finishedCount++;
 
                 const isUsersHorse = (i + 1) === chosenHorseNumber;
-                
                 let rawHorseName = RACE_HORSES[i].name.substring(0, 10).padEnd(10, ' ');
-                let displayName = isUsersHorse ? `*${escapeMarkdownV2(rawHorseName.trim())}* 👉` : escapeMarkdownV2(rawHorseName); // Pointer after name
+                let displayName = isUsersHorse ? `*${escapeMarkdownV2(rawHorseName.trim())}* 👉` : escapeMarkdownV2(rawHorseName);
                 
-                let trackString = "";
-                // Calculate visual position (0 to VISUAL_TRACK_CHARS)
+                let trackVisual = Array(VISUAL_TRACK_CHARS).fill(TRACK_AHEAD_CHAR);
                 let visualProgressUnits = Math.floor((positions[i] / VIRTUAL_TRACK_LENGTH) * VISUAL_TRACK_CHARS);
-                visualProgressUnits = Math.min(visualProgressUnits, VISUAL_TRACK_CHARS); // Cap at max visual chars
-
+                
                 if (positions[i] >= VIRTUAL_TRACK_LENGTH) {
-                    // Finished: Show full track covered, then HORSE_MOVING_CHAR, then TROPHY_CHAR
-                    trackString = TRACK_BEHIND_CHAR.repeat(VISUAL_TRACK_CHARS - 2) + HORSE_MOVING_CHAR + TROPHY_CHAR;
+                    // Horse finished: fill track with "behind" char, then horse, then trophy
+                    for(let k=0; k < VISUAL_TRACK_CHARS ; k++) { trackVisual[k] = TRACK_BEHIND_CHAR; }
+                    if (VISUAL_TRACK_CHARS > 1) {
+                        trackVisual[VISUAL_TRACK_CHARS - 2] = HORSE_MOVING_CHAR; // Horse just before trophy
+                        trackVisual[VISUAL_TRACK_CHARS - 1] = TROPHY_CHAR;       // Trophy at the end of bar
+                    } else if (VISUAL_TRACK_CHARS === 1) {
+                        trackVisual[0] = TROPHY_CHAR; // If bar is 1, just trophy
+                    }
                 } else {
-                    // Still racing: Show covered track, then HORSE_MOVING_CHAR, then track ahead
-                    trackString = TRACK_BEHIND_CHAR.repeat(visualProgressUnits) +
-                                  HORSE_MOVING_CHAR +
-                                  TRACK_AHEAD_CHAR.repeat(Math.max(0, VISUAL_TRACK_CHARS - visualProgressUnits - 1));
+                    // Horse is still racing:
+                    visualProgressUnits = Math.min(visualProgressUnits, VISUAL_TRACK_CHARS - 1); // Ensure marker is within bounds
+                    visualProgressUnits = Math.max(0, visualProgressUnits);
+                    for (let k = 0; k < visualProgressUnits; k++) {
+                        trackVisual[k] = TRACK_BEHIND_CHAR;
+                    }
+                    trackVisual[visualProgressUnits] = HORSE_MOVING_CHAR; 
+                    // The rest is already TRACK_AHEAD_CHAR
                 }
                 
-                currentFrameDisplayLines.push(`${RACE_HORSES[i].emoji} ${displayName}: ${trackString} ${FINISH_LINE_MARKER}`);
+                const progressTrackString = trackVisual.join("");
+                currentFrameDisplayLines.push(`${RACE_HORSES[i].emoji} ${displayName}: ${progressTrackString} ${FINISH_LINE_VISUAL}`);
             }
 
             let fullFrameText = currentFrameDisplayLines.join('\n') + '\n' + commentary;
@@ -4104,27 +4113,27 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
                 }
             }
 
-            if (positions[winningLane - 1] >= VIRTUAL_TRACK_LENGTH && frame > totalAnimationFrames * 0.7) {
+            if (positions[winningLane - 1] >= VIRTUAL_TRACK_LENGTH && frame > totalAnimationFrames * 0.75) {
                  break; 
             }
-            if (allVisuallyFinished && frame > totalAnimationFrames * 0.5) { // If all horses have visually finished
+            if (finishedCount >= RACE_HORSES.length && frame > totalAnimationFrames * 0.5) {
                 break;
             }
             
             await sleep(sleepPerFrame);
         }
         await sleep(1500); 
-        // --- END OF SIMPLIFIED ANIMATION ---
+        // --- END OF ANIMATION ---
 
-        let resultMsg = `🏆 *Race Result* 🏆\n\nWinning Horse: ${winningHorseConfig.emoji} *${escapeMarkdownV2(winningHorseConfig.name)}*\\!\nYour Pick: ${chosenHorseConfig.emoji} ${escapeMarkdownV2(chosenHorseConfig.name)}\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`;
+        let resultMsg = `🏆 *Race Result* 🏆\n\nWinning Horse: ${winningHorseConfig.emoji} *${escapeMarkdownV2(winningHorseConfig.name)}*\\!\nYour Pick: ${chosenHorseConfig.emoji} ${escapeMarkdownV2(chosenHorseConfig.name)}\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`;
         resultMsg += win ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! \\(Multiplier: ${escapeMarkdownV2(chosenHorseConfig.payoutMultiplier.toFixed(1))}x base\\)` : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`;
         resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
         const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] };
         await bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
 
-    } catch (error) {
-        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr));
-        console.error(`${logPrefix} Error in race game:`, error); // Log full error
+    } catch (error) { 
+        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr));
+        console.error(`${logPrefix} Error in race game:`, error); 
         const errorMsgFinal = `⚠️ An unexpected error occurred during Horse Race: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`;
         const errorKeyboardFinal = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
         if (messageId) {
@@ -4133,9 +4142,9 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         } else {
             await safeSendMessage(chatId, errorMsgFinal, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinal});
         }
-    } finally {
-        if (client) client.release();
-    }
+    } finally { 
+        if (client) client.release(); 
+    }
 }
 
 async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
