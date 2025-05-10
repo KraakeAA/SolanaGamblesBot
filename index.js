@@ -383,7 +383,7 @@ const SLOTS_JACKPOT_SEED_LAMPORTS = BigInt(process.env.SLOTS_JACKPOT_SEED_LAMPOR
 let currentSlotsJackpotLamports = SLOTS_JACKPOT_SEED_LAMPORTS;
 const STANDARD_BET_AMOUNTS_SOL = [0.01, 0.05, 0.10, 0.25, 0.5, 1.0]; const STANDARD_BET_AMOUNTS_LAMPORTS = STANDARD_BET_AMOUNTS_SOL.map(sol => BigInt(Math.round(sol * LAMPORTS_PER_SOL)));
 console.log(`[Config] Standard Bet Amounts (Lamports): ${STANDARD_BET_AMOUNTS_LAMPORTS.join(', ')}`);
-const RACE_HORSES = [ { name: "Solar Sprint", emoji: "🐎₁", payoutMultiplier: 3.0 }, { name: "Comet Tail", emoji: "🏇₂", payoutMultiplier: 4.0 }, { name: "Galaxy Gallop", emoji: "🐴₃", payoutMultiplier: 5.0 }, { name: "Nebula Speed", emoji: "🎠₄", payoutMultiplier: 6.0 } ];
+const RACE_HORSES = [ { name: "Solar Sprint", emoji: "🐎₁", payoutMultiplier: 2.8 }, { name: "Comet Tail", emoji: "🏇₂", payoutMultiplier: 3.5 }, { name: "Galaxy Gallop", emoji: "🐴₃", payoutMultiplier: 4.5 }, { name: "Nebula Speed", emoji: "🎠₄", payoutMultiplier: 5.5 }, { name: "Star Dasher", emoji: "🚀₅", payoutMultiplier: 7.0 }, { name: "Void Runner", emoji: "🌠₆", payoutMultiplier: 9.0 } ];
 
 // In-memory Caches & State
 const userStateCache = new Map(); const walletCache = new Map(); const activeDepositAddresses = new Map();
@@ -2844,15 +2844,52 @@ function playCoinflip(choice) { // choice parameter kept for potential future us
 }
 
 /**
- * Simulates a simple race game outcome by picking a winning lane number.
- * @param {number} [totalLanes=4] The number of lanes/competitors in the race. This should ideally match RACE_HORSES.length.
- * @returns {{ winningLane: number }} The randomly determined winning lane number (1-indexed).
+ * Simulates a race outcome where horses have different chances of winning based on their payout multipliers.
+ * Lower payoutMultiplier (favorite) = higher chance of winning.
+ * @param {Array<{payoutMultiplier: number, name: string, emoji: string}>} horsesArray The RACE_HORSES array.
+ * @returns {{ winningLane: number }} The 1-indexed winning lane.
  */
-function simulateRace(totalLanes = 4) { // RACE_HORSES.length could be passed from calling context
-    if (totalLanes <= 0) totalLanes = 1; // Prevent errors with invalid input
-    const winningLane = Math.floor(Math.random() * totalLanes) + 1; // 1 to totalLanes
+function simulateRaceWeighted(horsesArray) {
+    if (!horsesArray || horsesArray.length === 0) {
+        console.error("[simulateRaceWeighted] horsesArray is undefined or empty. Defaulting to lane 1.");
+        return { winningLane: 1 };
+    }
+
+    // Calculate relative strengths/probabilities based on the inverse of payoutMultiplier
+    // We add a small constant to avoid issues if a multiplier is extremely high or zero,
+    // and to ensure every horse has at least some minimal chance.
+    const relativeStrengths = horsesArray.map(horse => {
+        if (horse.payoutMultiplier <= 0) return 0.001; // Avoid division by zero or negative multipliers
+        return 1 / horse.payoutMultiplier;
+    });
+
+    const sumOfStrengths = relativeStrengths.reduce((sum, strength) => sum + strength, 0);
+
+    if (sumOfStrengths === 0) { // Fallback if all strengths are zero (e.g., all multipliers were invalid)
+        console.warn("[simulateRaceWeighted] Sum of strengths is zero. Falling back to random pick.");
+        return { winningLane: Math.floor(Math.random() * horsesArray.length) + 1 };
+    }
+
+    let cumulativeProbability = 0;
+    const cumulativeProbabilities = relativeStrengths.map(strength => {
+        cumulativeProbability += (strength / sumOfStrengths);
+        return cumulativeProbability;
+    });
+
+    const rand = Math.random();
+    let winningLane = horsesArray.length; // Default to last horse if logic fails below
+
+    for (let i = 0; i < cumulativeProbabilities.length; i++) {
+        if (rand < cumulativeProbabilities[i]) {
+            winningLane = i + 1; // Lanes are 1-indexed
+            break;
+        }
+    }
+    // console.log(`[simulateRaceWeighted] Winning Lane: ${winningLane}, Horse: ${horsesArray[winningLane-1].name}`); // Optional debug
     return { winningLane };
 }
+// --- END OF simulateRaceWeighted FUNCTION ---
+
 
 /**
  * Simulates a simple slots game spin. Returns symbols and payout multiplier *before* house edge.
@@ -3880,33 +3917,231 @@ async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, 
 
 
 async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chosenHorseNumber) {
-    const gameKey = 'race'; const gameConfig = GAME_CONFIG[gameKey]; const logPrefix = `[RaceGame User ${userId} Bet ${betAmountLamports} Horse ${chosenHorseNumber}]`; const chosenHorseConfig = RACE_HORSES[chosenHorseNumber - 1]; // RACE_HORSES from Part 1
-    if (!chosenHorseConfig) { console.error(`${logPrefix} Invalid horse number: ${chosenHorseNumber}`); return bot.editMessageText(`⚠️ Invalid horse selected: ${escapeMarkdownV2(chosenHorseNumber)}\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
-    console.log(`${logPrefix} Handling for horse: ${chosenHorseConfig.name}`);
-    let client = null; let finalUserBalance;
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
-        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, { horse: chosenHorseConfig.name, horseNum: chosenHorseNumber }, betAmountLamports);
-        if (!betPlacementResult.success) { await client.query('ROLLBACK'); const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`; if(client) client.release(); return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
-        const { betId, newBalance: balanceAfterBet } = betPlacementResult; finalUserBalance = balanceAfterBet;
-        const { winningLane } = simulateRace(RACE_HORSES.length); // from Part 4
-      const win = winningLane === chosenHorseNumber; const winningHorseConfig = RACE_HORSES[winningLane - 1];
-        let profitLamportsOutcome = -betAmountLamports; let payoutAmountForDB = 0n;
-        if (win) {
-            const basePayoutMultiplierForHorse = chosenHorseConfig.payoutMultiplier; const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (basePayoutMultiplierForHorse - 1))); const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge))) : 0n; profitLamportsOutcome = netProfit; payoutAmountForDB = betAmountLamports + netProfit;
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, 'race_win', { betId }); // FIX #0: Use payoutAmountForDB
-            if (!balanceUpdateResult.success) { await client.query('ROLLBACK'); const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`; if(client) client.release(); return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
-            finalUserBalance = balanceUpdateResult.newBalance;
-        } else { profitLamportsOutcome = -betAmountLamports; payoutAmountForDB = 0n; console.log(`${logPrefix} Race loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL.`); }
-        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutAmountForDB); // from Part 2
-      await client.query('COMMIT');
-        // Animation... (omitted for brevity but is unchanged in this fix)
-        let animationText = `🏁 *Horse Race Starting\\!* 🏇\n\nYour Pick: ${chosenHorseConfig.emoji} ${escapeMarkdownV2(chosenHorseConfig.name)}\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\nHorses at the gate:\n`; RACE_HORSES.forEach(h => animationText += `${h.emoji} ${escapeMarkdownV2(h.name)}\n`); await bot.editMessageText(animationText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {}); await sleep(1500); animationText = `🏁 *And they're off\\!* 💨\n\n`; let progress = RACE_HORSES.map(h => ({ ...h, p: '' })); let lastAnimationText = ""; for (let i = 0; i < 5; i++) { progress.forEach(h => { h.p += '─'; }); progress[winningLane - 1].p += '─'; let frameText = animationText; progress.forEach(h => frameText += `${h.emoji} ${h.p}\n`); if (frameText !== lastAnimationText) { await bot.editMessageText(frameText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {}); lastAnimationText = frameText; } await sleep(800); } await sleep(1000);
-        // Final Result
-        let resultMsg = `🏆 *Race Result* 🏆\n\nWinning Horse: ${winningHorseConfig.emoji} *${escapeMarkdownV2(winningHorseConfig.name)}*\\!\nYour Pick: ${chosenHorseConfig.emoji} ${escapeMarkdownV2(chosenHorseConfig.name)}\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`; resultMsg += win ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! \\(Multiplier: ${escapeMarkdownV2(chosenHorseConfig.payoutMultiplier)}x base\\)` : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
-        const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] }; bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
-    } catch (error) { if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr)); console.error(`${logPrefix} Error in race game:`, error); bot.editMessageText(`⚠️ An unexpected error occurred during Horse Race: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
-    } finally { if (client) client.release(); }
+    const gameKey = 'race';
+    const gameConfig = GAME_CONFIG[gameKey];
+    const logPrefix = `[RaceGame User ${userId} Bet ${betAmountLamports} Horse ${chosenHorseNumber}]`;
+    
+    if (!RACE_HORSES || RACE_HORSES.length === 0) {
+        console.error(`${logPrefix} RACE_HORSES array is not defined or empty.`);
+        // Attempt to edit the message, if it fails, send a new one.
+        const errorConfigMsg = "⚠️ Race game configuration error. Please contact support.";
+        if (messageId) {
+            await bot.editMessageText(errorConfigMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' })
+                     .catch(async e => await safeSendMessage(chatId, errorConfigMsg, {parse_mode: 'MarkdownV2'}));
+        } else {
+            await safeSendMessage(chatId, errorConfigMsg, {parse_mode: 'MarkdownV2'});
+        }
+        return;
+    }
+    
+    const chosenHorseConfig = RACE_HORSES[chosenHorseNumber - 1];
+
+    if (!chosenHorseConfig) {
+        console.error(`${logPrefix} Invalid horse number: ${chosenHorseNumber}`);
+        const errorHorseMsg = `⚠️ Invalid horse selected: ${escapeMarkdownV2(String(chosenHorseNumber))}\\.`;
+        const errorKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+        if (messageId) {
+            await bot.editMessageText(errorHorseMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard })
+                     .catch(async e => await safeSendMessage(chatId, errorHorseMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboard}));
+        } else {
+            await safeSendMessage(chatId, errorHorseMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboard});
+        }
+        return;
+    }
+    console.log(`${logPrefix} Handling for horse: ${chosenHorseConfig.name} (#${chosenHorseNumber})`);
+
+    let client = null;
+    let finalUserBalance;
+
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, { horse: chosenHorseConfig.name, horseNum: chosenHorseNumber }, betAmountLamports);
+        if (!betPlacementResult.success) {
+            await client.query('ROLLBACK');
+            const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
+            if(client) client.release();
+            const errorKeyboardBet = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+            if (messageId) {
+                await bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet })
+                         .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet}));
+            } else {
+                 await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet});
+            }
+            return;
+        }
+        const { betId, newBalance: balanceAfterBet } = betPlacementResult;
+        finalUserBalance = balanceAfterBet;
+
+        const { winningLane } = simulateRaceWeighted(RACE_HORSES); 
+        const win = winningLane === chosenHorseNumber;
+        const winningHorseConfig = RACE_HORSES[winningLane - 1];
+        console.log(`${logPrefix} Predetermined winner: Lane ${winningLane} - ${winningHorseConfig.name}`);
+
+        let profitLamportsOutcome = -betAmountLamports;
+        let payoutAmountForDB = 0n;
+
+        if (win) {
+            const basePayoutMultiplierForHorse = chosenHorseConfig.payoutMultiplier;
+            const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (basePayoutMultiplierForHorse - 1)));
+            const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge))) : 0n;
+            profitLamportsOutcome = netProfit;
+            payoutAmountForDB = betAmountLamports + netProfit;
+
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, 'race_win', { betId });
+            if (!balanceUpdateResult.success) {
+                await client.query('ROLLBACK');
+                const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`;
+                if(client) client.release();
+                const errorKeyboardCrit = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+                if (messageId) {
+                    await bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit })
+                             .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit}));
+                } else {
+                    await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit});
+                }
+                return;
+            }
+            finalUserBalance = balanceUpdateResult.newBalance;
+        } else {
+            console.log(`${logPrefix} Race loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL.`);
+        }
+        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutAmountForDB);
+        await client.query('COMMIT');
+
+        // --- ENHANCED DYNAMIC ANIMATION ---
+        let initialRaceText = `🏁 *Horse Race Starting\\!* 🏇\n\nYour Pick: ${chosenHorseConfig.emoji} ${escapeMarkdownV2(chosenHorseConfig.name)}\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n*Contenders:*\n`;
+        RACE_HORSES.forEach(h => initialRaceText += `${h.emoji} ${escapeMarkdownV2(h.name)} \\(${escapeMarkdownV2(h.payoutMultiplier.toFixed(1))}x\\)\n`);
+        initialRaceText += "\nGet Ready\\!\\! 🚦";
+
+        await bot.editMessageText(initialRaceText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {if (!e.message.includes("message is not modified")) console.warn(`${logPrefix} Initial race text edit error: ${e.message}`)});
+        await sleep(2500); 
+
+        let raceHeader = `🏁 *Race in Progress\\!* 💨\n\n`;
+        const trackLength = 28; 
+        const finishLineChar = '🏆';
+        const trackChar = '─';
+        
+        let positions = new Array(RACE_HORSES.length).fill(0);
+        let lastAnimationContent = "";
+        const animationDurationApproxMs = 10000; // Aim for ~10 seconds of animation
+        const framesPerSecond = 2; // Update about twice per second
+        const totalAnimationFrames = animationDurationApproxMs / 1000 * framesPerSecond;
+        const sleepPerFrame = 1000 / framesPerSecond;
+
+
+        let commentary = ""; 
+
+        for (let frame = 0; frame < totalAnimationFrames; frame++) {
+            let currentFrameDisplay = raceHeader;
+            let someoneVisuallyFinished = false;
+            let maxPosition = 0;
+
+            // Update commentary at different race stages relative to frames
+            if (frame === 0) commentary = "\n*And they're off\\!*";
+            else if (frame === Math.floor(totalAnimationFrames * 0.3)) commentary = "\n*Rounding the first turn\\!*";
+            else if (frame === Math.floor(totalAnimationFrames * 0.6)) commentary = "\n*Down the backstretch\\!*";
+            else if (frame === Math.floor(totalAnimationFrames * 0.85)) commentary = "\n*Into the final stretch\\!*";
+            
+            // Check if winner crossed to update commentary
+            if (positions[winningLane - 1] >= trackLength && !commentary.includes("crosses the finish line")) {
+                 commentary = `\n*${escapeMarkdownV2(winningHorseConfig.name)} looks like the winner\\!*`;
+            }
+
+
+            for (let i = 0; i < RACE_HORSES.length; i++) {
+                if (positions[i] < trackLength) {
+                    let move = 0;
+                    const randomFactor = Math.random();
+                    const baseProbToMove = 0.4 + (0.9 - (RACE_HORSES[i].payoutMultiplier / 10)); // Base chance to move
+
+                    if (randomFactor < baseProbToMove) move = 1;
+                    if (randomFactor < baseProbToMove * 0.35) move = 2; // Chance for a double step
+                    if (randomFactor < baseProbToMove * 0.05) move = 3; // Rare triple step
+
+                    if ((i + 1) === winningLane) { // Predetermined winner's advantage
+                        if (frame > totalAnimationFrames * 0.5) { // More consistent push later
+                            move = (randomFactor < 0.60) ? 1 : (randomFactor < 0.90) ? 2 : 3;
+                        }
+                        if (positions[i] < trackLength - 2 && frame > totalAnimationFrames * 0.7) { // Final push
+                           move = Math.max(move, Math.random() < 0.6 ? 2 : 1);
+                        }
+                         // Ensure winner doesn't fall too far behind visually due to pure luck of others
+                        if (frame > totalAnimationFrames * 0.4 && positions[i] < maxPosition - 3) {
+                            move = Math.max(move, 2);
+                        }
+
+                    } else { // Other horses might "stumble" if winner is far ahead
+                        if (positions[winningLane-1] > trackLength * 0.6 && positions[i] < positions[winningLane-1] * 0.5 && Math.random() < 0.2) {
+                            move = 0; // Stumble if too far behind a leading winner
+                        }
+                    }
+                    positions[i] += move;
+                }
+                positions[i] = Math.min(positions[i], trackLength + 4); // Allow to go slightly past
+                if(positions[i] > maxPosition) maxPosition = positions[i];
+
+                let horseTrackDisplay = "";
+                for (let j = 0; j < trackLength; j++) {
+                    horseTrackDisplay += (j < positions[i]) ? trackChar : ' ';
+                }
+                
+                // Place emoji at its current position, or trophy at the end
+                let displayLine = "";
+                if (positions[i] >= trackLength) {
+                    displayLine = trackChar.repeat(trackLength -1) + finishLineChar;
+                    someoneVisuallyFinished = true;
+                } else {
+                    let tempTrack = Array(trackLength).fill(trackChar);
+                    if(positions[i] < trackLength) tempTrack[positions[i]] = RACE_HORSES[i].emoji; else tempTrack[trackLength-1] = RACE_HORSES[i].emoji;
+                    displayLine = tempTrack.join("");
+                }
+                 currentFrameDisplay += `${escapeMarkdownV2(RACE_HORSES[i].name.padEnd(15, ' ').substring(0,14))} ${RACE_HORSES[i].emoji}|${displayLine}|\n`;
+            }
+
+            currentFrameDisplay += commentary;
+
+            if (currentFrameDisplay !== lastAnimationContent) {
+                try {
+                    await bot.editMessageText(currentFrameDisplay, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
+                    lastAnimationContent = currentFrameDisplay;
+                } catch (e) {
+                    if (!e.message.includes("message is not modified")) {
+                        console.warn(`${logPrefix} Race animation edit error: ${e.message}.`);
+                    }
+                }
+            }
+            // If the actual winner has visually crossed, and we've run enough frames or all have finished
+            if (positions[winningLane - 1] >= trackLength && (frame > totalAnimationFrames * 0.7 || !positions.some(p => p < trackLength))) {
+                 console.log(`${logPrefix} Winner crossed or all finished, ending animation.`);
+                 break; 
+            }
+            await sleep(sleepPerFrame);
+        }
+        await sleep(2000); // Pause before showing final result
+        // --- END OF ENHANCED DYNAMIC ANIMATION ---
+
+        let resultMsg = `🏆 *Race Result* 🏆\n\nWinning Horse: ${winningHorseConfig.emoji} *${escapeMarkdownV2(winningHorseConfig.name)}*\\!\nYour Pick: ${chosenHorseConfig.emoji} ${escapeMarkdownV2(chosenHorseConfig.name)}\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n`;
+        resultMsg += win ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! \\(Multiplier: ${escapeMarkdownV2(chosenHorseConfig.payoutMultiplier.toFixed(1))}x base\\)` : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`;
+        resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
+        const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] };
+        await bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
+
+    } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr));
+        console.error(`${logPrefix} Error in race game:`, error);
+        const errorMsgFinal = `⚠️ An unexpected error occurred during Horse Race: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`;
+        const errorKeyboardFinal = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+        if (messageId) {
+            await bot.editMessageText(errorMsgFinal, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinal })
+                 .catch(async e => await safeSendMessage(chatId, errorMsgFinal, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinal}));
+        } else {
+            await safeSendMessage(chatId, errorMsgFinal, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinal});
+        }
+    } finally {
+        if (client) client.release();
+    }
 }
 
 async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
