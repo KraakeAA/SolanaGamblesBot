@@ -4128,8 +4128,6 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] };
         await bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
 
-    } catch (error) { /* ... existing error handling ... */ }
-
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr));
         console.error(`${logPrefix} Error in race game:`, error); // Log full error
@@ -5726,7 +5724,7 @@ async function handleStartCommand(msgOrCbMsg, args, correctUserIdFromCb = null) 
     const botVersion = escapeMarkdownV2(BOT_VERSION || "Unknown");
     const balanceString = escapeMarkdownV2(formatSol(currentBalance));
 
-    let welcomeMsg = `👋 Welcome, ${displayName}\\!\n\nI am ${botName} \\(v${botVersion}\\), your home for exciting on\\-chain games on Solana\\.\n\n`;
+    let welcomeMsg = `👋 Welcome, ${displayName}\\!\n\nI am ${botName}, your home for exciting on\\-chain games on Solana\\.\n\n`;
     welcomeMsg += `*Current Balance:* ${balanceString} SOL\n\n`;
     if (isNewUser) {
         welcomeMsg += "Looks like you're new here\\!\\! Here's how to get started:\n1\\. Use \`/deposit\` to get your unique address\\.\n2\\. Send SOL to that address\\.\n3\\. Use the menu below to play games\\!\n\n";
