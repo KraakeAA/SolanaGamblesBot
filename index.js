@@ -3978,7 +3978,6 @@ async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, 
             const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
             if(client) client.release();
             const errorKeyboardBet = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
-            // messageId is from the 'confirm_bet' callback.
             if (messageId) {
                 await bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet})
                          .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet}));
@@ -3990,8 +3989,7 @@ async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, 
         const { betId, newBalance: balanceAfterBet } = betPlacementResult;
         finalUserBalance = balanceAfterBet;
 
-        // Determine outcome
-        const { outcome } = playCoinflip(chosenSide); // from Part 4 (outcome is 'heads' or 'tails')
+        const { outcome } = playCoinflip(chosenSide); 
         const win = outcome === chosenSide;
 
         let profitLamportsOutcome = -betAmountLamports;
@@ -4000,7 +3998,7 @@ async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, 
         if (win) {
             const profitOnWin = BigInt(Math.floor(Number(betAmountLamports) * (1 - gameConfig.houseEdge)));
             profitLamportsOutcome = profitOnWin;
-            amountToCreditToUser = betAmountLamports + profitOnWin; // Stake back + net profit
+            amountToCreditToUser = betAmountLamports + profitOnWin; 
 
             const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, amountToCreditToUser, 'coinflip_win', { betId });
             if (!balanceUpdateResult.success) {
@@ -4008,89 +4006,96 @@ async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, 
                 const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`;
                 if(client) client.release();
                 const errorKeyboardCrit = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
-                // If messageId (from confirm_bet) exists, try to edit it with the error.
-                if (messageId) {
-                     await bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit })
+                if (messageId) { 
+                     await bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit })
                               .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit}));
-                } else {
+                } else { 
                     await safeSendMessage(chatId, errorMsg, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit });
                 }
                 return;
             }
             finalUserBalance = balanceUpdateResult.newBalance;
-        } else { // Loss
+        } else { 
             amountToCreditToUser = 0n;
-            profitLamportsOutcome = -betAmountLamports; // For message display
+            profitLamportsOutcome = -betAmountLamports; 
             console.log(`${logPrefix} Coinflip loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL.`);
         }
         await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', amountToCreditToUser);
         await client.query('COMMIT');
 
         // --- COINFLIP ANIMATION ---
-        const coinEmojis = ["🪙", "🟡", "🔵", "📀"]; // Different "coin" like emojis for spinning
-        const headsEmoji = "⬆️"; // Or your preferred "Heads" representation
-        const tailsEmoji = "⬇️"; // Or your preferred "Tails" representation
+        const coinVisuals = ["🪙", "🟡", "🔵", "📀", "💿", "💫", "✨"]; // Emojis for spinning/representing coin
+        const headsEmoji = "⬆️"; 
+        const tailsEmoji = "⬇️"; 
         const finalOutcomeEmoji = outcome === 'heads' ? headsEmoji : tailsEmoji;
 
         let animationText = `🪙 *Coinflip\\!* 🪙\n\nYour choice: *${escapeMarkdownV2(chosenSide.toUpperCase())}*\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\nFlipping the coin\\.\\.\\.\n\n`;
-        const initialAnimationDisplay = `${animationText}*${spinningChars[0]}*`; // spinningChars from Slots or define new
+        
+        // Use the first element of coinVisuals for the initial display
+        const initialAnimationDisplay = `${animationText}*${coinVisuals[0]}*`; 
 
-        if (messageId) {
+        if (messageId) { // messageId is from the confirm_bet callback
             await bot.editMessageText(initialAnimationDisplay, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: []} }) // Clear buttons
                      .catch(e => { if(!e.message.includes("message is not modified")) console.warn(`${logPrefix} Initial coinflip animation edit error: ${e.message}`) });
-        } else { // Should not happen if flow is from confirm_bet button
+        } else { 
             const newMsg = await safeSendMessage(chatId, initialAnimationDisplay, { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: []} });
-            if (newMsg) messageId = newMsg.message_id; // Update messageId if new message was sent
+            if (newMsg) messageId = newMsg.message_id; // Update messageId if a new one was sent for animation
         }
         lastAnimationText = initialAnimationDisplay;
-        await sleep(300);
-
-        const totalSpinFrames = 12; // Number of "spin" updates
-        let currentSpinSleep = 50; // ms, will increase to slow down
-
-        for (let frame = 0; frame < totalSpinFrames; frame++) {
-            if (!messageId) break; // Stop if message context lost
-
-            let spinningDisplay;
-            if (frame < totalSpinFrames - 3) { // Fast spin phase
-                spinningDisplay = coinEmojis[frame % coinEmojis.length];
-            } else { // Slow down phase
-                // Alternate between a spinning char and the other side before landing
-                if (frame % 2 === 0) {
-                    spinningDisplay = outcome === 'heads' ? tailsEmoji : headsEmoji; // Show the opposite briefly
-                } else {
-                    spinningDisplay = coinEmojis[frame % coinEmojis.length];
-                }
-                currentSpinSleep += 75; // Increase delay to slow down
-            }
-
-            const frameAnimationText = `${animationText}*${spinningDisplay}*`;
-            if (frameAnimationText !== lastAnimationText) {
-                try {
-                    await bot.editMessageText(frameAnimationText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
-                    lastAnimationText = frameAnimationText;
-                } catch (e) {
-                    if (!e.message.includes("message is not modified")) console.warn(`${logPrefix} Coinflip animation edit error: ${e.message}`);
-                    if (e.message.toLowerCase().includes("message to edit not found")) { frame = totalSpinFrames; break; } // Stop if message gone
-                }
-            }
-            await sleep(currentSpinSleep);
-        }
-
-        // Final reveal of the outcome (already determined server-side)
-        const finalRevealText = `${animationText} लैंडेड ओन\\.\\.\\. *${escapeMarkdownV2(outcome.toUpperCase())}* ${finalOutcomeEmoji}\\!`;
-        if (messageId) {
-            await bot.editMessageText(finalRevealText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' })
-                     .catch(async e => {
-                         if (!e.message.includes("message is not modified")) {
-                             console.warn(`${logPrefix} Failed to edit final reveal, sending new: ${e.message}`);
-                             await safeSendMessage(chatId, finalRevealText, {parse_mode: 'MarkdownV2'});
-                         }
-                     });
+        if (!messageId) { // If we still don't have a messageId, we can't animate
+            console.error(`${logPrefix} Cannot start coinflip animation, messageId is missing.`);
+            // Proceed to show result directly without animation if messageId is still null
         } else {
-             await safeSendMessage(chatId, finalRevealText, {parse_mode: 'MarkdownV2'});
-        }
-        await sleep(1000); // Pause on the revealed outcome
+            await sleep(300);
+
+            const totalSpinFrames = 12; 
+            let currentSpinSleep = 60; // Start a bit faster
+
+            for (let frame = 0; frame < totalSpinFrames; frame++) {
+                if (!messageId) break; 
+
+                let spinningDisplay;
+                if (frame < totalSpinFrames - 4) { // Fast spin phase (first 8 frames)
+                    spinningDisplay = coinVisuals[frame % coinVisuals.length]; 
+                } else { // Slow down phase (last 4 frames)
+                    if (frame % 2 === 0) { // On even frames of slow down, show the "other" side
+                        spinningDisplay = outcome === 'heads' ? tailsEmoji : headsEmoji; 
+                    } else { // On odd frames of slow down, show a generic spin
+                        spinningDisplay = coinVisuals[ (frame % coinVisuals.length) ]; 
+                    }
+                    currentSpinSleep += 80; // Increase delay to slow down more noticeably
+                }
+
+                const frameAnimationText = `${animationText}*${spinningDisplay}*`;
+                if (frameAnimationText !== lastAnimationText) {
+                    try {
+                        await bot.editMessageText(frameAnimationText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
+                        lastAnimationText = frameAnimationText;
+                    } catch (e) {
+                        if (!e.message.includes("message is not modified")) console.warn(`${logPrefix} Coinflip animation edit error: ${e.message}`);
+                        if (e.message.toLowerCase().includes("message to edit not found")) { 
+                            console.error(`${logPrefix} Halting coinflip animation, message to edit not found.`);
+                            messageId = null; // Nullify messageId so we don't try to edit it further
+                            break; 
+                        } 
+                    }
+                }
+                await sleep(currentSpinSleep);
+            }
+
+            // Final reveal of the outcome
+            if (messageId) {
+                const finalRevealText = `${animationText}Landed on\\.\\.\\. *${escapeMarkdownV2(outcome.toUpperCase())}* ${finalOutcomeEmoji}\\!`;
+                await bot.editMessageText(finalRevealText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' })
+                         .catch(async e => {
+                             if (!e.message.includes("message is not modified")) {
+                                 console.warn(`${logPrefix} Failed to edit final coinflip reveal, sending new: ${e.message}`);
+                                 await safeSendMessage(chatId, finalRevealText, {parse_mode: 'MarkdownV2'});
+                             }
+                         });
+                await sleep(1000); 
+            }
+        } // End of if(messageId) for animation block
         // --- END OF COINFLIP ANIMATION ---
 
         let resultMsgText = `🪙 *Coinflip Result* 🪙\n\n` +
@@ -4102,8 +4107,7 @@ async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, 
         
         const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] };
         
-        // Edit the message (which showed the final reveal) to the full result with keyboard
-        if (messageId) {
+        if (messageId) { // If we had a messageId to edit for animation, edit it for the final result
             await bot.editMessageText(resultMsgText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard })
                      .catch(async e => {
                          if (!e.message.includes("message is not modified")) {
@@ -4111,7 +4115,7 @@ async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, 
                             await safeSendMessage(chatId, resultMsgText, {parse_mode: 'MarkdownV2', reply_markup: keyboard });
                          }
                      });
-        } else {
+        } else { // If messageId was lost or never established for animation, send result as new message
             await safeSendMessage(chatId, resultMsgText, {parse_mode: 'MarkdownV2', reply_markup: keyboard });
         }
 
@@ -4120,10 +4124,12 @@ async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, 
         console.error(`${logPrefix} Error in coinflip game:`, error);
         const errorMsgFinalCoinflip = `⚠️ An unexpected error occurred during Coinflip: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`;
         const errorKeyboardFinalCoinflip = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
-        if (messageId) {
-            await bot.editMessageText(errorMsgFinalCoinflip, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinalCoinflip })
+        // Try to edit the original messageId if it still exists from the confirm_bet callback
+        const originalConfirmMessageId = callbackQuery.message.message_id; // Assuming this function was called from a confirm_bet callback
+        if (originalConfirmMessageId) { 
+            await bot.editMessageText(errorMsgFinalCoinflip, { chat_id: chatId, message_id: originalConfirmMessageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinalCoinflip })
                  .catch(async e => await safeSendMessage(chatId, errorMsgFinalCoinflip, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinalCoinflip}));
-        } else {
+        } else { // Absolute fallback
              await safeSendMessage(chatId, errorMsgFinalCoinflip, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinalCoinflip});
         }
     } finally {
