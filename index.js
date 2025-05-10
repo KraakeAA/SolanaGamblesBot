@@ -3465,7 +3465,26 @@ async function handleCallbackQuery(callbackQuery) {
     const logPrefix = `[CB Rcv User ${userId} Chat ${chatId} Data ${data}]`;
 
     console.log(`${logPrefix} Received callback.`);
+    
+    // Answer quickly, unless a specific handler below needs to show an alert itself.
+    // Most button presses can be acknowledged silently.
     await bot.answerCallbackQuery(callbackQuery.id).catch(err => console.warn(`${logPrefix} Non-critical error answering CB query: ${err.message}`)); 
+
+    // --- NEW: Check for and delete pending Roulette sticker ---
+    const currentStateForStickerCheck = userStateCache.get(userId);
+    if (currentStateForStickerCheck && 
+        currentStateForStickerCheck.state === 'awaiting_roulette_result_action' && 
+        currentStateForStickerCheck.stickerToDelete &&
+        currentStateForStickerCheck.actionMessageId === messageId) { // Ensure this callback is from the correct (text result) message
+        
+        const stickerInfo = currentStateForStickerCheck.stickerToDelete;
+        console.log(`${logPrefix} User action after roulette result. Attempting to delete sticker ID ${stickerInfo.message_id} in chat ${stickerInfo.chat_id}.`);
+        await bot.deleteMessage(stickerInfo.chat_id, stickerInfo.message_id)
+                 .catch(e => console.warn(`${logPrefix} Non-critical: Failed to delete roulette result sticker: ${e.message}`));
+        clearUserState(userId); // Clear the state after attempting to delete the sticker
+        console.log(`${logPrefix} Cleared 'awaiting_roulette_result_action' state.`);
+    }
+    // --- END OF NEW STICKER DELETION LOGIC ---
 
     let tempClient = null;
     try {
@@ -3491,10 +3510,10 @@ async function handleCallbackQuery(callbackQuery) {
                 console.log(`${logPrefix} Routing to menu handler: ${menuKey}`);
                 const handler = menuCommandHandlers.get(menuKey);
                 const remainingParams = params.slice(1);
-                if (handler === handleMenuAction) {
+                if (handler === handleMenuAction) { // handleMenuAction is from Part 5b
                     return handler(userId, chatId, messageId, menuKey, remainingParams, true);
                 } else if (typeof handler === 'function') {
-                    return handler(originalMessage, remainingParams, userId);
+                    return handler(originalMessage, remainingParams, userId); // Pass originalMessage for command-like handlers
                 } else {
                     console.error(`${logPrefix} Invalid handler found in menuCommandHandlers for key '${menuKey}'.`);
                     await safeSendMessage(chatId, `Internal error processing menu option: ${escapeMarkdownV2(menuKey)}`, { parse_mode: 'MarkdownV2'});
@@ -3580,25 +3599,27 @@ async function handleCallbackQuery(callbackQuery) {
                     if (gameKey === 'coinflip') initialStepCallbackPrefix = 'coinflip_select_side';
                     else if (gameKey === 'race') initialStepCallbackPrefix = 'race_select_horse';
                     else if (gameKey === 'roulette') initialStepCallbackPrefix = 'roulette_select_bet_type';
+                    // Pass originalMessage (which is callbackQuery.message, so messageId is its ID)
                     await proceedToGameStep(userId, chatId, messageId, gameKey, `${initialStepCallbackPrefix}:${lastBetAmountLamportsStr}`);
                 } else if (gameKey === 'blackjack' || gameKey === 'crash') {
                     console.log(`${logPrefix} Play Again for ${gameKey} routing to showBetAmountButtons.`);
                     await showBetAmountButtons(originalMessage, gameKey, lastBetAmountLamportsStr, userId);
-                } else {
+                } else { // For single-step games like Slots, War
                     const fakeCallbackData = `confirm_bet:${gameKey}:${lastBetAmountLamportsStr}`;
                     const fakeCallbackQuery = {
                         id: 'fakecb-pa-' + Date.now(), 
                         from: callbackQuery.from, 
                         message: { 
                             chat: callbackQuery.message.chat,
-                            message_id: messageId,
+                            message_id: messageId, // Use the current messageId to be edited by the confirm_bet flow
                             date: Math.floor(Date.now() / 1000), 
                             text: callbackQuery.message.text || "" 
                         },
                         data: fakeCallbackData, 
                         chat_instance: callbackQuery.chat_instance || String(chatId) 
                     };
-                    callbackQueue.add(() => handleCallbackQuery(fakeCallbackQuery)); 
+                    // Add to callbackQueue to be handled by this same handleCallbackQuery function
+                    callbackQueue.add(() => handleCallbackQuery(fakeCallbackQuery)).catch(e => console.error(`[CBQueueErr PlayAgain]: ${e.message}`)); 
                 }
             } else {
                 await bot.editMessageText("⚠️ Error processing 'Play Again' request due to invalid parameters\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
@@ -3623,6 +3644,7 @@ async function handleCallbackQuery(callbackQuery) {
             } else { console.error(`${logPrefix} Invalid Bet ID or action received for blackjack_action: ${data}`); await bot.editMessageText("⚠️ Error processing Blackjack action due to invalid data\\.", { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }); }
         }
         else if (action === 'cash_out_crash') {
+            // ... (existing cash_out_crash logic from your Part 5a - kept for completeness) ...
             const originalBetIdStr = params[0]; const originalBetId = parseInt(originalBetIdStr, 10); const gameState = userStateCache.get(userId);
             if (!isNaN(originalBetId) && gameState && gameState.action === 'awaiting_crash_cashout' && gameState.betId === originalBetId) {
                 clearUserState(userId); 
@@ -3653,9 +3675,9 @@ async function handleCallbackQuery(callbackQuery) {
         }
         else if (action === 'quick_deposit') { 
             console.log(`${logPrefix} Handling 'quick_deposit' action.`); 
-            await handleDepositCommand(originalMessage, [], userId); 
+            await handleDepositCommand(originalMessage, [], userId); // Ensure correctUserIdFromCb is passed
         }
-        // --- UPDATED SECTION FOR WITHDRAWAL CONFIRMATION ---
+        // --- UPDATED SECTION FOR WITHDRAWAL CONFIRMATION (using userStateCache) ---
         else if (action === 'process_withdrawal_confirm') { 
             const userConfirmation = params[0]; // 'yes' or 'no'
             const priorState = userStateCache.get(userId);
@@ -3667,7 +3689,7 @@ async function handleCallbackQuery(callbackQuery) {
                     message_id: messageId, 
                     parse_mode: 'MarkdownV2', 
                     reply_markup: { inline_keyboard: [[{text: "↩️ Back to Wallet", callback_data: "menu:wallet"}]] } 
-                }).catch(async e => { // Make async for safeSendMessage
+                }).catch(async e => { 
                     console.warn(`${logPrefix} Failed to edit expired withdrawal session message: ${e.message}`);
                     await safeSendMessage(chatId, "⚠️ Your withdrawal session seems to have expired or is invalid\\. Please start over by using the /withdraw command or Wallet menu\\.", {
                         parse_mode: 'MarkdownV2',
@@ -3683,8 +3705,8 @@ async function handleCallbackQuery(callbackQuery) {
 
             if (userConfirmation === 'yes') {
                 console.log(`${logPrefix} User confirmed withdrawal via 'process_withdrawal_confirm:yes'. Wallet: ${linkedWallet}, Amount: ${amountLamportsStr}`);
-                // Call the NEWLY RENAMED handleWithdrawalConfirmation function (previously executeWithdrawalLogic)
-                // Pass messageId (the ID of the Yes/No confirmation message) to be edited by the next steps
+                // Call handleWithdrawalConfirmation (the refactored one)
+                // messageId is the ID of the message with the Yes/No buttons
                 await handleWithdrawalConfirmation(userId, chatId, messageId, linkedWallet, amountLamportsStr);
             } else { // User clicked 'no' (Cancel)
                 console.log(`${logPrefix} User cancelled withdrawal confirmation.`);
@@ -3699,10 +3721,11 @@ async function handleCallbackQuery(callbackQuery) {
         // --- END OF UPDATED SECTION ---
         else if (action === 'show_help_section') { 
             const section = params[0]; 
-            await handleHelpCommand(originalMessage, [section], userId); 
+            await handleHelpCommand(originalMessage, [section], userId); // Pass originalMessage for command-like handlers
         }
         else if (action === 'leaderboard_nav') { 
-            await handleLeaderboardsCommand(originalMessage, [data], userId); 
+            // args[0] for handleLeaderboardsCommand is the full callback data string 'leaderboard_nav:type:page'
+            await handleLeaderboardsCommand(originalMessage, [data], userId); // Pass originalMessage
         }
         else {
             console.warn(`${logPrefix} Potentially Unhandled callback query action: '${action}' with params: ${params.join(',')}. Data: '${data}'`);
@@ -4527,11 +4550,10 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
     console.log(`${logPrefix} Handling roulette spin.`);
 
     let client = null;
-    let finalUserBalance;
+    let finalUserBalance; 
 
     if (typeof ROULETTE_NUMBER_STICKERS === 'undefined') {
         console.error(`${logPrefix} ROULETTE_NUMBER_STICKERS constant is not defined! Stickers will not be used.`);
-        // No need to halt the game, will fallback to text for winning number.
     }
 
     try {
@@ -4540,7 +4562,7 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
 
         let betDetails = { type: betType };
         if (betType === 'straight' && betValue !== undefined && betValue !== null) {
-            betDetails.value = String(betValue);
+            betDetails.value = String(betValue); 
         }
 
         const betPlacementResult = await placeBet(client, userId, chatId, gameKey, betDetails, betAmountLamports);
@@ -4551,23 +4573,23 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
                 : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
             if(client) client.release();
             const errorKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
-            if (messageId) {
+            if (messageId) { 
                 await bot.editMessageText(errorMsg, {chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard})
                          .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboard}));
-            } else {
+            } else { 
                 await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboard});
             }
             return;
         }
         const { betId, newBalance: balanceAfterBet } = betPlacementResult;
-        finalUserBalance = balanceAfterBet;
+        finalUserBalance = balanceAfterBet; 
 
-        const { winningNumber } = simulateRouletteSpin();
+        const { winningNumber } = simulateRouletteSpin(); 
         const basePayoutMultiplier = getRoulettePayoutMultiplier(betDetails.type, betDetails.value, winningNumber);
         const win = basePayoutMultiplier > 0;
 
         let profitLamportsOutcome = -betAmountLamports;
-        let amountToCreditToUser = 0n;
+        let amountToCreditToUser = 0n; 
 
         if (win) {
             const grossWinnings = BigInt(Math.floor(Number(betAmountLamports) * basePayoutMultiplier));
@@ -4581,26 +4603,27 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
                 const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`;
                 if(client) client.release();
                 const errorKeyboardCrit = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
-                if (messageId) { // Try to edit the original confirmation message
+                if (messageId) { 
                      await bot.editMessageText(errorMsg, {chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit })
                               .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit}));
-                } else { // If no messageId (e.g. error before initial message edit), send new
+                } else { 
                     await safeSendMessage(chatId, errorMsg, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit });
                 }
                 return;
             }
             finalUserBalance = balanceUpdateResult.newBalance;
-        } else {
-            amountToCreditToUser = 0n;
+        } else { 
+            amountToCreditToUser = 0n; 
             console.log(`${logPrefix} Roulette loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} after initial deduction.`);
         }
 
         await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', amountToCreditToUser);
         await client.query('COMMIT');
 
-        // --- Animation & Result Display with Sticker ---
-        if (messageId) { // messageId is from the 'Confirm Bet' button press
-            await bot.deleteMessage(chatId, messageId).catch(e => console.warn(`${logPrefix} Non-critical: Failed to delete confirm bet message ${messageId}: ${e.message}`));
+        // --- Animation & Result Display with Sticker (Sticker deletion handled by handleCallbackQuery) ---
+
+        if (messageId) { 
+            await bot.deleteMessage(chatId, messageId).catch(e => console.warn(`${logPrefix} Non-critical: Failed to delete prior message ${messageId} for roulette: ${e.message}`));
         }
 
         const spinningMessage = await safeSendMessage(chatId, "🎡 Roulette wheel is spinning\\! Please wait for the result\\.\\.\\.", { parse_mode: 'MarkdownV2' });
@@ -4610,14 +4633,14 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
             await bot.deleteMessage(chatId, spinningMessage.message_id).catch(e => console.warn(`${logPrefix} Non-critical: Failed to delete spinning message: ${e.message}`));
         }
 
-        let sentStickerMessage = null;
+        let sentStickerMessageObject = null; 
         if (typeof ROULETTE_NUMBER_STICKERS !== 'undefined' && ROULETTE_NUMBER_STICKERS) {
             const stickerFileId = ROULETTE_NUMBER_STICKERS[winningNumber] || ROULETTE_NUMBER_STICKERS.default;
             if (stickerFileId) {
                 console.log(`${logPrefix} Attempting to send sticker for winning number ${winningNumber}. File ID: ${stickerFileId}`);
                 try {
-                    sentStickerMessage = await bot.sendSticker(chatId, stickerFileId);
-                    console.log(`${logPrefix} Sticker sent successfully for number ${winningNumber}. Message ID: ${sentStickerMessage.message_id}`);
+                    sentStickerMessageObject = await bot.sendSticker(chatId, stickerFileId); 
+                    console.log(`${logPrefix} Sticker sent successfully for number ${winningNumber}. Message ID: ${sentStickerMessageObject.message_id}`);
                 } catch (stickerError) {
                     console.error(`${logPrefix} Failed to send sticker for winning number ${winningNumber} (ID: ${stickerFileId}): ${stickerError.message}`, stickerError);
                     await safeSendMessage(chatId, `Winning Number: *${escapeMarkdownV2(String(winningNumber))}*`, { parse_mode: 'MarkdownV2' });
@@ -4626,8 +4649,8 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
                 console.warn(`${logPrefix} No sticker file_id found for winning number ${winningNumber} or default in ROULETTE_NUMBER_STICKERS.`);
                 await safeSendMessage(chatId, `Winning Number: *${escapeMarkdownV2(String(winningNumber))}*`, { parse_mode: 'MarkdownV2' });
             }
-        } else {
-             console.error(`${logPrefix} ROULETTE_NUMBER_STICKERS constant is not defined! Ensure it is defined in Part 1.`);
+        } else { 
+             console.error(`${logPrefix} ROULETTE_NUMBER_STICKERS constant is not available! Ensure it is defined in Part 1.`);
              await safeSendMessage(chatId, `Winning Number: *${escapeMarkdownV2(String(winningNumber))}*`, { parse_mode: 'MarkdownV2' });
         }
 
@@ -4642,7 +4665,7 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
         else if (betDetails.type === 'high') { betDescription = '📈 High \\(19\\-36\\)';}
 
         let resultText = `*Roulette Result*\n\n` +
-                         (sentStickerMessage ? `Winning Number announced via sticker above\\!\n` : ``) + // Reference sticker if sent
+                         (sentStickerMessageObject ? `Winning Number announced via sticker\\!\n` : ``) + 
                          `Actual Number: *${escapeMarkdownV2(String(winningNumber))}*\n` +
                          `Your Bet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL on ${betDescription}\n\n`;
 
@@ -4660,25 +4683,37 @@ async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, 
         const textResultOptions = {
             parse_mode: 'MarkdownV2',
             reply_markup: resultKeyboard,
-            ...(sentStickerMessage && sentStickerMessage.message_id && { reply_to_message_id: sentStickerMessage.message_id })
+            ...(sentStickerMessageObject && sentStickerMessageObject.message_id && { reply_to_message_id: sentStickerMessageObject.message_id })
         };
-        await safeSendMessage(chatId, resultText, textResultOptions);
+        const sentTextMessage = await safeSendMessage(chatId, resultText, textResultOptions);
+
+        if (sentStickerMessageObject && sentStickerMessageObject.message_id && sentTextMessage && sentTextMessage.message_id) {
+            userStateCache.set(userId, {
+                state: 'awaiting_roulette_result_action',
+                chatId: String(chatId),
+                actionMessageId: sentTextMessage.message_id, 
+                stickerToDelete: {
+                    chat_id: String(sentStickerMessageObject.chat.id),
+                    message_id: sentStickerMessageObject.message_id
+                },
+                timestamp: Date.now()
+            });
+            console.log(`${logPrefix} Stored sticker info for potential deletion. Sticker ID: ${sentStickerMessageObject.message_id}`);
+        }
 
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr));
         console.error(`${logPrefix} Error in roulette game:`, error);
         const errorText = `⚠️ An unexpected error occurred during Roulette: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`;
         const errorKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
-        // messageId might be undefined if error happened before it was established by a sent message
-        // If messageId exists from an earlier step (like the bet confirmation button message), try to edit it.
-        // Otherwise, just send a new error message.
-        const lastResortSendMessage = async () => await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
+        
+        const lastResortSendMessageOnError = async () => await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
 
         if (messageId) { 
             await bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard })
-                     .catch(lastResortSendMessage); // If edit fails, send new
+                     .catch(lastResortSendMessageOnError); 
         } else {
-            await lastResortSendMessage();
+            await lastResortSendMessageOnError();
         }
     } finally {
         if (client) client.release();
