@@ -3800,17 +3800,19 @@ async function proceedToGameStep(userId, chatId, messageId, gameKey, callbackDat
                     // Call the setup function to prompt for number input
                     await handleRouletteStraightBetSetup(userId, chatId, messageId, gameKey, betAmountLamportsStr); // Defined in Part 5b
                     return; // Exit early as handleRouletteStraightBetSetup handles the message edit/send
-                } else {
-                    // Show the bet type categories
-                    messageText += "\nSelect your bet type category or Straight Up:";
-                    inlineKeyboard = [
-                        [{ text: "🔴⚫️ Color", callback_data: `roulette_bet_type_category:color:${betAmountLamportsStr}` }],
-                        [{ text: "🔢 Even / Odd", callback_data: `roulette_bet_type_category:parity:${betAmountLamportsStr}` }],
-                        [{ text: "📉📈 Range (1\\-18 / 19\\-36)", callback_data: `roulette_bet_type_category:range:${betAmountLamportsStr}` }],
-                        [{ text: "🎯 Straight Up \\(\\#\\)", callback_data: `roulette_select_bet_type:straight:${betAmountLamportsStr}` }]
-                    ];
-                    inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
-                }
+               
+                } else { // Show the bet type categories
+                    messageText += "\nSelect your bet type category or Straight Up:";
+                    inlineKeyboard = [
+                        [{ text: "🔴⚫️ Color", callback_data: `roulette_bet_type_category:color:${betAmountLamportsStr}` }],
+                        [{ text: "🔢 Even / Odd", callback_data: `roulette_bet_type_category:parity:${betAmountLamportsStr}` }],
+                            // REVISED BUTTON TEXT for Range:
+                        [{ text: "📉📈 Range: 1-18 / 19-36", callback_data: `roulette_bet_type_category:range:${betAmountLamportsStr}` }],
+                            // REVISED BUTTON TEXT for Straight Up:
+                        [{ text: "🎯 Straight Up (Number)", callback_data: `roulette_select_bet_type:straight:${betAmountLamportsStr}` }]
+                    ];
+                    inlineKeyboard.push([{ text: '✏️ Change Amount', callback_data: `select_game:${gameKey}` }, { text: '❌ Cancel', callback_data: 'menu:game_selection' }]);
+                }
             }
             else if (actionPrefix === 'roulette_bet_type_category') {
                 // This is the step after selecting a category (Color, Parity, Range)
