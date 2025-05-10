@@ -4019,7 +4019,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
 
         let raceHeader = `🏁 *Race in Progress\\!* 💨\n\n`;
         const VIRTUAL_TRACK_LENGTH = 50;
-        const VISUAL_TRACK_SLOTS = 12;      // Number of character slots for the track bar itself (e.g., [🏇·········🏁])
+        const VISUAL_TRACK_SLOTS = 6;      // Number of character slots for the track bar itself (e.g., [🏇·········🏁])
         const FINISH_LINE_CHAR = '🏁';      // Displayed as the last char of the bar if not finished/won
         const WINNER_TROPHY_CHAR = '🏆';    // Replaces finish_char for the winner
         const OTHER_FINISHER_CHAR = '🏁'; // What other finishers show in the last slot (can be same as FINISH_LINE_CHAR or different e.g. '✔️')
