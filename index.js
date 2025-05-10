@@ -4171,111 +4171,256 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
 }
 
 async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
-    const gameKey = 'slots'; const gameConfig = GAME_CONFIG[gameKey]; const logPrefix = `[SlotsGame User ${userId} Bet ${betAmountLamports}]`; console.log(`${logPrefix} Handling slots spin.`);
-    let client = null; let betId; let balanceAfterBet; let finalUserBalance; let lastMessageText = "";
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
-        const { symbols: finalSymbols, payoutMultiplier: baseMultiplier, isJackpotWin } = simulateSlots(); // from Part 4
-        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, {result: finalSymbols.join('')}, betAmountLamports);
-        if (!betPlacementResult.success) { await client.query('ROLLBACK'); const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`; if(client) client.release(); return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
-        betId = betPlacementResult.betId; balanceAfterBet = betPlacementResult.newBalance; finalUserBalance = balanceAfterBet;
-        // Ensure jackpot record exists and contribute to it
-        await ensureJackpotExists(gameKey, gameConfig.jackpotSeedLamports || 0n, client); // from Part 2
-        let jackpotContribution = 0n;
-        if (gameConfig.jackpotContributionPercent && gameConfig.jackpotContributionPercent > 0 && betAmountLamports > 0n) {
-            jackpotContribution = BigInt(Math.floor(Number(betAmountLamports) * gameConfig.jackpotContributionPercent));
-            if (jackpotContribution > 0n) {
-                const incremented = await incrementJackpotAmount(client, gameKey, jackpotContribution); // from Part 2
-                if (!incremented) console.warn(`${logPrefix} Failed jackpot increment.`);
-                else console.log(`${logPrefix} Contributed ${formatSol(jackpotContribution)} SOL to jackpot.`);
-            }
-        }
-        await client.query('COMMIT'); // Commit bet placement and jackpot contribution
-        if(client) client.release(); client = null; // Release client after initial commit
+    const gameKey = 'slots';
+    const gameConfig = GAME_CONFIG[gameKey];
+    const logPrefix = `[SlotsGame User ${userId} Bet ${betAmountLamports}]`;
+    console.log(`${logPrefix} Handling slots spin.`);
 
-        // Animation... (omitted for brevity but is unchanged in this fix)
-        const slotEmojis = { 'C': '🍒', 'L': '🍋', 'O': '🍊', 'B': '🔔', '7': '❼', 'J': '💎' }; const animationFrames = 10; let currentFrameText = ""; const initialSpinText = `🎰 *Slots Spinning\\!* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n\\| 🎰 \\| 🎰 \\| 🎰 \\|\n\nSpinning\\.\\.\\.`; await bot.editMessageText(initialSpinText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {}); lastMessageText = initialSpinText; await sleep(500); for (let i = 0; i < animationFrames + finalSymbols.length; i++) { let currentDisplay = ['🎰', '🎰', '🎰']; let revealIndex = Math.max(-1, i - animationFrames); for(let k=0; k < finalSymbols.length; k++){ if(k <= revealIndex) { currentDisplay[k] = slotEmojis[finalSymbols[k]] || '❓'; } else { currentDisplay[k] = slotEmojis[Object.keys(slotEmojis)[Math.floor(Math.random() * Object.keys(slotEmojis).length)]]; } } currentFrameText = `🎰 *Slots Spinning\\!* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n\\| ${currentDisplay[0]} \\| ${currentDisplay[1]} \\| ${currentDisplay[2]} \\|\n\nSpinning\\.\\.\\.`; if (currentFrameText !== lastMessageText) { await bot.editMessageText(currentFrameText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => { if (!e.message.includes("message is not modified")) console.warn(`${logPrefix} Slots animation edit error: ${e.message}.`); }); lastMessageText = currentFrameText; } await sleep(i < animationFrames ? 200 : 600); }
+    let client = null;
+    let betId;
+    let balanceAfterBet;
+    let finalUserBalance; // Will be updated after win/loss processing
+    let lastMessageText = ""; // For animation, to avoid redundant edits
 
-        // Process Result (needs new DB transaction)
-        const displaySymbols = finalSymbols.map(s => slotEmojis[s] || '❓'); let profitLamportsOutcome = -betAmountLamports; let finalPayoutForDB = 0n; let winMessage = ''; let dbBetStatus = 'completed_loss';
-        client = await pool.connect(); await client.query('BEGIN'); // Start new transaction for result processing
-        try {
-            if (isJackpotWin) {
-                dbBetStatus = 'completed_win';
-                const currentJackpot = await getJackpotAmount(gameKey, client); // from Part 2, use client
-                let jackpotPayoutAmount = currentJackpot;
-                if (currentJackpot <= 0n) {
-                    // Fallback payout if jackpot somehow became zero or negative
-                    const fixedMultiplier = 200; // Example fallback multiplier
-                    const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (fixedMultiplier - 1)));
-                    const netProfit = BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge)));
-                    profitLamportsOutcome = netProfit; // Payout is net profit
-                    finalPayoutForDB = betAmountLamports + netProfit; // Return stake + net profit
-                    winMessage = `💥 Triple Diamonds\\! You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! \\(Jackpot was empty\\)`; // Escaped () !
-                } else {
-                    // Award the actual jackpot amount
-                    profitLamportsOutcome = jackpotPayoutAmount; // User profit IS the jackpot amount here
-                    finalPayoutForDB = betAmountLamports + jackpotPayoutAmount; // Return stake + jackpot amount
-                    winMessage = `💎💎💎 JACKPOT\\! 🎉 You won ${escapeMarkdownV2(formatSol(jackpotPayoutAmount))} SOL\\!`; // Escaped !
-                    // Reset jackpot to seed amount within the transaction
-                    await updateJackpotAmount(client, gameKey, gameConfig.jackpotSeedLamports); // from Part 2
-                }
-                // Notify admin about the jackpot win
-                if (jackpotPayoutAmount > 0n && typeof notifyAdmin === "function") { // notifyAdmin from Part 3
-                    await notifyAdmin(`🎉 User ${escapeMarkdownV2(userId)} HIT THE SLOTS JACKPOT for ${escapeMarkdownV2(formatSol(jackpotPayoutAmount))} SOL\\! Bet ID: ${betId}`); // Escaped !
-                }
-                // Update balance with the total payout (stake + jackpot/fallback win)
-                const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, finalPayoutForDB, 'slots_jackpot', { betId });
-                if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Jackpot): ${balanceUpdateResult.error}`); }
-                finalUserBalance = balanceUpdateResult.newBalance;
-            } else if (baseMultiplier > 0) {
-                // Regular win based on symbol match multiplier
-                dbBetStatus = 'completed_win';
-                const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (baseMultiplier - 1)));
-                const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge))) : 0n;
-                profitLamportsOutcome = netProfit; // Profit for message
-                finalPayoutForDB = betAmountLamports + netProfit; // Return stake + net profit
-                winMessage = `🎉 You matched\\! Won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL \\(Multiplier: ${escapeMarkdownV2(baseMultiplier)}x base\\)\\!`; // Escaped ! ()
-                // Update balance
-                const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, finalPayoutForDB, 'slots_win', { betId });
-                if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Slots Win): ${balanceUpdateResult.error}`); }
-                finalUserBalance = balanceUpdateResult.newBalance;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        // Simulate to get the final symbols BEFORE placing the bet or doing animation
+        const { symbols: finalSymbols, payoutMultiplier: baseMultiplier, isJackpotWin } = simulateSlots(); // from Part 4
+
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, {result: finalSymbols.join('')}, betAmountLamports);
+        if (!betPlacementResult.success) {
+            await client.query('ROLLBACK');
+            const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
+            if(client) client.release();
+            const errorKeyboardBet = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+            if (messageId) {
+                await bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet })
+                         .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet}));
             } else {
-                // Loss
-                dbBetStatus = 'completed_loss';
-                profitLamportsOutcome = -betAmountLamports;
-                finalPayoutForDB = 0n; // No payout for loss status
-                winMessage = `😢 No win this time\\. Lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped .
-                console.log(`${logPrefix} Slots loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL.`); // Balance doesn't change further on loss
+                 await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet});
             }
-            await updateBetStatus(client, betId, dbBetStatus, finalPayoutForDB); // Update bet status with correct payout amount (0 for loss)
-            await client.query('COMMIT'); // Commit balance update (if any) and bet status update
+            return;
+        }
+        betId = betPlacementResult.betId;
+        balanceAfterBet = betPlacementResult.newBalance;
+        finalUserBalance = balanceAfterBet; // Initialize final balance, will be updated if win
 
-            // Fetch jackpot amount *after* potential reset
-            const jackpotAfterSpin = await getJackpotAmount(gameKey); // Use default pool connection for read after commit
-            let resultMsg = `🎰 *Slots Result* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nResult: \\| ${displaySymbols[0]} \\| ${displaySymbols[1]} \\| ${displaySymbols[2]} \\|\n\n${winMessage}`;
-            resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
-            resultMsg += `\n💎 Next Jackpot: ${escapeMarkdownV2(formatSol(jackpotAfterSpin))} SOL`;
-            const keyboard = { inline_keyboard: [ [{ text: '🔄 Spin Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] };
-            bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
+        await ensureJackpotExists(gameKey, gameConfig.jackpotSeedLamports || 0n, client);
+        let jackpotContribution = 0n;
+        if (gameConfig.jackpotContributionPercent && gameConfig.jackpotContributionPercent > 0 && betAmountLamports > 0n) {
+            jackpotContribution = BigInt(Math.floor(Number(betAmountLamports) * gameConfig.jackpotContributionPercent));
+            if (jackpotContribution > 0n) {
+                const incremented = await incrementJackpotAmount(client, gameKey, jackpotContribution);
+                if (!incremented) console.warn(`${logPrefix} Failed jackpot increment.`);
+                else console.log(`${logPrefix} Contributed ${formatSol(jackpotContribution)} SOL to jackpot.`);
+            }
+        }
+        await client.query('COMMIT'); 
+        if(client) client.release(); client = null; 
 
-        } catch (dbError) {
-            // Rollback the result processing transaction on error
-            if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Result DB Rollback failed:`, rbErr));
-            console.error(`${logPrefix} DB Error during game end processing: ${dbError.message}`);
-            throw dbError; // Re-throw to outer catch block
-        } finally {
-            if (client) client.release(); client = null; // Release client used for result processing
+        // --- ENHANCED SLOTS ANIMATION ---
+        const slotEmojis = { 'C': '🍒', 'L': '🍋', 'O': '🍊', 'B': '🔔', '7': '❼', 'J': '💎', '?': '❓' };
+        const spinningChars = ['✨', '💫', '🌟', '🎰', '💠', '🌀']; // More variety for spinning effect
+        let currentAnimationText = "";
+        
+        const initialSpinText = `🎰 *Slots Spinning\\!* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n` +
+                                `\\| ${spinningChars[0]} \\| ${spinningChars[1]} \\| ${spinningChars[2]} \\|\n\n` + 
+                                `Spinning\\.\\.\\.`;
+        await bot.editMessageText(initialSpinText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {if(!e.message.includes("message is not modified")) console.warn(`${logPrefix} Initial slots spin text edit error: ${e.message}`)});
+        lastMessageText = initialSpinText; // Keep track of last sent text
+        await sleep(300); 
+
+        let reelStates = ['spinning', 'spinning', 'spinning']; 
+        let displaySymbols = [spinningChars[0], spinningChars[1], spinningChars[2]];
+        
+        const spinDurationMs = 2800; // Total animation time
+        const updatesPerSecond = 5; // How many times to update the visual per second
+        const totalAnimationFrames = Math.floor(spinDurationMs / 1000 * updatesPerSecond);
+        const sleepPerFrame = Math.floor(1000 / updatesPerSecond);
+
+        // Reels stop at different points to build anticipation
+        const reelStopFrames = [
+            Math.floor(totalAnimationFrames * 0.50), // Reel 1 (left) stops first (50% through animation)
+            Math.floor(totalAnimationFrames * 0.75), // Reel 2 (middle) stops next (75% through)
+            totalAnimationFrames -1                  // Reel 3 (right) stops last
+        ];
+
+        for (let frame = 0; frame < totalAnimationFrames; frame++) {
+            for (let reelIndex = 0; reelIndex < 3; reelIndex++) {
+                if (reelStates[reelIndex] === 'spinning') {
+                    if (frame >= reelStopFrames[reelIndex]) {
+                        reelStates[reelIndex] = 'stopped';
+                        displaySymbols[reelIndex] = slotEmojis[finalSymbols[reelIndex]] || slotEmojis['?'];
+                    } else {
+                        // Cycle through spinningChars for a more dynamic look
+                        displaySymbols[reelIndex] = spinningChars[(frame + reelIndex) % spinningChars.length]; // Offset cycle per reel
+                    }
+                }
+            }
+
+            currentAnimationText = `🎰 *Slots Spinning\\!* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\n` +
+                                   `\\| ${displaySymbols[0]} \\| ${displaySymbols[1]} \\| ${displaySymbols[2]} \\|\n\n`; // Escaped |
+
+            if (reelStates.includes('spinning')) {
+                let dots = frame % 4 === 0 ? "" : (frame % 4 === 1 ? "\\." : (frame % 4 === 2 ? "\\.\\." : "\\.\\.\\."));
+                currentAnimationText += `Spinning${dots}`;
+            } else {
+                currentAnimationText += `Reels Stopped\\!`;
+            }
+
+            if (currentAnimationText !== lastMessageText) {
+                try {
+                    await bot.editMessageText(currentAnimationText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
+                    lastMessageText = currentAnimationText;
+                } catch (e) {
+                    if (!e.message.includes("message is not modified")) {
+                        console.warn(`${logPrefix} Slots animation edit error: ${e.message}.`);
+                    }
+                }
+            }
+            if (!reelStates.includes('spinning')) break; 
+
+            await sleep(sleepPerFrame);
         }
-    } catch (error) {
-        // Catch errors from initial setup or re-thrown from result processing
-        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Outer Catch Rollback failed:`, rbErr)); // Ensure rollback if initial TX failed
-        console.error(`${logPrefix} Error in slots game:`, error);
-        bot.editMessageText(`⚠️ An unexpected error occurred during Slots: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
-    } finally {
-        // Ensure client is released if error occurred before explicit release
-        if (client && !client.isReleased) client.release();
-    }
+        await sleep(400); // Pause after all reels stop
+        // --- END OF ENHANCED SLOTS ANIMATION ---
+
+        // --- Optional: Win Highlight Step ---
+        if (!isJackpotWin && baseMultiplier > 0) {
+            const displaySymbolsForHighlight = finalSymbols.map(s => slotEmojis[s] || slotEmojis['?']);
+            let highlightedText = `🎰 *Reels Stopped\\!* 🎰\n\n` +
+                                  `\\| *${displaySymbolsForHighlight[0]}* \\| *${displaySymbolsForHighlight[1]}* \\| *${displaySymbolsForHighlight[2]}* \\|\n\n`; 
+
+            let winFlair = "";
+            if (baseMultiplier >= 50) winFlair = "💥 *MEGA WIN\\!* 💥"; // e.g. for 777
+            else if (baseMultiplier >= 10) winFlair = "🎉 *BIG WIN\\!* 🎉"; // e.g. for BBB, OOO
+            else if (baseMultiplier >= 2) winFlair = "👍 *NICE HIT\\!*";   // e.g. for CCC, Two Cherries
+            else winFlair = "✔️ *You Won\\!*"; // Smallest win
+            highlightedText += winFlair;
+
+            try {
+                if (highlightedText !== lastMessageText) { // Only edit if different
+                    await bot.editMessageText(highlightedText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
+                }
+                await sleep(1200); // Show highlight briefly
+            } catch (e) { console.warn(`${logPrefix} Error showing win highlight: ${e.message}`); }
+        }
+        // --- End of Optional Win Highlight ---
+
+        // Process Result (needs new DB transaction)
+        const displaySymbolsForFinalResult = finalSymbols.map(s => slotEmojis[s] || '❓');
+        let profitLamportsOutcome = -betAmountLamports;
+        let finalPayoutForDB = 0n;
+        let winMessageText = '';
+        let dbBetStatus = 'completed_loss';
+        let ledgerType = 'slots_loss';
+
+        client = await pool.connect(); 
+        await client.query('BEGIN'); 
+        try {
+            if (isJackpotWin) {
+                dbBetStatus = 'completed_win';
+                ledgerType = 'slots_jackpot';
+                const currentJackpot = await getJackpotAmount(gameKey, client); 
+                if (currentJackpot <= 0n) {
+                    const fixedMultiplier = 200; 
+                    const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (fixedMultiplier - 1)));
+                    const netProfit = BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge)));
+                    profitLamportsOutcome = netProfit; 
+                    finalPayoutForDB = betAmountLamports + netProfit; 
+                    winMessageText = `💥 Triple Diamonds\\! You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! \\(Jackpot was empty\\)`; 
+                } else {
+                    profitLamportsOutcome = currentJackpot; 
+                    finalPayoutForDB = betAmountLamports + jackpotContribution + currentJackpot; // Stake + their contribution + jackpot pool
+                    winMessageText = `💎💎💎 *J\\A\\C\\K\\P\\O\\T\\!* 🎉 You won the entire jackpot of ${escapeMarkdownV2(formatSol(currentJackpot))} SOL\\!`; 
+                    await updateJackpotAmount(client, gameKey, gameConfig.jackpotSeedLamports); 
+                    if (typeof notifyAdmin === "function") { 
+                        await notifyAdmin(`🎉 User ${escapeMarkdownV2(userId)} HIT THE SLOTS JACKPOT for ${escapeMarkdownV2(formatSol(currentJackpot))} SOL\\! Bet ID: ${betId}`); 
+                    }
+                }
+                const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, finalPayoutForDB, ledgerType, { betId });
+                if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Jackpot): ${balanceUpdateResult.error}`); }
+                finalUserBalance = balanceUpdateResult.newBalance;
+            } else if (baseMultiplier > 0) {
+                dbBetStatus = 'completed_win';
+                ledgerType = 'slots_win';
+                const profitBeforeEdge = BigInt(Math.floor(Number(betAmountLamports) * (baseMultiplier - 1)));
+                const netProfit = profitBeforeEdge > 0n ? BigInt(Math.floor(Number(profitBeforeEdge) * (1 - gameConfig.houseEdge))) : 0n;
+                profitLamportsOutcome = netProfit; 
+                finalPayoutForDB = betAmountLamports + jackpotContribution + netProfit; // Stake + their contribution + net profit
+                
+                let flair = "🎉 You matched\\!";
+                if (baseMultiplier >= 50) flair = "💥 *INCREDIBLE MATCH\\!*";
+                else if (baseMultiplier >= 10) flair = "🥳 *GREAT HIT\\!*";
+                winMessageText = `${flair} Won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL \\(Multiplier: ${escapeMarkdownV2(String(baseMultiplier))}x base\\)\\!`; 
+                
+                const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, finalPayoutForDB, ledgerType, { betId });
+                if (!balanceUpdateResult.success) { throw new Error(`Failed balance update (Slots Win): ${balanceUpdateResult.error}`); }
+                finalUserBalance = balanceUpdateResult.newBalance;
+            } else {
+                dbBetStatus = 'completed_loss';
+                ledgerType = 'slots_loss';
+                profitLamportsOutcome = -betAmountLamports;
+                finalPayoutForDB = jackpotContribution; // Only jackpot contribution is "paid out" from player's perspective, stake is lost.
+                winMessageText = `😢 No win this time\\. Lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; 
+                console.log(`${logPrefix} Slots loss for Bet ID ${betId}. Balance after bet was ${formatSol(balanceAfterBet)} SOL.`); 
+                // On loss, finalUserBalance remains balanceAfterBet (as only jackpot contribution was 'moved')
+                finalUserBalance = balanceAfterBet; // Re-affirm
+                // We need to credit the jackpot contribution back if it was notionally taken from the bet amount for accounting
+                // Or, if jackpot contribution reduces the stake available for payout calculation.
+                // The current placeBet deducts full betAmountLamports. updateUserWagerStats uses full betAmount.
+                // So, on loss, the user has already paid the full bet. No further balance change beyond what placeBet did.
+                // PayoutAmountForDB for a loss should be 0 from the perspective of winnings added back.
+                // However, if your design is that jackpotContribution is taken from wager, and wager includes it,
+                // then `finalPayoutForDB = 0n;` is correct for `updateBetStatus`.
+                // For `updateUserBalanceAndLedger`, no further action needed on loss as balance was already debited.
+                finalPayoutForDB = 0n; // For updateBetStatus: no winnings.
+            }
+            await updateBetStatus(client, betId, dbBetStatus, finalPayoutForDB); 
+            await client.query('COMMIT'); 
+
+            const jackpotAfterSpin = await getJackpotAmount(gameKey); 
+            let resultMsg = `🎰 *Slots Result* 🎰\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nResult: \\| ${displaySymbolsForFinalResult[0]} \\| ${displaySymbolsForFinalResult[1]} \\| ${displaySymbolsForFinalResult[2]} \\|\n\n${winMessageText}`;
+            resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
+            resultMsg += `\n💎 Next Jackpot: *${escapeMarkdownV2(formatSol(jackpotAfterSpin))} SOL*`;
+            const keyboard = { inline_keyboard: [ [{ text: '🔄 Spin Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] };
+            
+            if (messageId && lastMessageText !== resultMsg) { // Avoid editing if identical to last animation frame
+                await bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard })
+                         .catch(async e => {
+                             if (!e.message.includes("message is not modified")) {
+                                console.warn(`${logPrefix} Failed to edit final slots result, sending new. Error: ${e.message}`);
+                                await safeSendMessage(chatId, resultMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+                             }
+                         });
+            } else if (!messageId) { // If original message context was lost for some reason
+                 await safeSendMessage(chatId, resultMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+            }
+
+
+        } catch (dbError) {
+            if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Result DB Rollback failed:`, rbErr));
+            console.error(`${logPrefix} DB Error during game end processing: ${dbError.message}`);
+            throw dbError; 
+        } finally {
+            if (client && !client.isReleased) client.release(); client = null; 
+        }
+    } catch (error) {
+        if (client && !client.isReleased) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Outer Catch Rollback failed:`, rbErr)); 
+        console.error(`${logPrefix} Error in slots game:`, error);
+        const errorMsgFinalSlots = `⚠️ An unexpected error occurred during Slots: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`;
+        const errorKeyboardFinalSlots = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+        if (messageId) {
+            await bot.editMessageText(errorMsgFinalSlots, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinalSlots })
+                 .catch(async e => await safeSendMessage(chatId, errorMsgFinalSlots, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinalSlots}));
+        } else {
+            await safeSendMessage(chatId, errorMsgFinalSlots, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinalSlots});
+        }
+    } finally {
+        if (client && !client.isReleased) client.release();
+    }
 }
 
 // --- End of Part 5a Section 1 ---
