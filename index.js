@@ -385,6 +385,49 @@ const STANDARD_BET_AMOUNTS_SOL = [0.01, 0.05, 0.10, 0.25, 0.5, 1.0]; const STAND
 console.log(`[Config] Standard Bet Amounts (Lamports): ${STANDARD_BET_AMOUNTS_LAMPORTS.join(', ')}`);
 const RACE_HORSES = [ { name: "Solar Sprint", emoji: "🐎₁", payoutMultiplier: 2.8 }, { name: "Comet Tail", emoji: "🏇₂", payoutMultiplier: 3.5 }, { name: "Galaxy Gallop", emoji: "🐴₃", payoutMultiplier: 4.5 }, { name: "Nebula Speed", emoji: "🎠₄", payoutMultiplier: 5.5 }, { name: "Star Dasher", emoji: "🚀₅", payoutMultiplier: 7.0 }, { name: "Void Runner", emoji: "🌠₆", payoutMultiplier: 9.0 } ];
 
+// ***** ADD THE NEW ROULETTE STICKER CONSTANT HERE *****
+const ROULETTE_NUMBER_STICKERS = {
+    0: 'CAACAgQAAxkBAAJBZWgfYSq6zCC3d88lfz5jteLmimynAAI6HQAC1AABgFGUwt-ba6VFIzYE',
+    1: 'CAACAgQAAxkBAAJBZ2gfYZvUDJeXlULdsQNDSr2rnzwkAAKoFgAC9OuBUThYKjFsHNUINgQ',
+    2: 'CAACAgQAAxkBAAJBaWgfYb_wxliLeJKDquGcr18OhQqZAALVFgAChvR5UXXNtwbTRSMzNgQ',
+    3: 'CAACAgQAAxkBAAJBa2gfYdx54l6IzOcxKbcZwL_JPoX9AAJJGAACzviBUTIdC1OxHKQaNgQ',
+    4: 'CAACAgQAAxkBAAJBbWgfYfendTL9svVqMGn7hLVQ79_uAAJ8GAACDciAUYSN0sp7C2LnNgQ',
+    5: 'CAACAgQAAxkBAAJBb2gfYi8mcel7Tcz9rpppecyOnbfFAALKFgACW3KBUQIpefveRTIKNgQ',
+    6: 'CAACAgQAAxkBAAJBcWgfYkaraAkefAUzzHZcc43q3j9IAALLGgACC62BUbKIJ7iU0rb4NgQ',
+    7: 'CAACAgQAAxkBAAJBc2gfYmDRTG0DBQzwP3XJUnZXSonNAALVGAAClPyBUSUxwoUHdsn8NgQ',
+    8: 'CAACAgQAAxkBAAJBdWgfYns_-_QLLn1G8QLiJO1CsXX1AAKAFAACaVaBUUiaHozlFwAB0jYE',
+    9: 'CAACAgQAAxkBAAJBd2gfYpkPKaLHd8EnttGX6hyKJzi4AALgFwAC88p5UUHH5NnJwBYPNgQ',
+    10: 'CAACAgQAAxkBAAJBeWgfYq-pfcJHUfy0tCvYD3cu7EGvAALyGAACucCAUZ6fXOAfAAEs9zYE',
+    11: 'CAACAgQAAxkBAAJBe2gfYt6hVk2Ads3G5g6VXUW37bUGAALZEwACbN2BURqjRgAB0jLjWDYE',
+    12: 'CAACAgQAAxkBAAJBfWgfYvZ3tii60_oM3a_lrqQBbOyHAAJVGAACi-eBUVSNH6piCrwsNgQ',
+    13: 'CAACAgQAAxkBAAJBf2gfYxgIAYEljmSXUw6GMKuEi5B_AAJNHQACZzSAUdecnnT052I6NgQ',
+    14: 'CAACAgQAAxkBAAJBgWgfYz5-f1TZDdKt8C8WL27n35cBAAJDGQACpcN5URDm4Ifd0r06NgQ',
+    15: 'CAACAgQAAxkBAAJBg2gfY2fxRZLu2mV1qfIJO6i18UPbAAKtFgACUFaBUf0GoZ1742K-NgQ',
+    16: 'CAACAgQAAxkBAAJBhWgfY4dwKoW3ECpdcKKy6DE5uA1QAAKvGwACRx95Ub2KbQXS25k_NgQ',
+    17: 'CAACAgQAAxkBAAJBh2gfY6yoeT7vMohvm9B1N7PwgfchAAIuGAACK5eBUdo-jXChdkRhNgQ',
+    18: 'CAACAgQAAxkBAAJBiWgfY79nfAK7a2912afa9BAtJNAnAAJjGQACfHt4Uaxk_YBdcErDNgQ',
+    19: 'CAACAgQAAxkBAAJBi2gfY-xsXeoJwpEPa-Yqpw7DQ0bEAAIpGQACsPCAUfSIqog8-IdgNgQ',
+    20: 'CAACAgQAAxkBAAJBjWgfZBAig2hwYq8tIdD36oU0LtQrAAJzGgACvs54UZK5KgfIrF_lNgQ',
+    21: 'CAACAgQAAxkBAAJBj2gfZED5N4ReEwjh2a_CogWqGP3jAALGFwAC_V2AUXeSG0ZgWd5jNgQ',
+    22: 'CAACAgQAAxkBAAJBkWgfZGdRsRKjou304SUpaWG3CtBxAAMZAAITwoBRIlMrM9BBD0g2BA',
+    23: 'CAACAgQAAxkBAAJBk2gfZH-PyfcbL7LYTN6FUTtKOed3AAJMGAAC6d2BUXq6dfIzfhljNgQ',
+    24: 'CAACAgQAAxkBAAJBlWgfZKI-I-KyhLjQ5nSm5A1OIvzaAALhGgACeS-AUdEviXb3bvCcNgQ',
+    25: 'CAACAgQAAxkBAAJBl2gfZM2EOYpsold9-M-HnM2wfzTEAALmFwACI96AUWwyQ3Omp9HTNgQ',
+    26: 'CAACAgQAAxkBAAJBmWgfZPnEQpGb-0yimgkTVCaE9TUlAALNIAACfXmBUb6hDihoktivNgQ',
+    27: 'CAACAgQAAxkBAAJBm2gfZRttjRHgFKoioD6IhdxuAAEZGwACoBcAAjK0gVFqoRMWJ0V2AjYE',
+    28: 'CAACAgQAAxkBAAJBnWgfZVFWHJQRa6FhH4o1dS3WWMxNAALzFQACNO2BUVsOM4juGOTINgQ',
+    29: 'CAACAgQAAxkBAAJBn2gfZWv8OjdgLiE5lZn_lQXEokjzAAJ6FwACAvZ4UXK88kRPGqWWNgQ',
+    30: 'CAACAgQAAxkBAAJBoWgfZZBs_hsDu7T-cinVkP_fJjXOAAKsFQACoyyBUSIq6OlCBV8kNgQ',
+    31: 'CAACAgQAAxkBAAJBo2gfZeSRehu15Pfc1iLDkjugPR_GAAIOGwACtbqAUQ1y_oj3ur3ENgQ',
+    32: 'CAACAgQAAxkBAAJBpWgfZgEsD9p27FCjyt-SKHVyKf6TAAJbFwACyad5UYWo5iH3DzX9NgQ',
+    33: 'CAACAgQAAxkBAAJBp2gfZih_bMs_GQQWpwUcg_JYe0C6AAKMGQACjcl4URhc62AjMUuNNgQ',
+    34: 'CAACAgQAAxkBAAJBqWgfZleUcTpdKvRSMvv9x-XHERkaAAJYFgAC-feBUSUjonJS-hFjNgQ',
+    35: 'CAACAgQAAxkBAAJBq2gfZmVMVKXbQeXyEc5tYQIn86rdAAKSFgACwpOAUcdyb2uPc8PINgQ',
+    36: 'CAACAgQAAxkBAAJBrWgfZpPf7L25sYYDrqF7-rnDfvVjAAKsFwAC1tCBUW3xTDWDKfgwNgQ',
+    default: 'CAACAgQAAxkBAAJBZWgfYSq6zCC3d88lfz5jteLmimynAAI6HQAC1AABgFGUwt-ba6VFIzYE' // Using '0' as a fallback; replace if you have a generic roulette sticker
+};
+// ***** END OF ROULETTE STICKER CONSTANT *****
+
 // In-memory Caches & State
 const userStateCache = new Map(); const walletCache = new Map(); const activeDepositAddresses = new Map();
 const processedDepositTxSignatures = new Set(); const commandCooldown = new Map(); const pendingReferrals = new Map();
