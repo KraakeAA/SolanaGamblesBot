@@ -4475,134 +4475,211 @@ async function handleSlotsGame(userId, chatId, messageId, betAmountLamports) {
 
 // Section 2b: Roulette, War, Crash, Blackjack Game Handlers (Modified)
 
+/*
+// Reminder: ROULETTE_NUMBER_STICKERS constant should be defined in Part 1
+// Example of how it should look in Part 1:
+const ROULETTE_NUMBER_STICKERS = {
+    0: 'CAACAgQAAxkBAAJBZWgfYSq6zCC3d88lfz5jteLmimynAAI6HQAC1AABgFGUwt-ba6VFIzYE',
+    1: 'CAACAgQAAxkBAAJBZ2gfYZvUDJeXlULdsQNDSr2rnzwkAAKoFgAC9OuBUThYKjFsHNUINgQ',
+    2: 'CAACAgQAAxkBAAJBaWgfYb_wxliLeJKDquGcr18OhQqZAALVFgAChvR5UXXNtwbTRSMzNgQ',
+    3: 'CAACAgQAAxkBAAJBa2gfYdx54l6IzOcxKbcZwL_JPoX9AAJJGAACzviBUTIdC1OxHKQaNgQ',
+    4: 'CAACAgQAAxkBAAJBbWgfYfendTL9svVqMGn7hLVQ79_uAAJ8GAACDciAUYSN0sp7C2LnNgQ',
+    5: 'CAACAgQAAxkBAAJBb2gfYi8mcel7Tcz9rpppecyOnbfFAALKFgACW3KBUQIpefveRTIKNgQ',
+    6: 'CAACAgQAAxkBAAJBcWgfYkaraAkefAUzzHZcc43q3j9IAALLGgACC62BUbKIJ7iU0rb4NgQ',
+    7: 'CAACAgQAAxkBAAJBc2gfYmDRTG0DBQzwP3XJUnZXSonNAALVGAAClPyBUSUxwoUHdsn8NgQ',
+    8: 'CAACAgQAAxkBAAJBdWgfYns_-_QLLn1G8QLiJO1CsXX1AAKAFAACaVaBUUiaHozlFwAB0jYE',
+    9: 'CAACAgQAAxkBAAJBd2gfYpkPKaLHd8EnttGX6hyKJzi4AALgFwAC88p5UUHH5NnJwBYPNgQ',
+    10: 'CAACAgQAAxkBAAJBeWgfYq-pfcJHUfy0tCvYD3cu7EGvAALyGAACucCAUZ6fXOAfAAEs9zYE',
+    11: 'CAACAgQAAxkBAAJBe2gfYt6hVk2Ads3G5g6VXUW37bUGAALZEwACbN2BURqjRgAB0jLjWDYE',
+    12: 'CAACAgQAAxkBAAJBfWgfYvZ3tii60_oM3a_lrqQBbOyHAAJVGAACi-eBUVSNH6piCrwsNgQ',
+    13: 'CAACAgQAAxkBAAJBf2gfYxgIAYEljmSXUw6GMKuEi5B_AAJNHQACZzSAUdecnnT052I6NgQ',
+    14: 'CAACAgQAAxkBAAJBgWgfYz5-f1TZDdKt8C8WL27n35cBAAJDGQACpcN5URDm4Ifd0r06NgQ',
+    15: 'CAACAgQAAxkBAAJBg2gfY2fxRZLu2mV1qfIJO6i18UPbAAKtFgACUFaBUf0GoZ1742K-NgQ',
+    16: 'CAACAgQAAxkBAAJBhWgfY4dwKoW3ECpdcKKy6DE5uA1QAAKvGwACRx95Ub2KbQXS25k_NgQ',
+    17: 'CAACAgQAAxkBAAJBh2gfY6yoeT7vMohvm9B1N7PwgfchAAIuGAACK5eBUdo-jXChdkRhNgQ',
+    18: 'CAACAgQAAxkBAAJBiWgfY79nfAK7a2912afa9BAtJNAnAAJjGQACfHt4Uaxk_YBdcErDNgQ',
+    19: 'CAACAgQAAxkBAAJBi2gfY-xsXeoJwpEPa-Yqpw7DQ0bEAAIpGQACsPCAUfSIqog8-IdgNgQ',
+    20: 'CAACAgQAAxkBAAJBjWgfZBAig2hwYq8tIdD36oU0LtQrAAJzGgACvs54UZK5KgfIrF_lNgQ',
+    21: 'CAACAgQAAxkBAAJBj2gfZED5N4ReEwjh2a_CogWqGP3jAALGFwAC_V2AUXeSG0ZgWd5jNgQ',
+    22: 'CAACAgQAAxkBAAJBkWgfZGdRsRKjou304SUpaWG3CtBxAAMZAAITwoBRIlMrM9BBD0g2BA',
+    23: 'CAACAgQAAxkBAAJBk2gfZH-PyfcbL7LYTN6FUTtKOed3AAJMGAAC6d2BUXq6dfIzfhljNgQ',
+    24: 'CAACAgQAAxkBAAJBlWgfZKI-I-KyhLjQ5nSm5A1OIvzaAALhGgACeS-AUdEviXb3bvCcNgQ',
+    25: 'CAACAgQAAxkBAAJBl2gfZM2EOYpsold9-M-HnM2wfzTEAALmFwACI96AUWwyQ3Omp9HTNgQ',
+    26: 'CAACAgQAAxkBAAJBmWgfZPnEQpGb-0yimgkTVCaE9TUlAALNIAACfXmBUb6hDihoktivNgQ',
+    27: 'CAACAgQAAxkBAAJBm2gfZRttjRHgFKoioD6IhdxuAAEZGwACoBcAAjK0gVFqoRMWJ0V2AjYE',
+    28: 'CAACAgQAAxkBAAJBnWgfZVFWHJQRa6FhH4o1dS3WWMxNAALzFQACNO2BUVsOM4juGOTINgQ',
+    29: 'CAACAgQAAxkBAAJBn2gfZWv8OjdgLiE5lZn_lQXEokjzAAJ6FwACAvZ4UXK88kRPGqWWNgQ',
+    30: 'CAACAgQAAxkBAAJBoWgfZZBs_hsDu7T-cinVkP_fJjXOAAKsFQACoyyBUSIq6OlCBV8kNgQ',
+    31: 'CAACAgQAAxkBAAJBo2gfZeSRehu15Pfc1iLDkjugPR_GAAIOGwACtbqAUQ1y_oj3ur3ENgQ',
+    32: 'CAACAgQAAxkBAAJBpWgfZgEsD9p27FCjyt-SKHVyKf6TAAJbFwACyad5UYWo5iH3DzX9NgQ',
+    33: 'CAACAgQAAxkBAAJBp2gfZih_bMs_GQQWpwUcg_JYe0C6AAKMGQACjcl4URhc62AjMUuNNgQ',
+    34: 'CAACAgQAAxkBAAJBqWgfZleUcTpdKvRSMvv9x-XHERkaAAJYFgAC-feBUSUjonJS-hFjNgQ',
+    35: 'CAACAgQAAxkBAAJBq2gfZmVMVKXbQeXyEc5tYQIn86rdAAKSFgACwpOAUcdyb2uPc8PINgQ',
+    36: 'CAACAgQAAxkBAAJBrWgfZpPf7L25sYYDrqF7-rnDfvVjAAKsFwAC1tCBUW3xTDWDKfgwNgQ',
+    default: 'CAACAgQAAxkBAAJBZWgfYSq6zCC3d88lfz5jteLmimynAAI6HQAC1AABgFGUwt-ba6VFIzYE' // Default to '0' sticker
+};
+*/
+
 async function handleRouletteGame(userId, chatId, messageId, betAmountLamports, betType, betValue) {
     const gameKey = 'roulette';
-    const gameConfig = GAME_CONFIG[gameKey]; // GAME_CONFIG from Part 1
+    const gameConfig = GAME_CONFIG[gameKey];
     const logPrefix = `[RouletteGame User ${userId} Bet ${betAmountLamports} Type ${betType} Val ${betValue}]`;
     console.log(`${logPrefix} Handling roulette spin.`);
 
     let client = null;
-    let finalUserBalance; // To store the correct final balance
+    let finalUserBalance;
+
+    if (typeof ROULETTE_NUMBER_STICKERS === 'undefined') {
+        console.error(`${logPrefix} ROULETTE_NUMBER_STICKERS constant is not defined! Stickers will not be used.`);
+        // No need to halt the game, will fallback to text for winning number.
+    }
 
     try {
-        client = await pool.connect(); // pool from Part 1
+        client = await pool.connect();
         await client.query('BEGIN');
 
-        // Define bet details based on type
-        let betDetails = { type: betType };
-        if (betType === 'straight') {
-            betDetails.value = betValue; // betValue here is the chosen number string
-        } // Other types don't need a specific value stored beyond the type itself
+        let betDetails = { type: betType };
+        if (betType === 'straight' && betValue !== undefined && betValue !== null) {
+            betDetails.value = String(betValue);
+        }
 
-        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, betDetails, betAmountLamports); // placeBet from Part 5a-1
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, betDetails, betAmountLamports);
         if (!betPlacementResult.success) {
-            await client.query('ROLLBACK');
-            const errorMsg = betPlacementResult.error === 'Insufficient balance'
-                ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` // Escaped . formatSol from Part 3
-                : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`; // Escaped .
-                if(client) client.release();
-            return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
+            await client.query('ROLLBACK');
+            const errorMsg = betPlacementResult.error === 'Insufficient balance'
+                ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.`
+                : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
+            if(client) client.release();
+            const errorKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+            if (messageId) {
+                await bot.editMessageText(errorMsg, {chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard})
+                         .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboard}));
+            } else {
+                await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboard});
+            }
+            return;
         }
         const { betId, newBalance: balanceAfterBet } = betPlacementResult;
-        finalUserBalance = balanceAfterBet; // Initialize final balance with balance after bet
+        finalUserBalance = balanceAfterBet;
 
-        const { winningNumber } = simulateRouletteSpin(); // from Part 4
-        // Use the bet details saved during placement for consistency
-        const basePayoutMultiplier = getRoulettePayoutMultiplier(betDetails.type, betDetails.value, winningNumber); // from Part 4
+        const { winningNumber } = simulateRouletteSpin();
+        const basePayoutMultiplier = getRoulettePayoutMultiplier(betDetails.type, betDetails.value, winningNumber);
         const win = basePayoutMultiplier > 0;
 
-        // Payout Logic
-        let profitLamportsOutcome = -betAmountLamports; // Default loss, used for win calculation/message display
-        let payoutAmountForDB = 0n; // For DB bet status AND balance update on win (Stake + Net Profit)
+        let profitLamportsOutcome = -betAmountLamports;
+        let amountToCreditToUser = 0n;
 
         if (win) {
             const grossWinnings = BigInt(Math.floor(Number(betAmountLamports) * basePayoutMultiplier));
             const netWinningsAfterEdge = BigInt(Math.floor(Number(grossWinnings) * (1 - gameConfig.houseEdge)));
-            profitLamportsOutcome = netWinningsAfterEdge; // This is the actual profit for message display
-            payoutAmountForDB = betAmountLamports + netWinningsAfterEdge; // Total returned to user for balance update
+            profitLamportsOutcome = netWinningsAfterEdge;
+            amountToCreditToUser = betAmountLamports + netWinningsAfterEdge;
 
-            // *** FIX #0: Update balance using TOTAL PAYOUT (Stake + Profit) ***
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, 'roulette_win', { betId }); // from Part 2
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, amountToCreditToUser, 'roulette_win', { betId });
             if (!balanceUpdateResult.success) {
                 await client.query('ROLLBACK');
-                // MarkdownV2 Safety: Escape error message, bet ID
-                const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`; // Escaped .
+                const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`;
                 if(client) client.release();
-                return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
+                const errorKeyboardCrit = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+                if (messageId) { // Try to edit the original confirmation message
+                     await bot.editMessageText(errorMsg, {chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit })
+                              .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit}));
+                } else { // If no messageId (e.g. error before initial message edit), send new
+                    await safeSendMessage(chatId, errorMsg, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit });
+                }
+                return;
             }
-            finalUserBalance = balanceUpdateResult.newBalance; // Update final balance on win (will be B+P)
+            finalUserBalance = balanceUpdateResult.newBalance;
         } else {
-             // *** LOSS: No balance update needed here, only mark bet status ***
-            profitLamportsOutcome = -betAmountLamports; // Keep for potential logging/message
-            payoutAmountForDB = 0n; // Payout for DB status update
-             // `finalUserBalance` remains `balanceAfterBet`
-             console.log(`${logPrefix} Roulette loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL after initial deduction.`);
+            amountToCreditToUser = 0n;
+            console.log(`${logPrefix} Roulette loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} after initial deduction.`);
         }
 
-        // Update bet status regardless of win/loss, use payoutAmountForDB
-        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutAmountForDB); // from Part 2
+        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', amountToCreditToUser);
         await client.query('COMMIT');
 
-        // Animation: Show "spinning" message
-      // Construct bet description string, ensure escaping
-        let betDescription = escapeMarkdownV2(betDetails.type);
-        if (betDetails.type === 'straight' && betDetails.value !== undefined && betDetails.value !== null) {
+        // --- Animation & Result Display with Sticker ---
+        if (messageId) { // messageId is from the 'Confirm Bet' button press
+            await bot.deleteMessage(chatId, messageId).catch(e => console.warn(`${logPrefix} Non-critical: Failed to delete confirm bet message ${messageId}: ${e.message}`));
+        }
+
+        const spinningMessage = await safeSendMessage(chatId, "🎡 Roulette wheel is spinning\\! Please wait for the result\\.\\.\\.", { parse_mode: 'MarkdownV2' });
+        await sleep(3000); 
+
+        if (spinningMessage && spinningMessage.message_id) {
+            await bot.deleteMessage(chatId, spinningMessage.message_id).catch(e => console.warn(`${logPrefix} Non-critical: Failed to delete spinning message: ${e.message}`));
+        }
+
+        let sentStickerMessage = null;
+        if (typeof ROULETTE_NUMBER_STICKERS !== 'undefined' && ROULETTE_NUMBER_STICKERS) {
+            const stickerFileId = ROULETTE_NUMBER_STICKERS[winningNumber] || ROULETTE_NUMBER_STICKERS.default;
+            if (stickerFileId) {
+                console.log(`${logPrefix} Attempting to send sticker for winning number ${winningNumber}. File ID: ${stickerFileId}`);
+                try {
+                    sentStickerMessage = await bot.sendSticker(chatId, stickerFileId);
+                    console.log(`${logPrefix} Sticker sent successfully for number ${winningNumber}. Message ID: ${sentStickerMessage.message_id}`);
+                } catch (stickerError) {
+                    console.error(`${logPrefix} Failed to send sticker for winning number ${winningNumber} (ID: ${stickerFileId}): ${stickerError.message}`, stickerError);
+                    await safeSendMessage(chatId, `Winning Number: *${escapeMarkdownV2(String(winningNumber))}*`, { parse_mode: 'MarkdownV2' });
+                }
+            } else {
+                console.warn(`${logPrefix} No sticker file_id found for winning number ${winningNumber} or default in ROULETTE_NUMBER_STICKERS.`);
+                await safeSendMessage(chatId, `Winning Number: *${escapeMarkdownV2(String(winningNumber))}*`, { parse_mode: 'MarkdownV2' });
+            }
+        } else {
+             console.error(`${logPrefix} ROULETTE_NUMBER_STICKERS constant is not defined! Ensure it is defined in Part 1.`);
+             await safeSendMessage(chatId, `Winning Number: *${escapeMarkdownV2(String(winningNumber))}*`, { parse_mode: 'MarkdownV2' });
+        }
+
+        let betDescription = escapeMarkdownV2(betDetails.type);
+        if (betDetails.type === 'straight' && betDetails.value) {
             betDescription += ` on ${escapeMarkdownV2(betDetails.value)}`;
         } else if (betDetails.type === 'red') { betDescription = '🔴 Red'; }
-        else if (betDetails.type === 'black') { betDescription = '⚫️ Black'; }
+        else if (betDetails.type === 'black') { betDescription = '⚫️ Black'; }
         else if (betDetails.type === 'even') { betDescription = '🔢 Even'; }
         else if (betDetails.type === 'odd') { betDescription = '🔢 Odd'; }
-        else if (betDetails.type === 'low') { betDescription = '📉 Low \\(1\\-18\\)'; } // Escaped () -
-        else if (betDetails.type === 'high') { betDescription = '📈 High \\(19\\-36\\)'; } // Escaped () -
+        else if (betDetails.type === 'low') { betDescription = '📉 Low \\(1\\-18\\)'; }
+        else if (betDetails.type === 'high') { betDescription = '📈 High \\(19\\-36\\)';}
 
-        const spinningText = `⚪️ *Roulette Spinning\\!* ⚪️\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL on ${betDescription}\n\nSpinning the wheel\\.\\.\\.`; // Escaped ! ... Add Emoji
-        await bot.editMessageText(spinningText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' }).catch(e => {
-           if (!e.message.includes("message is not modified") && e.message.toLowerCase().includes("can't parse")) {
-               console.error(`[RouletteGame] PARSE ERROR ON SPINNING TEXT: ${spinningText}`, e.message);
-           } else if (!e.message.includes("message is not modified")) {
-               console.warn(`[RouletteGame] Failed edit for spinning text: ${e.message}`);
-           }
-       });
-        await sleep(2000); // sleep from Part 1
+        let resultText = `*Roulette Result*\n\n` +
+                         (sentStickerMessage ? `Winning Number announced via sticker above\\!\n` : ``) + // Reference sticker if sent
+                         `Actual Number: *${escapeMarkdownV2(String(winningNumber))}*\n` +
+                         `Your Bet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL on ${betDescription}\n\n`;
 
-        // Final Message Construction with careful escaping
-        const numberColor = winningNumber === 0 ? '🟢' : (getRoulettePayoutMultiplier('red', null, winningNumber) ? '🔴' : '⚫️');
-        let resultMsg = `⚪️ *Roulette Result* ⚪️\n\nWinning Number: *${escapeMarkdownV2(numberColor + String(winningNumber))}*\\!\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL on ${betDescription}\n\n`; // Escaped !
-
-      // *** CORRECTED escaping for result lines ***
         if (win) {
-            // Escape parentheses and exclamation mark
-            resultMsg += `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! \\(Multiplier: ${escapeMarkdownV2(basePayoutMultiplier)}x base\\)`; // Display profit in message, escaped ()!
+            resultText += `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\! \\(Multiplier: ${escapeMarkdownV2(String(basePayoutMultiplier))}x base\\)`;
         } else {
-            // Escape period
-            resultMsg += `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; // Escaped .
+            resultText += `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`;
         }
-        resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`; // Display correct final balance (B+P on win)
+        resultText += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
 
-        const keyboard = { // Add Emojis
+        const resultKeyboard = {
             inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]]
         };
-        await bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard }).catch(e => {
-            if (!e.message.includes("message is not modified") && e.message.toLowerCase().includes("can't parse")) {
-               console.error(`[RouletteGame] PARSE ERROR ON FINAL RESULT TEXT: ${resultMsg}`, e.message);
-               // Fallback to plain text if parse fails
-               const plainResult = `Roulette Result\nWinning Number: ${numberColor + String(winningNumber)}\nBet: ${formatSol(betAmountLamports)} SOL on ${betDetails.type}${betDetails.value ? ' on '+betDetails.value : ''}\nOutcome: ${win ? 'Win '+formatSol(profitLamportsOutcome)+' SOL' : 'Loss '+formatSol(betAmountLamports)+' SOL'}\nNew Balance: ${formatSol(finalUserBalance)} SOL`;
-               safeSendMessage(chatId, plainResult, { reply_markup: keyboard });
-            } else if (!e.message.includes("message is not modified")) {
-               console.warn(`[RouletteGame] Failed edit for final result text: ${e.message}`);
-               // Attempt to send as new message if edit fails non-parsing reason
-               safeSendMessage(chatId, resultMsg, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
-            }
-       });
+
+        const textResultOptions = {
+            parse_mode: 'MarkdownV2',
+            reply_markup: resultKeyboard,
+            ...(sentStickerMessage && sentStickerMessage.message_id && { reply_to_message_id: sentStickerMessage.message_id })
+        };
+        await safeSendMessage(chatId, resultText, textResultOptions);
 
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr));
         console.error(`${logPrefix} Error in roulette game:`, error);
-        // MarkdownV2 Safety: Escape error message
-        bot.editMessageText(`⚠️ An unexpected error occurred during Roulette: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { // Escaped .
-            chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2',
-            reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] }
-        });
+        const errorText = `⚠️ An unexpected error occurred during Roulette: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`;
+        const errorKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+        // messageId might be undefined if error happened before it was established by a sent message
+        // If messageId exists from an earlier step (like the bet confirmation button message), try to edit it.
+        // Otherwise, just send a new error message.
+        const lastResortSendMessage = async () => await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
+
+        if (messageId) { 
+            await bot.editMessageText(errorText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard })
+                     .catch(lastResortSendMessage); // If edit fails, send new
+        } else {
+            await lastResortSendMessage();
+        }
     } finally {
         if (client) client.release();
     }
