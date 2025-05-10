@@ -3966,14 +3966,6 @@ async function placeBet(client, userId, chatId, gameKey, betDetails, betAmountLa
 
 // Section 2a: Coinflip, Race, Slots Game Handlers (Win Payout Accounting Fix Applied)
 
-// Define Coinflip stickers - In your main index.js, this should ideally be in Part 1 with other global constants.
-// For this specific "full code" snippet for handleCoinflipGame, I'm placing it here for completeness.
-const COINFLIP_OUTCOME_STICKERS = {
-    heads: 'CAACAgIAAxkBAAJBr2gfdQ1G0hmtGpOu9y7ZqU53bx2VAAIEAAPoKkcM8DdYVoNZHyg2BA', // YOUR HEADS STICKER ID
-    tails: 'CAACAgIAAxkBAAJBsWgfdQ91XXLMciKgLt1yXmTlTUIqAAIFAAPoKkcMfEUkxa9mdmU2BA', // YOUR TAILS STICKER ID
-    spinning: null // Optional: 'YOUR_SPINNING_COIN_STICKER_ID' - if null, text will be used.
-};
-
 async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, chosenSide) {
     const gameKey = 'coinflip';
     const gameConfig = GAME_CONFIG[gameKey];
