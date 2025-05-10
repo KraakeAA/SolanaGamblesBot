@@ -5159,7 +5159,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         const feeSOLFormatted = escapeMarkdownV2(formatSol(feeLamports));
         const totalSOLFormatted = escapeMarkdownV2(formatSol(totalDeductionLamports));
         const addressFormatted = escapeMarkdownV2(linkedWallet);
-        const finalBreadcrumb = `${escapeMarkdownV2(breadcrumb)} > Confirm ${amountSOLFormatted} SOL`; // Escaped >
+        const finalBreadcrumb = `${escapeMarkdownV2(breadcrumb)} \\> Confirm ${amountSOLFormatted} SOL`;
 
         // MarkdownV2 Safety: Escape everything
         const confirmationText = `*Confirm Withdrawal*\n\n` +
