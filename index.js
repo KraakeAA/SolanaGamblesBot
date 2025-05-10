@@ -4018,7 +4018,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         await sleep(2000); 
 
         let raceHeader = `🏁 *Race in Progress\\!* 💨\n\n`;
-        const VIRTUAL_TRACK_LENGTH = 35;    // Shortened virtual track based on user feedback
+        const VIRTUAL_TRACK_LENGTH = 40;    // Shortened virtual track based on user feedback
         const VISUAL_TRACK_SLOTS = 10;       // Shortened visual bar based on user feedback
         const FINISH_LINE_CHAR = '🏁';      // Displayed as the last char of the bar if not finished/won
         const WINNER_TROPHY_CHAR = '🏆';    // Replaces finish_char for the winner
