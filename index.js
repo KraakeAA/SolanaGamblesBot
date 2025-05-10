@@ -4018,7 +4018,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
         await sleep(2000); 
 
         let raceHeader = `🏁 *Race in Progress\\!* 💨\n\n`;
-        const VIRTUAL_TRACK_LENGTH = 50; 
+        const VIRTUAL_TRACK_LENGTH = 40; 
         const VISUAL_TRACK_SLOTS = 10;      // Total character slots for the bar [.....🏇...
         const FINISH_LINE_IN_BAR = '🏁'; 
         const TROPHY_IN_BAR = '🏆';
