@@ -5070,229 +5070,240 @@ async function handleWarGame(userId, chatId, messageId, betAmountLamports) {
 
 
 async function handleCrashGame(userId, chatId, messageId, betAmountLamports) {
-    const gameKey = 'crash';
-    const gameConfig = GAME_CONFIG[gameKey];
-    const logPrefix = `[CrashGame User ${userId} Bet ${betAmountLamports}]`;
-    console.log(`${logPrefix} Starting Crash game.`);
+    const gameKey = 'crash';
+    const gameConfig = GAME_CONFIG[gameKey];
+    const logPrefix = `[CrashGame User ${userId} Bet ${betAmountLamports}]`;
+    console.log(`${logPrefix} Starting Crash game with MORE engaging visuals.`);
 
-    let client = null;
-    let betId = null;
-    let balanceAfterBet = null;
-    let lastMessageText = ""; // To prevent redundant message edits
+    let client = null;
+    let betId = null;
+    let balanceAfterBet = null;
+    let lastMessageText = "";
+    let currentMessageIdForAnimation = messageId;
 
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
 
-        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, {}, betAmountLamports);
-        if (!betPlacementResult.success) {
-            await client.query('ROLLBACK');
-            const errorMsg = betPlacementResult.error === 'Insufficient balance'
-                ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.`
-                : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
-            if(client) client.release();
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, {}, betAmountLamports);
+        if (!betPlacementResult.success) {
+            await client.query('ROLLBACK');
+            const errorMsg = betPlacementResult.error === 'Insufficient balance'
+                ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.`
+                : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
+            if(client) client.release();
             const errorKeyboardBet = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
-            if (messageId) { // messageId is from the callback that triggered the game (e.g. confirm_bet)
-                await bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet})
-                         .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet}));
-            } else { // Should not happen if called from button, but for safety
+            if (currentMessageIdForAnimation) {
+                await bot.editMessageText(errorMsg, { chat_id: chatId, message_id: currentMessageIdForAnimation, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet})
+                    .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet}));
+            } else {
                 await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet});
             }
-            return;
-        }
-        betId = betPlacementResult.betId;
-        balanceAfterBet = betPlacementResult.newBalance;
+            return;
+        }
+        betId = betPlacementResult.betId;
+        balanceAfterBet = betPlacementResult.newBalance;
 
-        await updateBetStatus(client, betId, 'processing_game');
-        await client.query('COMMIT');
-        if(client) client.release(); client = null;
+        await updateBetStatus(client, betId, 'processing_game');
+        await client.query('COMMIT');
+        if(client) client.release(); client = null;
 
-        const crashPoint = simulateCrash();
-        if (typeof crashPoint?.crashMultiplier !== 'number') {
-            console.error(`${logPrefix} simulateCrash returned invalid data:`, crashPoint);
-            throw new Error("Failed to simulate crash point.");
-        }
-        const actualCrashPoint = crashPoint.crashMultiplier;
-        console.log(`${logPrefix} Game will crash at ${actualCrashPoint}x. Bet ID: ${betId}`);
+        const crashPoint = simulateCrash();
+        if (typeof crashPoint?.crashMultiplier !== 'number') {
+            console.error(`${logPrefix} simulateCrash returned invalid data:`, crashPoint);
+            throw new Error("Failed to simulate crash point\\.");
+        }
+        const actualCrashPoint = crashPoint.crashMultiplier;
+        console.log(`${logPrefix} Game will crash at ${actualCrashPoint}x. Bet ID: ${betId}`);
 
-        let currentMessageIdForAnimation = messageId; // Use the ID of the message that confirmed the bet
-
-        // Set up initial message for the animation
-        const initialAnimationText = `🚀 *Crash Game Started\\!* 🚀\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nMultiplier: *${escapeMarkdownV2("1.00")}x*\n\nWaiting for lift off\\!`;
+        const initialBetAmountFormatted = escapeMarkdownV2(formatSol(betAmountLamports));
+        const initialMultiplierFormatted = escapeMarkdownV2("1.00");
+        const initialAnimationText = `🚀 *Crash Game Starting\\!* 🚀\n\nBet: ${initialBetAmountFormatted} SOL\nMultiplier: *${initialMultiplierFormatted}x*\n\nIgnition sequence confirmed\\! Countdown\\.\\.\\. 3\\.\\.\\. 2\\.\\.\\. 1\\.\\.\\.`; // Escaped ! ...
         try {
             if (currentMessageIdForAnimation) {
                 await bot.editMessageText(initialAnimationText, {
                     chat_id: chatId, message_id: currentMessageIdForAnimation, parse_mode: 'MarkdownV2',
                     reply_markup: { inline_keyboard: [[{ text: `💸 Cash Out at 1.00x`, callback_data: `cash_out_crash:${betId}` }]] }
                 });
-            } else { // Fallback if messageId was somehow lost (e.g., direct call to handleCrashGame without UI interaction)
+            } else {
                 const sentMsg = await safeSendMessage(chatId, initialAnimationText, {
                     parse_mode: 'MarkdownV2',
                     reply_markup: { inline_keyboard: [[{ text: `💸 Cash Out at 1.00x`, callback_data: `cash_out_crash:${betId}` }]] }
                 });
                 if (sentMsg) currentMessageIdForAnimation = sentMsg.message_id;
+                else throw new Error("Failed to send initial Crash message for animation.");
             }
         } catch (e) {
             console.warn(`${logPrefix} Error sending/editing initial crash message: ${e.message}`);
-            // If initial message fails, we might not be able to continue the animation.
-            // Try sending a simple error and aborting or handling gracefully.
-            if (!currentMessageIdForAnimation) { // If we couldn't even send the initial message
-                 await safeSendMessage(chatId, `⚠️ Error starting Crash game animation. Please try again.`, {parse_mode: 'MarkdownV2'});
-                 throw new Error("Failed to establish message for Crash animation."); // Propagate to main catch
+            if (!currentMessageIdForAnimation) {
+                await safeSendMessage(chatId, `⚠️ Error starting Crash game animation\\. Please try again\\.`, {parse_mode: 'MarkdownV2'});
+                throw new Error("Failed to establish message for Crash animation\\.");
             }
         }
         lastMessageText = initialAnimationText;
         await sleep(1500);
 
-        userStateCache.set(userId, {
-            action: 'awaiting_crash_cashout',
-            gameKey: gameKey,
-            betId: betId,
-            betAmountLamports: betAmountLamports.toString(),
-            chatId: String(chatId),
-            messageId: currentMessageIdForAnimation, // ID of the message being animated
-            currentMultiplier: 1.00,
-            targetCrashMultiplier: actualCrashPoint,
-            balanceAfterBet: balanceAfterBet.toString(),
-            timestamp: Date.now()
-        });
+        userStateCache.set(userId, {
+            action: 'awaiting_crash_cashout', gameKey: gameKey, betId: betId,
+            betAmountLamports: betAmountLamports.toString(), chatId: String(chatId),
+            messageId: currentMessageIdForAnimation, currentMultiplier: 1.00,
+            targetCrashMultiplier: actualCrashPoint, balanceAfterBet: balanceAfterBet.toString(),
+            timestamp: Date.now()
+        });
 
-        let currentMultiplier = 1.00;
-        let loopActive = true;
+        let currentMultiplier = 1.00;
+        let loopActive = true;
 
-        while (loopActive && currentMessageIdForAnimation) { // Ensure we have a message to update
-            const gameState = userStateCache.get(userId);
-            if (!gameState || gameState.action !== 'awaiting_crash_cashout' || gameState.betId !== betId) {
-                console.log(`${logPrefix} Game state changed or cleared externally (e.g., user cashed out or cancelled). Ending loop for Bet ID ${betId}.`);
-                loopActive = false;
-                break;
-            }
+        while (loopActive && currentMessageIdForAnimation) {
+            const gameState = userStateCache.get(userId);
+            if (!gameState || gameState.action !== 'awaiting_crash_cashout' || gameState.betId !== betId) {
+                loopActive = false; break;
+            }
+            if (currentMultiplier >= actualCrashPoint) {
+                loopActive = false; break;
+            }
 
-            if (currentMultiplier >= actualCrashPoint) {
-                console.log(`${logPrefix} Multiplier ${currentMultiplier.toFixed(2)} reached/exceeded crash point ${actualCrashPoint.toFixed(2)}. Crashing.`);
-                loopActive = false;
-                break; 
-            }
+            const oldMultiplier = currentMultiplier;
+            let increment = 0.01;
+            if (oldMultiplier >= 50) increment = 0.75 + (Math.random() * 0.5);
+            else if (oldMultiplier >= 25) increment = 0.50 + (Math.random() * 0.25);
+            else if (oldMultiplier >= 10) increment = 0.20 + (Math.random() * 0.1);
+            else if (oldMultiplier >= 5) increment = 0.08 + (Math.random() * 0.04);
+            else if (oldMultiplier >= 2) increment = 0.03 + (Math.random() * 0.02);
+            currentMultiplier = parseFloat((oldMultiplier + Math.max(0.01, increment)).toFixed(2));
 
-            const oldMultiplier = currentMultiplier;
-            let increment = 0.01; 
-            if (oldMultiplier >= 20) increment = 0.50;
-            else if (oldMultiplier >= 10) increment = 0.25;
-            else if (oldMultiplier >= 5) increment = 0.10;
-            else if (oldMultiplier >= 3) increment = 0.05;
-            else if (oldMultiplier >= 1.5) increment = 0.02;
-            currentMultiplier = parseFloat((oldMultiplier + Math.max(0.01, increment)).toFixed(2));
+            gameState.currentMultiplier = currentMultiplier;
+            userStateCache.set(userId, gameState);
 
-            gameState.currentMultiplier = currentMultiplier;
-            userStateCache.set(userId, gameState); 
+            const multiplierForButtonText = currentMultiplier.toFixed(2);
+            const multiplierForMessageBody = escapeMarkdownV2(currentMultiplier.toFixed(2));
 
-            // **FIX for button text vs message text**
-            const multiplierForButtonText = currentMultiplier.toFixed(2); // Raw "1.50"
-            const multiplierForMessageBody = escapeMarkdownV2(currentMultiplier.toFixed(2)); // Escaped "1\\.50"
+            let emojiTrail = "";
+            let statusText = "";
 
-            let animationText = `🚀 *Crash Game In Progress\\!* 🚀\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nMultiplier: *${multiplierForMessageBody}x*\n\n`; 
-            if (currentMultiplier < 1.5) animationText += `Climbing steadily\\.\\.\\.`;
-            else if (currentMultiplier < 3) animationText += `Gaining altitude\\! 📈`;
-            else if (currentMultiplier < 7) animationText += `To the moon\\! 🌕`;
-            else animationText += `Beyond the stars\\! ✨ This is getting risky\\!`;
+            if (currentMultiplier < 1.2) {
+                emojiTrail = `🚀`;
+                statusText = `Ignition sequence confirmed\\! Countdown\\.\\.\\. 3\\.\\.\\. 2\\.\\.\\. 1\\.\\.\\.`;
+            } else if (currentMultiplier < 1.5) {
+                emojiTrail = `💨🚀`;
+                statusText = `We have liftoff\\! Main thrusters engaged\\! 🌍`;
+            } else if (currentMultiplier < 2.0) {
+                emojiTrail = `💨💨🚀`;
+                statusText = `Climbing smoothly\\! Altitude: increasing\\! 📈`;
+            } else if (currentMultiplier < 3.0) {
+                emojiTrail = `✨💨💨🚀`;
+                statusText = `Breaking through low atmosphere\\! Looking good\\! 👍`;
+            } else if (currentMultiplier < 4.0) {
+                emojiTrail = `✨✨💨🚀`;
+                statusText = `Approaching the stratosphere\\! View is amazing\\! 🤩`;
+            } else if (currentMultiplier < 6.0) {
+                emojiTrail = `💥✨✨🚀`;
+                statusText = `Engines at full power\\! Pushing the limits\\! 🔥`;
+            } else if (currentMultiplier < 10.0) {
+                emojiTrail = `💥💥✨🚀`;
+                statusText = `Entering mesosphere\\! Getting risky now\\! 😬`;
+            } else if (currentMultiplier < 15.0) {
+                emojiTrail = `🔥🔥💥🚀`;
+                statusText = `High orbit achieved\\! Are you brave enough to continue\\?! 🌌`;
+            } else if (currentMultiplier < 25.0) {
+                emojiTrail = `🔥🔥🔥🚀`;
+                statusText = `Deep space voyage\\! Uncharted territory\\! 🌠 This is extreme\\!`;
+            } else if (currentMultiplier < 50.0) {
+                emojiTrail = `🌌🔥🔥🔥🚀`;
+                statusText = `Ludicrous Speed\\! Systems shaking\\! 💠 Danger Zone\\!`;
+            } else {
+                emojiTrail = `🚨🌌🔥🔥🚀🚨`;
+                statusText = `WARNING\\! CRITICAL VELOCITY\\! Unstable\\! Cash out NOW or face the void\\! 😱`;
+            }
 
-            if (animationText !== lastMessageText) {
-                try {
+            let animationText = `${emojiTrail} *Crash Game In Progress\\!* ${emojiTrail}\n\n` +
+                                `Bet: ${initialBetAmountFormatted} SOL\n` +
+                                `Multiplier: *${multiplierForMessageBody}x*\n\n` +
+                                `${statusText}`; // statusText is already pre-escaped if it were dynamic with user content. Here it's static but with special chars.
+
+            if (animationText !== lastMessageText) {
+                try {
                     await bot.editMessageText(animationText, {
                         chat_id: chatId, message_id: currentMessageIdForAnimation, parse_mode: 'MarkdownV2',
                         reply_markup: { inline_keyboard: [[{ text: `💸 Cash Out at ${multiplierForButtonText}x`, callback_data: `cash_out_crash:${betId}` }]] }
                     });
                     lastMessageText = animationText;
                 } catch (loopError) {
-                    if (!loopError.message.includes("message is not modified")) {
-                        console.warn(`Error updating crash animation (Bet ID ${betId}): ${loopError.message}.`);
-                        if (loopError.message.toLowerCase().includes("message to edit not found") || loopError.message.toLowerCase().includes("chat not found")) {
-                            loopActive = false;
-                            console.error(`${logPrefix} Halting crash loop for Bet ID ${betId} due to message edit error.`);
-                            clearUserState(userId); 
-                        }
-                    }
-                }
-            }
-            if(!loopActive) break;
-
-            const delay = Math.max(100, 550 - Math.floor(oldMultiplier * 20)); 
-            await sleep(delay); 
-        } // End while loop
-
-        // --- Process Natural Crash (if loop ended because crash point was reached) ---
-        const finalStateCheck = userStateCache.get(userId);
-        if (finalStateCheck && finalStateCheck.action === 'awaiting_crash_cashout' && finalStateCheck.betId === betId) {
-            clearUserState(userId); 
-            console.log(`${logPrefix} Natural crash occurred for Bet ID ${betId} at ${actualCrashPoint.toFixed(2)}x.`);
-            let clientCrash = null;
-            try {
-                clientCrash = await pool.connect();
-                await clientCrash.query('BEGIN');
-                const finalUserBalanceCrash = BigInt(finalStateCheck.balanceAfterBet || '0'); 
-                await updateBetStatus(clientCrash, betId, 'completed_loss', 0n); 
-                await clientCrash.query('COMMIT');
-
-                const crashResultText = `💥 *CRASHED at ${escapeMarkdownV2(actualCrashPoint.toFixed(2))}x\\!* 💥\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nYou didn't cash out in time and lost your bet\\. Tough luck\\!\n\nFinal Balance: ${escapeMarkdownV2(formatSol(finalUserBalanceCrash))} SOL`;
-                if (currentMessageIdForAnimation) { // Check if we still have a messageId to edit
-                    await bot.editMessageText(crashResultText, {
-                        chat_id: chatId, message_id: currentMessageIdForAnimation, parse_mode: 'MarkdownV2',
-                        reply_markup: { inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }
-                    }).catch(async e => { // Fallback if edit fails
-                        console.warn(`${logPrefix} Failed to edit crash result message, sending new: ${e.message}`);
-                        await safeSendMessage(chatId, crashResultText, {
-                            parse_mode: 'MarkdownV2',
-                            reply_markup: { inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }
-                        });
-                    });
-                } else {
-                    await safeSendMessage(chatId, crashResultText, {
-                        parse_mode: 'MarkdownV2',
-                        reply_markup: { inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }
-                    });
+                    if (!loopError.message.includes("message is not modified")) {
+                        console.warn(`Error updating crash animation (Bet ID ${betId}): ${loopError.message}.`);
+                        if (loopError.message.toLowerCase().includes("message to edit not found") || loopError.message.toLowerCase().includes("chat not found")) {
+                            loopActive = false;
+                            console.error(`${logPrefix} Halting crash loop for Bet ID ${betId} due to message edit error.`);
+                            clearUserState(userId);
+                        }
+                    }
                 }
-            } catch (dbError) {
-                if (clientCrash) await clientCrash.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Crash Loss Rollback failed:`, rbErr));
-                console.error(`${logPrefix} DB Error processing natural crash for Bet ID ${betId}:`, dbError);
-                const dbErrorText = `⚠️ Database error processing crash result for Bet ID ${betId}: ${escapeMarkdownV2(dbError.message)}\\. Please contact support if balance is incorrect\\.`;
-                if (currentMessageIdForAnimation) {
-                    bot.editMessageText(dbErrorText, { chat_id: chatId, message_id: currentMessageIdForAnimation, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } }).catch(async e => await safeSendMessage(chatId, dbErrorText, {parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }}));
-                } else {
-                    await safeSendMessage(chatId, dbErrorText, {parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }});
-                }
-            } finally { if (clientCrash) clientCrash.release(); }
-        } else {
-            console.log(`${logPrefix} Crash game loop ended, but user state was already cleared (likely cashed out or message deleted). Bet ID: ${betId || 'N/A'}.`);
-            // If messageId from original confirm bet exists, and it's different from the animation message ID (if it changed)
-            // we might want to update that original message or send a new one if no animation message context exists.
-            // However, if state is cleared, it usually means the user took an action (cashout) which updated the UI.
-            // If currentMessageIdForAnimation is null here, it means the animation couldn't even start.
-            if (currentMessageIdForAnimation && finalStateCheck && finalStateCheck.messageId !== currentMessageIdForAnimation) {
-                 // This implies the message context changed; the current message (messageId) might need cleanup or update
-                 // For now, we assume if state is gone, the user interaction handled the UI.
-            } else if (!currentMessageIdForAnimation && (!finalStateCheck || finalStateCheck.betId !== betId)) {
-                // No animation message context, and state is also gone or for another bet.
-                // This is an odd state, maybe just log.
-                console.warn(`${logPrefix} Crash game ended with no animation context and no valid user state for this bet.`);
             }
-        }
+            if (!loopActive) break;
 
-    } catch (error) {
-        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Initial Setup Rollback failed:`, rbErr));
-        console.error(`${logPrefix} Major error starting or during crash game (Bet ID ${betId || 'N/A'}):`, error);
-        clearUserState(userId); 
+            const delay = Math.max(80, 450 - Math.floor(oldMultiplier * 15)); // Adjusted delay curve for more updates
+            await sleep(delay);
+        } // End while loop
+
+        const finalStateCheck = userStateCache.get(userId);
+        if (finalStateCheck && finalStateCheck.action === 'awaiting_crash_cashout' && finalStateCheck.betId === betId) {
+            clearUserState(userId);
+            console.log(`${logPrefix} Natural crash occurred for Bet ID ${betId} at ${actualCrashPoint.toFixed(2)}x.`);
+            let clientCrash = null;
+            try {
+                clientCrash = await pool.connect();
+                await clientCrash.query('BEGIN');
+                const finalUserBalanceCrash = BigInt(finalStateCheck.balanceAfterBet || '0');
+                await updateBetStatus(clientCrash, betId, 'completed_loss', 0n);
+                await clientCrash.query('COMMIT');
+
+                const escapedActualCrashPoint = escapeMarkdownV2(actualCrashPoint.toFixed(2));
+                const crashResultText = `💥 *CRASHED at ${escapedActualCrashPoint}x\\!* 💥\n\n` +
+                                        `Bet: ${initialBetAmountFormatted} SOL\n` +
+                                        `You didn't cash out in time and lost your bet\\. Tough luck\\!\n\n` +
+                                        `Final Balance: ${escapeMarkdownV2(formatSol(finalUserBalanceCrash))} SOL`;
+                const crashKeyboard = { inline_keyboard: [[{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] };
+
+                if (currentMessageIdForAnimation) {
+                    await bot.editMessageText(crashResultText, { chat_id: chatId, message_id: currentMessageIdForAnimation, parse_mode: 'MarkdownV2', reply_markup: crashKeyboard })
+                        .catch(async e => {
+                            console.warn(`${logPrefix} Failed to edit crash result message, sending new: ${e.message}`);
+                            await safeSendMessage(chatId, crashResultText, { parse_mode: 'MarkdownV2', reply_markup: crashKeyboard });
+                        });
+                } else {
+                     await safeSendMessage(chatId, crashResultText, { parse_mode: 'MarkdownV2', reply_markup: crashKeyboard });
+                }
+            } catch (dbError) {
+                if (clientCrash) await clientCrash.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Crash Loss Rollback failed:`, rbErr));
+                console.error(`${logPrefix} DB Error processing natural crash for Bet ID ${betId}:`, dbError);
+                const dbErrorText = `⚠️ Database error after crash for Bet ID ${betId}: ${escapeMarkdownV2(dbError.message)}\\. Your bet was lost\\. Please contact support if balance appears incorrect\\.`;
+                 if (currentMessageIdForAnimation) {
+                    bot.editMessageText(dbErrorText, { chat_id: chatId, message_id: currentMessageIdForAnimation, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] } })
+                        .catch(async e => await safeSendMessage(chatId, dbErrorText, {parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }}));
+                } else {
+                     await safeSendMessage(chatId, dbErrorText, {parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `🔄 Play Crash Again`, callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }]] }});
+                }
+            } finally { if (clientCrash) clientCrash.release(); }
+        } else {
+            console.log(`${logPrefix} Crash game loop ended. User state already cleared. Bet ID: ${betId || 'N/A'}.`);
+        }
+
+    } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Initial Setup Rollback failed:`, rbErr));
+        console.error(`${logPrefix} Major error starting or during crash game (Bet ID ${betId || 'N/A'}):`, error);
+        clearUserState(userId);
         const errorTextCrash = `⚠️ An unexpected error occurred setting up or running Crash: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`;
         const errorKeyboardCrash = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
-        if (messageId) { // Original messageId from confirm_bet callback
-            await bot.editMessageText(errorTextCrash, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrash }).catch(async e => await safeSendMessage(chatId, errorTextCrash, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrash }));
-        } else if (currentMessageIdForAnimation) { // If initial message was replaced by animation message
-             await bot.editMessageText(errorTextCrash, { chat_id: chatId, message_id: currentMessageIdForAnimation, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrash }).catch(async e => await safeSendMessage(chatId, errorTextCrash, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrash }));
-        } else { // Absolute fallback
+        const idToEdit = currentMessageIdForAnimation || messageId;
+        if (idToEdit) {
+            await bot.editMessageText(errorTextCrash, { chat_id: chatId, message_id: idToEdit, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrash })
+                .catch(async e => await safeSendMessage(chatId, errorTextCrash, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrash }));
+        } else {
             await safeSendMessage(chatId, errorTextCrash, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrash });
         }
-    } finally {
-        if (client && !client.isReleased) client.release();
-    }
+    } finally {
+        if (client && !client.isReleased) client.release();
+    }
 }
 
 // Handles Blackjack state and interactions
