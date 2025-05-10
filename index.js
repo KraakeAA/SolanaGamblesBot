@@ -4097,7 +4097,7 @@ async function handleRaceGame(userId, chatId, messageId, betAmountLamports, chos
                     if(positions[i] < trackLength) tempTrack[positions[i]] = RACE_HORSES[i].emoji; else tempTrack[trackLength-1] = RACE_HORSES[i].emoji;
                     displayLine = tempTrack.join("");
                 }
-                 currentFrameDisplay += `${escapeMarkdownV2(RACE_HORSES[i].name.padEnd(15, ' ').substring(0,14))} ${RACE_HORSES[i].emoji}|${displayLine}|\n`;
+                 currentFrameDisplay += `${escapeMarkdownV2(RACE_HORSES[i].name.padEnd(15, ' ').substring(0,14))} ${RACE_HORSES[i].emoji}\\|${displayLine}\\|\n`;
             }
 
             currentFrameDisplay += commentary;
