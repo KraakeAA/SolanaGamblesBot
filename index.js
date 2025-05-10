@@ -3959,28 +3959,176 @@ async function placeBet(client, userId, chatId, gameKey, betDetails, betAmountLa
 // Section 2a: Coinflip, Race, Slots Game Handlers (Win Payout Accounting Fix Applied)
 
 async function handleCoinflipGame(userId, chatId, messageId, betAmountLamports, chosenSide) {
-    const gameKey = 'coinflip'; const gameConfig = GAME_CONFIG[gameKey]; const logPrefix = `[CoinflipGame User ${userId} Bet ${betAmountLamports}]`; console.log(`${logPrefix} Handling for side: ${chosenSide}`);
-    let client = null; let finalUserBalance;
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
-        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, { side: chosenSide }, betAmountLamports);
-        if (!betPlacementResult.success) { await client.query('ROLLBACK'); const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`; if(client) client.release(); return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
-        const { betId, newBalance: balanceAfterBet } = betPlacementResult; finalUserBalance = balanceAfterBet;
-        const { outcome } = playCoinflip(chosenSide); // from Part 4
-      const win = outcome === chosenSide;
-        let profitLamportsOutcome = -betAmountLamports; let payoutAmountForDB = 0n;
-        if (win) {
-            const profitOnWin = BigInt(Math.floor(Number(betAmountLamports) * (1 - gameConfig.houseEdge))); profitLamportsOutcome = profitOnWin; payoutAmountForDB = betAmountLamports + profitOnWin;
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmountForDB, 'coinflip_win', { betId }); // FIX #0: Use payoutAmountForDB
-            if (!balanceUpdateResult.success) { await client.query('ROLLBACK'); console.error(`${logPrefix} Failed balance update.`); const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`; if(client) client.release(); return bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } }); }
-            finalUserBalance = balanceUpdateResult.newBalance;
-        } else { profitLamportsOutcome = -betAmountLamports; payoutAmountForDB = 0n; console.log(`${logPrefix} Coinflip loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL.`); }
-        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', payoutAmountForDB); // from Part 2
-      await client.query('COMMIT');
-        let resultMsg = `🪙 *Coinflip Result*\n\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\nYour Choice: ${escapeMarkdownV2(chosenSide.toUpperCase())}\nOutcome: ${escapeMarkdownV2(outcome.toUpperCase())}\n\n`; resultMsg += win ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\!` : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`; resultMsg += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
-        const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] }; bot.editMessageText(resultMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
-    } catch (error) { if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr)); console.error(`${logPrefix} Error in coinflip game:`, error); bot.editMessageText(`⚠️ An unexpected error occurred during Coinflip: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] } });
-    } finally { if (client) client.release(); }
+    const gameKey = 'coinflip';
+    const gameConfig = GAME_CONFIG[gameKey];
+    const logPrefix = `[CoinflipGame User ${userId} Bet ${betAmountLamports} Side ${chosenSide}]`;
+    console.log(`${logPrefix} Handling for side: ${chosenSide}`);
+
+    let client = null;
+    let finalUserBalance;
+    let lastAnimationText = ""; // To prevent redundant edits
+
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const betPlacementResult = await placeBet(client, userId, chatId, gameKey, { side: chosenSide }, betAmountLamports);
+        if (!betPlacementResult.success) {
+            await client.query('ROLLBACK');
+            const errorMsg = betPlacementResult.error === 'Insufficient balance' ? `⚠️ Insufficient balance for a ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL bet\\. Your balance is ${escapeMarkdownV2(formatSol(betPlacementResult.currentBalance || 0n))} SOL\\.` : `⚠️ Error placing bet: ${escapeMarkdownV2(betPlacementResult.error || 'Unknown error')}\\.`;
+            if(client) client.release();
+            const errorKeyboardBet = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+            // messageId is from the 'confirm_bet' callback.
+            if (messageId) {
+                await bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet})
+                         .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet}));
+            } else {
+                await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardBet});
+            }
+            return;
+        }
+        const { betId, newBalance: balanceAfterBet } = betPlacementResult;
+        finalUserBalance = balanceAfterBet;
+
+        // Determine outcome
+        const { outcome } = playCoinflip(chosenSide); // from Part 4 (outcome is 'heads' or 'tails')
+        const win = outcome === chosenSide;
+
+        let profitLamportsOutcome = -betAmountLamports;
+        let amountToCreditToUser = 0n;
+
+        if (win) {
+            const profitOnWin = BigInt(Math.floor(Number(betAmountLamports) * (1 - gameConfig.houseEdge)));
+            profitLamportsOutcome = profitOnWin;
+            amountToCreditToUser = betAmountLamports + profitOnWin; // Stake back + net profit
+
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, amountToCreditToUser, 'coinflip_win', { betId });
+            if (!balanceUpdateResult.success) {
+                await client.query('ROLLBACK');
+                const errorMsg = `⚠️ Critical error processing game result: ${escapeMarkdownV2(balanceUpdateResult.error || "DB Error")}\\. Bet recorded but result uncertain\\. Contact support with Bet ID: ${betId}`;
+                if(client) client.release();
+                const errorKeyboardCrit = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+                // If messageId (from confirm_bet) exists, try to edit it with the error.
+                if (messageId) {
+                     await bot.editMessageText(errorMsg, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit })
+                              .catch(async e => await safeSendMessage(chatId, errorMsg, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit}));
+                } else {
+                    await safeSendMessage(chatId, errorMsg, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboardCrit });
+                }
+                return;
+            }
+            finalUserBalance = balanceUpdateResult.newBalance;
+        } else { // Loss
+            amountToCreditToUser = 0n;
+            profitLamportsOutcome = -betAmountLamports; // For message display
+            console.log(`${logPrefix} Coinflip loss for Bet ID ${betId}. Balance remains ${formatSol(finalUserBalance)} SOL.`);
+        }
+        await updateBetStatus(client, betId, win ? 'completed_win' : 'completed_loss', amountToCreditToUser);
+        await client.query('COMMIT');
+
+        // --- COINFLIP ANIMATION ---
+        const coinEmojis = ["🪙", "🟡", "🔵", "📀"]; // Different "coin" like emojis for spinning
+        const headsEmoji = "⬆️"; // Or your preferred "Heads" representation
+        const tailsEmoji = "⬇️"; // Or your preferred "Tails" representation
+        const finalOutcomeEmoji = outcome === 'heads' ? headsEmoji : tailsEmoji;
+
+        let animationText = `🪙 *Coinflip\\!* 🪙\n\nYour choice: *${escapeMarkdownV2(chosenSide.toUpperCase())}*\nBet: ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\n\nFlipping the coin\\.\\.\\.\n\n`;
+        const initialAnimationDisplay = `${animationText}*${spinningChars[0]}*`; // spinningChars from Slots or define new
+
+        if (messageId) {
+            await bot.editMessageText(initialAnimationDisplay, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: []} }) // Clear buttons
+                     .catch(e => { if(!e.message.includes("message is not modified")) console.warn(`${logPrefix} Initial coinflip animation edit error: ${e.message}`) });
+        } else { // Should not happen if flow is from confirm_bet button
+            const newMsg = await safeSendMessage(chatId, initialAnimationDisplay, { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: []} });
+            if (newMsg) messageId = newMsg.message_id; // Update messageId if new message was sent
+        }
+        lastAnimationText = initialAnimationDisplay;
+        await sleep(300);
+
+        const totalSpinFrames = 12; // Number of "spin" updates
+        let currentSpinSleep = 50; // ms, will increase to slow down
+
+        for (let frame = 0; frame < totalSpinFrames; frame++) {
+            if (!messageId) break; // Stop if message context lost
+
+            let spinningDisplay;
+            if (frame < totalSpinFrames - 3) { // Fast spin phase
+                spinningDisplay = coinEmojis[frame % coinEmojis.length];
+            } else { // Slow down phase
+                // Alternate between a spinning char and the other side before landing
+                if (frame % 2 === 0) {
+                    spinningDisplay = outcome === 'heads' ? tailsEmoji : headsEmoji; // Show the opposite briefly
+                } else {
+                    spinningDisplay = coinEmojis[frame % coinEmojis.length];
+                }
+                currentSpinSleep += 75; // Increase delay to slow down
+            }
+
+            const frameAnimationText = `${animationText}*${spinningDisplay}*`;
+            if (frameAnimationText !== lastAnimationText) {
+                try {
+                    await bot.editMessageText(frameAnimationText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' });
+                    lastAnimationText = frameAnimationText;
+                } catch (e) {
+                    if (!e.message.includes("message is not modified")) console.warn(`${logPrefix} Coinflip animation edit error: ${e.message}`);
+                    if (e.message.toLowerCase().includes("message to edit not found")) { frame = totalSpinFrames; break; } // Stop if message gone
+                }
+            }
+            await sleep(currentSpinSleep);
+        }
+
+        // Final reveal of the outcome (already determined server-side)
+        const finalRevealText = `${animationText} लैंडेड ओन\\.\\.\\. *${escapeMarkdownV2(outcome.toUpperCase())}* ${finalOutcomeEmoji}\\!`;
+        if (messageId) {
+            await bot.editMessageText(finalRevealText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2' })
+                     .catch(async e => {
+                         if (!e.message.includes("message is not modified")) {
+                             console.warn(`${logPrefix} Failed to edit final reveal, sending new: ${e.message}`);
+                             await safeSendMessage(chatId, finalRevealText, {parse_mode: 'MarkdownV2'});
+                         }
+                     });
+        } else {
+             await safeSendMessage(chatId, finalRevealText, {parse_mode: 'MarkdownV2'});
+        }
+        await sleep(1000); // Pause on the revealed outcome
+        // --- END OF COINFLIP ANIMATION ---
+
+        let resultMsgText = `🪙 *Coinflip Result* 🪙\n\n` +
+                             `Your Choice: ${escapeMarkdownV2(chosenSide.toUpperCase())}\n`+
+                             `Coin Landed On: *${escapeMarkdownV2(outcome.toUpperCase())}* ${finalOutcomeEmoji}\\!\n\n`;
+        
+        resultMsgText += win ? `🎉 You won ${escapeMarkdownV2(formatSol(profitLamportsOutcome))} SOL\\!` : `😢 You lost ${escapeMarkdownV2(formatSol(betAmountLamports))} SOL\\.`;
+        resultMsgText += `\n\nNew Balance: ${escapeMarkdownV2(formatSol(finalUserBalance))} SOL`;
+        
+        const keyboard = { inline_keyboard: [ [{ text: '🔄 Play Again', callback_data: `play_again:${gameKey}:${betAmountLamports}` }, { text: '🎮 Games Menu', callback_data: 'menu:game_selection' }] ] };
+        
+        // Edit the message (which showed the final reveal) to the full result with keyboard
+        if (messageId) {
+            await bot.editMessageText(resultMsgText, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: keyboard })
+                     .catch(async e => {
+                         if (!e.message.includes("message is not modified")) {
+                            console.warn(`${logPrefix} Failed to edit final result message, sending new: ${e.message}`);
+                            await safeSendMessage(chatId, resultMsgText, {parse_mode: 'MarkdownV2', reply_markup: keyboard });
+                         }
+                     });
+        } else {
+            await safeSendMessage(chatId, resultMsgText, {parse_mode: 'MarkdownV2', reply_markup: keyboard });
+        }
+
+    } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback failed:`, rbErr));
+        console.error(`${logPrefix} Error in coinflip game:`, error);
+        const errorMsgFinalCoinflip = `⚠️ An unexpected error occurred during Coinflip: ${escapeMarkdownV2(error.message)}\\. Please try again later\\.`;
+        const errorKeyboardFinalCoinflip = { inline_keyboard: [[{ text: '↩️ Back to Games', callback_data: 'menu:game_selection' }]] };
+        if (messageId) {
+            await bot.editMessageText(errorMsgFinalCoinflip, { chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinalCoinflip })
+                 .catch(async e => await safeSendMessage(chatId, errorMsgFinalCoinflip, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinalCoinflip}));
+        } else {
+             await safeSendMessage(chatId, errorMsgFinalCoinflip, {parse_mode: 'MarkdownV2', reply_markup: errorKeyboardFinalCoinflip});
+        }
+    } finally {
+        if (client) client.release();
+    }
 }
 
 
